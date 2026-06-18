@@ -23,6 +23,23 @@
     }
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
+    @keyframes aura-shift {
+      0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.9; }
+      50% { transform: translate3d(1.8%, -1.2%, 0) scale(1.035); opacity: 1; }
+    }
+    @keyframes soft-float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-8px); }
+    }
+    @keyframes glow-pulse {
+      0%, 100% { box-shadow: 0 0 28px rgba(255,120,188,0.34); }
+      50% { box-shadow: 0 0 42px rgba(116,240,211,0.34); }
+    }
+    @keyframes scan-line {
+      0% { transform: translateX(-140%) skewX(-18deg); opacity: 0; }
+      20% { opacity: 0.8; }
+      100% { transform: translateX(160%) skewX(-18deg); opacity: 0; }
+    }
     body {
       margin: 0;
       color: var(--ink);
@@ -52,6 +69,7 @@
       inset: 0;
       z-index: 0;
       pointer-events: none;
+      animation: aura-shift 18s ease-in-out infinite;
       background:
         radial-gradient(circle at 10% 46%, rgba(255,120,188,0.1), transparent 30%),
         radial-gradient(circle at 88% 54%, rgba(116,240,211,0.1), transparent 30%),
@@ -98,7 +116,7 @@
       border-radius: 999px;
     }
     .brand { display: flex; align-items: center; gap: 12px; font-weight: 900; }
-    .brand img { width: 46px; height: 46px; border-radius: 16px; object-fit: cover; box-shadow: 0 0 28px rgba(255,120,188,0.34); }
+    .brand img { width: 46px; height: 46px; border-radius: 16px; object-fit: cover; box-shadow: 0 0 28px rgba(255,120,188,0.34); animation: glow-pulse 4.8s ease-in-out infinite; }
     .brand small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
     .nav-links { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
     .pill, .button {
@@ -118,6 +136,20 @@
     .pill:hover, .button:hover { transform: translateY(-2px); background: rgba(255,255,255,0.13); box-shadow: 0 14px 34px rgba(0,0,0,0.22); }
     .button.primary { color: #11131d; background: #fff; }
     .button.dark { color: #fff; background: linear-gradient(135deg, rgba(255,120,188,0.48), rgba(116,240,211,0.26)); }
+    .hero .button.dark, .nav .button.primary {
+      position: relative;
+      overflow: hidden;
+    }
+    .hero .button.dark::after, .nav .button.primary::after {
+      content: "";
+      position: absolute;
+      inset: -40% auto -40% -50%;
+      width: 38%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.58), transparent);
+      transform: skewX(-18deg);
+      animation: scan-line 5.4s ease-in-out infinite;
+      pointer-events: none;
+    }
     .hero {
       min-height: 100vh;
       display: grid;
@@ -180,6 +212,14 @@
       color: rgba(255,255,255,0.78);
     }
     h2 { margin-bottom: 20px; font-size: clamp(30px, 4.8vw, 62px); line-height: 1.08; letter-spacing: 0; }
+    .section-head h2 {
+      background: linear-gradient(90deg, #fff, rgba(255,120,188,0.88), rgba(116,240,211,0.9), #fff);
+      background-size: 220% 100%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      animation: aura-shift 10s ease-in-out infinite;
+    }
     h3 { margin-bottom: 10px; font-size: 22px; letter-spacing: 0; }
     .hero-text { max-width: 660px; color: rgba(255,255,255,0.8); font-size: 17px; line-height: 1.78; }
     .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
@@ -205,10 +245,21 @@
     .three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .card {
+      position: relative;
       min-height: 190px;
       padding: 24px;
       border-radius: 28px;
+      overflow: hidden;
       transition: transform 0.34s ease, box-shadow 0.34s ease, background 0.34s ease, border-color 0.34s ease;
+    }
+    .card::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      pointer-events: none;
+      background: radial-gradient(circle at var(--mx, 50%) var(--my, 20%), rgba(255,255,255,0.18), transparent 32%);
+      transition: opacity 0.3s ease;
     }
     .card:hover {
       transform: translateY(-8px);
@@ -216,11 +267,16 @@
       border-color: rgba(255,255,255,0.2);
       box-shadow: inset 0 1px 1px rgba(255,255,255,0.18), 0 34px 90px rgba(0,0,0,0.42);
     }
+    .card:hover::after { opacity: 1; }
     .card p, .card li { color: var(--muted); line-height: 1.78; }
     .card ul { margin: 0; padding-left: 18px; }
     .metric { min-height: 150px; }
     .metric b { display: block; margin-bottom: 8px; font: 400 58px/1 "Instrument Serif", serif; color: #fff; }
     .metric span { color: var(--muted); font-weight: 800; }
+    .metric.visible { animation: soft-float 7s ease-in-out infinite; }
+    .metric:nth-child(2).visible { animation-delay: 0.8s; }
+    .metric:nth-child(3).visible { animation-delay: 1.6s; }
+    .metric:nth-child(4).visible { animation-delay: 2.4s; }
     .feature-card { border-left: 6px solid var(--pink); }
     .feature-card:nth-child(2) { border-left-color: var(--mint); }
     .feature-card:nth-child(3) { border-left-color: var(--blue); }
@@ -277,6 +333,17 @@
         radial-gradient(circle at 16% 18%, rgba(255,120,188,0.18), transparent 30%);
       opacity: 0.75;
     }
+    .screen-shot::before {
+      content: "";
+      position: absolute;
+      inset: -30% auto -30% -45%;
+      z-index: 2;
+      width: 28%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+      transform: skewX(-18deg);
+      pointer-events: none;
+    }
+    .screen-card:hover .screen-shot::before { animation: scan-line 1.2s ease-out; }
     .screen-card:hover .screen-shot img {
       transform: scale(1.035);
       filter: saturate(1.08) contrast(1.03);
@@ -310,6 +377,7 @@
       align-content: end;
       overflow: hidden;
       position: relative;
+      transform-origin: center;
     }
     .theme-card img {
       position: absolute;
@@ -322,6 +390,8 @@
       transition: transform 0.7s ease;
     }
     .theme-card:hover img { transform: scale(1.045); }
+    .theme-card.visible { animation: soft-float 8s ease-in-out infinite; }
+    .theme-card:nth-child(2).visible { animation-delay: 1.2s; }
     .theme-card::after {
       content: "";
       position: absolute;
@@ -329,7 +399,8 @@
       z-index: -1;
       background: linear-gradient(180deg, rgba(5,6,10,0.02), rgba(5,6,10,0.78));
     }
-    .theme-copy { width: min(520px, 100%); padding: 24px; border-radius: 24px; background: rgba(5,6,10,0.52); border: 1px solid rgba(255,255,255,0.12); backdrop-filter: blur(14px); }
+    .theme-copy { width: min(520px, 100%); padding: 24px; border-radius: 24px; background: rgba(5,6,10,0.52); border: 1px solid rgba(255,255,255,0.12); backdrop-filter: blur(14px); transition: transform 0.35s ease, background 0.35s ease; }
+    .theme-card:hover .theme-copy { transform: translateY(-8px); background: rgba(5,6,10,0.62); }
     .stack-grid { grid-template-columns: 0.92fr 1.08fr; }
     .tech-tags { display: flex; flex-wrap: wrap; gap: 10px; }
     .tech-tags span {
@@ -427,8 +498,8 @@
     </a>
     <div class="nav-links">
       <a class="pill" href="#features">功能</a>
-      <a class="pill" href="#screens">实景</a>
       <a class="pill" href="#themes">双主题</a>
+      <a class="pill" href="#screens">实景</a>
       <a class="pill" href="#tech">技术栈</a>
       <a class="pill" href="#agent">智能体</a>
       <a class="pill" href="https://github.com/tl66666/ztai" target="_blank" rel="noreferrer">GitHub</a>
@@ -481,6 +552,34 @@
         <article class="card liquid feature-card fade-up"><h3>模拟真实面试</h3><p>按自我介绍、项目深挖、技术追问、行为面、反问总结推进训练流程。</p></article>
         <article class="card liquid feature-card fade-up"><h3>语音回答复盘</h3><p>支持语音转文字、真实录音、回放、语速停顿分析和表达建议。</p></article>
         <article class="card liquid feature-card fade-up"><h3>投递看板与教练</h3><p>管理岗位阶段，生成跟进建议、薪资评估、复盘提醒和阶段性作战报告。</p></article>
+      </div>
+    </section>
+
+    <section id="themes" class="wrap section">
+      <div class="section-head fade-up">
+        <div>
+          <p class="eyebrow">Visual System</p>
+          <h2>双主题视觉系统</h2>
+        </div>
+        <p>系统内置 Anime 和 Glass 两套风格。主题切换会同步影响 Logo、背景、Hero、卡片、视觉素材和状态组件，保证从首页到业务模块都保持一致。</p>
+      </div>
+      <div class="grid two">
+        <article class="card liquid theme-card fade-up">
+          <img src="assets/images/hero-bg%20(2).png" alt="Anime 主题界面" />
+          <div class="theme-copy">
+            <p class="eyebrow">Anime Theme</p>
+            <h3>二次元轻潮流</h3>
+            <p>柔和粉、薄荷绿、浅紫、插画角色和漂浮 UI 元素，让求职训练更轻松、更有陪伴感。</p>
+          </div>
+        </article>
+        <article class="card liquid theme-card fade-up">
+          <img src="assets/images/hero-bg.png" alt="Glass 主题界面" />
+          <div class="theme-copy">
+            <p class="eyebrow">Glass Theme</p>
+            <h3>液态玻璃科技感</h3>
+            <p>使用项目中的真实首页视觉素材，以透明面板、深色层次和数据化组件强调 AI 求职工作台的工具属性。</p>
+          </div>
+        </article>
       </div>
     </section>
 
@@ -570,34 +669,6 @@
               <span>联动简历、JD、面试和投递数据</span>
               <span>未配置 Key 时支持本地规则兜底</span>
             </div>
-          </div>
-        </article>
-      </div>
-    </section>
-
-    <section id="themes" class="wrap section">
-      <div class="section-head fade-up">
-        <div>
-          <p class="eyebrow">Visual System</p>
-          <h2>双主题视觉系统</h2>
-        </div>
-        <p>系统内置 Anime 和 Glass 两套风格。主题切换会同步影响 Logo、背景、Hero、卡片、视觉素材和状态组件。</p>
-      </div>
-      <div class="grid two">
-        <article class="card liquid theme-card fade-up">
-          <img src="assets/images/hero-bg%20(2).png" alt="Anime 主题界面" />
-          <div class="theme-copy">
-            <p class="eyebrow">Anime Theme</p>
-            <h3>二次元轻潮流</h3>
-            <p>柔和粉、薄荷绿、浅紫、插画角色和漂浮 UI 元素，让求职训练更轻松、更有陪伴感。</p>
-          </div>
-        </article>
-        <article class="card liquid theme-card fade-up">
-          <img src="assets/images/hero-bg.png" alt="Glass 主题界面" />
-          <div class="theme-copy">
-            <p class="eyebrow">Glass Theme</p>
-            <h3>液态玻璃科技感</h3>
-            <p>使用项目中的真实首页视觉素材，以透明面板、深色层次和数据化组件强调 AI 求职工作台的工具属性。</p>
           </div>
         </article>
       </div>
@@ -695,7 +766,7 @@
     }, { threshold: 0.12 });
 
     document.querySelectorAll(".fade-up").forEach((el) => observer.observe(el));
-    document.querySelectorAll(".grid, .flow").forEach((group) => {
+    document.querySelectorAll(".grid, .flow, .screens-grid").forEach((group) => {
       Array.from(group.children).forEach((child, index) => {
         if (child.classList.contains("fade-up") || child.classList.contains("flow-step")) {
           child.style.transitionDelay = `${Math.min(index * 80, 420)}ms`;
@@ -703,10 +774,12 @@
       });
     });
 
-    window.addEventListener("load", () => {
-      window.setTimeout(() => {
-        document.querySelectorAll(".fade-up").forEach((el) => el.classList.add("visible"));
-      }, 900);
+    document.querySelectorAll(".card").forEach((card) => {
+      card.addEventListener("pointermove", (event) => {
+        const rect = card.getBoundingClientRect();
+        card.style.setProperty("--mx", `${event.clientX - rect.left}px`);
+        card.style.setProperty("--my", `${event.clientY - rect.top}px`);
+      });
     });
   </script>
 </body>
