@@ -352,18 +352,7 @@ h3 { font-size: 19px; margin-bottom: 0; }
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 0.78;
-}
-.hero-video {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center bottom;
-  opacity: 0.32;
-  filter: saturate(1.08) contrast(1.05);
-  mix-blend-mode: screen;
+  opacity: 0.82;
 }
 .anime-hero::after {
   content: "";
