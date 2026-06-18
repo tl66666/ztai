@@ -11,15 +11,15 @@
     :root {
       --bg: #05060a;
       --ink: #f9f6ff;
-      --muted: rgba(249,246,255,0.66);
+      --muted: rgba(249,246,255,0.68);
       --line: rgba(255,255,255,0.12);
-      --glass: rgba(255,255,255,0.052);
+      --glass: rgba(255,255,255,0.058);
       --pink: #ff78bc;
       --mint: #74f0d3;
       --blue: #75adff;
       --lilac: #bd8cff;
       --yellow: #ffd36b;
-      --shadow: 0 24px 90px rgba(0,0,0,0.42);
+      --shadow: 0 26px 90px rgba(0,0,0,0.38);
     }
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
@@ -39,7 +39,7 @@
       position: fixed;
       inset: 0;
       pointer-events: none;
-      opacity: 0.18;
+      opacity: 0.15;
       background-image:
         linear-gradient(rgba(255,255,255,0.07) 1px, transparent 1px),
         linear-gradient(90deg, rgba(255,255,255,0.07) 1px, transparent 1px);
@@ -48,6 +48,7 @@
     }
     a { color: inherit; text-decoration: none; }
     .wrap { width: min(1180px, calc(100% - 38px)); margin: 0 auto; position: relative; z-index: 2; }
+    .full-bleed { width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); }
     .liquid {
       position: relative;
       overflow: hidden;
@@ -94,51 +95,53 @@
       padding: 0 15px;
       border-radius: 999px;
       border: 1px solid rgba(255,255,255,0.1);
-      background: rgba(255,255,255,0.065);
-      color: rgba(255,255,255,0.84);
+      background: rgba(255,255,255,0.07);
+      color: rgba(255,255,255,0.86);
       font-size: 14px;
       font-weight: 900;
+      transition: transform 0.25s ease, background 0.25s ease, box-shadow 0.25s ease;
     }
+    .pill:hover, .button:hover { transform: translateY(-2px); background: rgba(255,255,255,0.13); box-shadow: 0 14px 34px rgba(0,0,0,0.22); }
     .button.primary { color: #11131d; background: #fff; }
     .button.dark { color: #fff; background: linear-gradient(135deg, rgba(255,120,188,0.48), rgba(116,240,211,0.26)); }
     .hero {
-      min-height: calc(100vh - 104px);
+      min-height: 100vh;
       display: grid;
       align-items: end;
       position: relative;
       overflow: hidden;
-      border-radius: 38px;
-      padding: clamp(28px, 5vw, 64px);
+      padding: clamp(110px, 12vh, 150px) max(38px, calc((100vw - 1180px) / 2)) clamp(54px, 8vh, 86px);
       isolation: isolate;
       background: #070915 url("assets/images/hero-bg.png") center / cover no-repeat;
     }
-    .hero video {
+    .hero video, .cinema video {
       position: absolute;
       inset: 0;
       width: 100%;
       height: 100%;
       object-fit: cover;
       object-position: center bottom;
-      opacity: 0.92;
-      z-index: -3;
+      z-index: 0;
     }
+    .hero video { opacity: 0.96; }
     .hero::after {
       content: "";
       position: absolute;
       inset: 0;
-      z-index: -2;
+      z-index: 1;
       background:
-        linear-gradient(90deg, rgba(5,6,10,0.9), rgba(5,6,10,0.5), rgba(5,6,10,0.08)),
-        linear-gradient(180deg, rgba(5,6,10,0.05), rgba(5,6,10,0.68));
+        linear-gradient(90deg, rgba(5,6,10,0.88), rgba(5,6,10,0.52), rgba(5,6,10,0.08)),
+        linear-gradient(180deg, rgba(5,6,10,0.04), rgba(5,6,10,0.64));
     }
-    .hero::before {
-      content: "";
-      position: absolute;
-      inset: 18px;
-      z-index: -1;
+    .hero-panel {
+      position: relative;
+      z-index: 2;
+      max-width: 860px;
+      padding: clamp(22px, 3vw, 34px);
       border-radius: 30px;
+      background: rgba(5,6,10,0.35);
       border: 1px solid rgba(255,255,255,0.1);
-      pointer-events: none;
+      backdrop-filter: blur(14px);
     }
     .eyebrow {
       margin: 0 0 14px;
@@ -154,7 +157,7 @@
       font: 900 clamp(46px, 8vw, 112px)/0.92 "Noto Sans SC", sans-serif;
       letter-spacing: 0;
     }
-    h1 em, .serif {
+    h1 em {
       font-family: "Instrument Serif", serif;
       font-style: italic;
       font-weight: 400;
@@ -162,17 +165,28 @@
     }
     h2 { margin-bottom: 20px; font-size: clamp(30px, 4.8vw, 62px); line-height: 1.08; letter-spacing: 0; }
     h3 { margin-bottom: 10px; font-size: 22px; letter-spacing: 0; }
-    .hero-text { max-width: 760px; color: rgba(255,255,255,0.8); font-size: 18px; line-height: 1.85; }
+    .hero-text { max-width: 760px; color: rgba(255,255,255,0.82); font-size: 18px; line-height: 1.85; }
     .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 26px; }
-    .hero-badges { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 34px; }
-    .section { padding: 78px 0 0; }
+    .hero-badges { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
+    .section { padding: 88px 0 0; }
     .section-head { display: flex; justify-content: space-between; gap: 20px; align-items: end; margin-bottom: 22px; }
     .section-head p { max-width: 620px; color: var(--muted); line-height: 1.8; }
     .grid { display: grid; gap: 18px; }
     .two { grid-template-columns: 1.05fr 0.95fr; }
     .three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-    .card { min-height: 190px; padding: 24px; border-radius: 28px; }
+    .card {
+      min-height: 190px;
+      padding: 24px;
+      border-radius: 28px;
+      transition: transform 0.34s ease, box-shadow 0.34s ease, background 0.34s ease, border-color 0.34s ease;
+    }
+    .card:hover {
+      transform: translateY(-8px);
+      background: rgba(255,255,255,0.086);
+      border-color: rgba(255,255,255,0.2);
+      box-shadow: inset 0 1px 1px rgba(255,255,255,0.18), 0 34px 90px rgba(0,0,0,0.42);
+    }
     .card p, .card li { color: var(--muted); line-height: 1.78; }
     .card ul { margin: 0; padding-left: 18px; }
     .metric { min-height: 150px; }
@@ -187,7 +201,7 @@
     .feature-card:nth-child(7) { border-left-color: var(--blue); }
     .feature-card:nth-child(8) { border-left-color: var(--pink); }
     .theme-card {
-      min-height: 440px;
+      min-height: 460px;
       display: grid;
       align-content: end;
       overflow: hidden;
@@ -199,15 +213,17 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
-      opacity: 0.88;
+      opacity: 0.9;
       z-index: -2;
+      transition: transform 0.7s ease;
     }
+    .theme-card:hover img { transform: scale(1.045); }
     .theme-card::after {
       content: "";
       position: absolute;
       inset: 0;
       z-index: -1;
-      background: linear-gradient(180deg, rgba(5,6,10,0.04), rgba(5,6,10,0.78));
+      background: linear-gradient(180deg, rgba(5,6,10,0.02), rgba(5,6,10,0.78));
     }
     .theme-copy { width: min(520px, 100%); padding: 24px; border-radius: 24px; background: rgba(5,6,10,0.52); border: 1px solid rgba(255,255,255,0.12); backdrop-filter: blur(14px); }
     .stack-grid { grid-template-columns: 0.92fr 1.08fr; }
@@ -222,7 +238,9 @@
       border: 1px solid rgba(255,255,255,0.1);
       font-weight: 900;
       color: rgba(255,255,255,0.86);
+      transition: transform 0.24s ease, background 0.24s ease;
     }
+    .tech-tags span:hover { transform: translateY(-3px); background: rgba(255,255,255,0.15); }
     .flow { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
     .flow-step {
       min-height: 150px;
@@ -230,38 +248,63 @@
       border-radius: 26px;
       background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.035));
       border: 1px solid rgba(255,255,255,0.1);
+      transition: transform 0.3s ease, background 0.3s ease;
     }
+    .flow-step:hover { transform: translateY(-6px); background: rgba(255,255,255,0.1); }
     .flow-step b { display: block; margin-bottom: 8px; color: #fff; }
-    .motion-text { text-align: center; max-width: 760px; margin: 0 auto 22px; }
-    .motion-frame {
-      padding: 10px;
-      border-radius: 32px;
+    .cinema {
+      min-height: 100vh;
+      position: relative;
+      display: grid;
+      align-items: end;
+      padding: clamp(48px, 8vh, 86px) max(38px, calc((100vw - 1180px) / 2));
+      isolation: isolate;
       overflow: hidden;
+      margin-top: 92px;
     }
-    .motion-frame video {
-      display: block;
-      width: 100%;
-      aspect-ratio: 16 / 9;
-      object-fit: cover;
-      border-radius: 24px;
+    .cinema video { opacity: 0.95; }
+    .cinema video {
+      object-position: center 64%;
+      filter: brightness(1.28) saturate(1.18);
     }
+    .cinema::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      background: linear-gradient(180deg, rgba(5,6,10,0.08), rgba(5,6,10,0.72));
+    }
+    .cinema-title {
+      position: relative;
+      z-index: 2;
+      width: min(660px, 100%);
+      padding: 24px;
+      border-radius: 26px;
+      background: rgba(5,6,10,0.44);
+      border: 1px solid rgba(255,255,255,0.12);
+      backdrop-filter: blur(16px);
+    }
+    .cinema-title p { margin-bottom: 0; color: rgba(255,255,255,0.78); line-height: 1.7; }
     .api-table { width: 100%; border-collapse: collapse; overflow: hidden; }
     .api-table th, .api-table td { padding: 14px; border-bottom: 1px solid rgba(255,255,255,0.1); text-align: left; vertical-align: top; }
     .api-table th { color: #fff; }
     .api-table td { color: var(--muted); line-height: 1.65; }
-    .fade-up { opacity: 0; transform: translateY(28px); transition: opacity 0.7s ease, transform 0.7s ease; }
+    .fade-up { opacity: 0; transform: translateY(32px); transition: opacity 0.72s ease, transform 0.72s cubic-bezier(.2,.8,.2,1); }
     .fade-up.visible { opacity: 1; transform: translateY(0); }
     footer { padding: 72px 0 50px; color: var(--muted); text-align: center; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition: none !important; animation: none !important; }
+      .fade-up { opacity: 1; transform: none; }
+    }
     @media (max-width: 980px) {
       .nav { align-items: flex-start; border-radius: 28px; flex-direction: column; }
       .two, .three, .four, .stack-grid, .flow { grid-template-columns: 1fr; }
-      .hero { min-height: 720px; }
       .section-head { display: block; }
     }
     @media (max-width: 640px) {
       .wrap { width: min(100% - 24px, 1180px); }
-      .hero { border-radius: 28px; padding: 28px; }
       h1 { font-size: 44px; }
+      .hero, .cinema { padding-left: 24px; padding-right: 24px; }
       .theme-card { min-height: 440px; }
       .nav-links { width: 100%; }
       .nav-links a { flex: 1 1 auto; }
@@ -283,13 +326,13 @@
     </div>
   </nav>
 
-  <main class="wrap">
-    <section class="hero liquid fade-up">
+  <main>
+    <section class="hero full-bleed fade-up">
       <video src="assets/videos/career-motion-panel.mp4" poster="assets/images/hero-bg.png" autoplay muted loop playsinline preload="auto"></video>
-      <div>
+      <div class="hero-panel">
         <p class="eyebrow">AI Agent × Resume × Interview × Offer Pipeline</p>
         <h1>职途 AI <em>Career OS</em></h1>
-        <p class="hero-text">基于 AI 智能体的求职辅助 Web 系统。围绕真实求职流程构建从简历整理、岗位匹配、模拟面试、语音复盘到投递跟进的一体化工作台。</p>
+        <p class="hero-text">基于 AI 智能体的求职辅助 Web 系统。围绕真实求职流程，构建从简历整理、岗位匹配、模拟面试、语音复盘到投递跟进的一体化工作台。</p>
         <div class="hero-actions">
           <a class="button primary" href="/">进入系统</a>
           <a class="button dark" href="https://open.bigmodel.cn/apikey/platform" target="_blank" rel="noreferrer">获取 GLM API Key</a>
@@ -304,14 +347,14 @@
       </div>
     </section>
 
-    <section class="section grid four">
+    <section class="wrap section grid four">
       <article class="card liquid metric fade-up"><b>5</b><span>核心业务模块</span></article>
       <article class="card liquid metric fade-up"><b>3</b><span>模型供应商接入</span></article>
       <article class="card liquid metric fade-up"><b>2</b><span>可切换视觉主题</span></article>
       <article class="card liquid metric fade-up"><b>1</b><span>完整求职闭环</span></article>
     </section>
 
-    <section id="features" class="section">
+    <section id="features" class="wrap section">
       <div class="section-head fade-up">
         <div>
           <p class="eyebrow">Product Modules</p>
@@ -331,7 +374,7 @@
       </div>
     </section>
 
-    <section id="themes" class="section">
+    <section id="themes" class="wrap section">
       <div class="section-head fade-up">
         <div>
           <p class="eyebrow">Visual System</p>
@@ -359,7 +402,7 @@
       </div>
     </section>
 
-    <section id="flow" class="section">
+    <section id="flow" class="wrap section">
       <div class="section-head fade-up">
         <div>
           <p class="eyebrow">Career Loop</p>
@@ -368,16 +411,16 @@
         <p>系统把分散的求职动作串成可追踪流程，每一步的数据都会进入后续智能分析。</p>
       </div>
       <div class="flow fade-up">
-        <div class="flow-step"><b>1. 建立简历资产</b><span>上传或录入简历，保留原始文件和解析文本。</span></div>
-        <div class="flow-step"><b>2. 获取真实 JD</b><span>从招聘平台复制岗位描述，提取技能和职责关键词。</span></div>
-        <div class="flow-step"><b>3. 定制简历</b><span>生成匹配分、缺口清单、改写建议和面试讲述点。</span></div>
-        <div class="flow-step"><b>4. 面试训练</b><span>按真实流程训练，保存回答、录音和反馈。</span></div>
-        <div class="flow-step"><b>5. 投递跟进</b><span>维护岗位阶段，生成跟进话术和风险提醒。</span></div>
-        <div class="flow-step"><b>6. 复盘提升</b><span>职业脉冲汇总全局数据，给出下一步行动。</span></div>
+        <div class="flow-step fade-up"><b>1. 建立简历资产</b><span>上传或录入简历，保留原始文件和解析文本。</span></div>
+        <div class="flow-step fade-up"><b>2. 获取真实 JD</b><span>从招聘平台复制岗位描述，提取技能和职责关键词。</span></div>
+        <div class="flow-step fade-up"><b>3. 定制简历</b><span>生成匹配分、缺口清单、改写建议和面试讲述点。</span></div>
+        <div class="flow-step fade-up"><b>4. 面试训练</b><span>按真实流程训练，保存回答、录音和反馈。</span></div>
+        <div class="flow-step fade-up"><b>5. 投递跟进</b><span>维护岗位阶段，生成跟进话术和风险提醒。</span></div>
+        <div class="flow-step fade-up"><b>6. 复盘提升</b><span>职业脉冲汇总全局数据，给出下一步行动。</span></div>
       </div>
     </section>
 
-    <section id="tech" class="section grid stack-grid">
+    <section id="tech" class="wrap section grid stack-grid">
       <article class="card liquid fade-up">
         <p class="eyebrow">Tech Stack</p>
         <h2>技术栈完整说明</h2>
@@ -402,7 +445,7 @@
       </article>
     </section>
 
-    <section id="agent" class="section grid two">
+    <section id="agent" class="wrap section grid two">
       <article class="card liquid fade-up">
         <p class="eyebrow">Agent Ability</p>
         <h2>后端智能体能力</h2>
@@ -431,15 +474,13 @@
       </article>
     </section>
 
-    <section class="section">
-      <div class="motion-text fade-up">
-        <p class="eyebrow">Motion Layer</p>
-        <h2>动态视觉层</h2>
-        <p>视频素材作为独立视觉区展示，不遮挡功能说明，让页面在滚动过程中保持节奏和呼吸感。</p>
+    <section id="cinema" class="cinema full-bleed fade-up">
+      <video src="assets/videos/career-hero-loop.mp4#t=2" poster="assets/images/hero-bg.png" autoplay muted loop playsinline preload="auto"></video>
+      <div class="cinema-title">
+        <p class="eyebrow">Career Flow</p>
+        <h2>从准备到投递，一路推进</h2>
+        <p>简历、JD、面试、语音和投递记录在同一个工作台里持续流动。</p>
       </div>
-      <article class="motion-frame liquid fade-up">
-        <video src="assets/videos/career-hero-loop.mp4" poster="assets/images/hero-bg.png" autoplay muted loop playsinline preload="auto"></video>
-      </article>
     </section>
   </main>
 
@@ -451,9 +492,14 @@
         if (entry.isIntersecting) entry.target.classList.add("visible");
       });
     }, { threshold: 0.12 });
-    document.querySelectorAll(".fade-up").forEach((el, index) => {
-      el.style.transitionDelay = `${Math.min(index * 45, 240)}ms`;
-      observer.observe(el);
+
+    document.querySelectorAll(".fade-up").forEach((el) => observer.observe(el));
+    document.querySelectorAll(".grid, .flow").forEach((group) => {
+      Array.from(group.children).forEach((child, index) => {
+        if (child.classList.contains("fade-up") || child.classList.contains("flow-step")) {
+          child.style.transitionDelay = `${Math.min(index * 80, 420)}ms`;
+        }
+      });
     });
   </script>
 </body>
