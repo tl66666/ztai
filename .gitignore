@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local runtime data
+*.db
+*.sqlite
+*.sqlite3
+uploads/
+exports/
+output/
+.uploads/
+
+# Personal sample resumes accidentally placed in static assets
+static/assets/images/*.doc
+static/assets/images/*.docx
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>职途AI | AI 智能体求职辅助 Web 系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <button class="brand" data-page="home">
+      <img id="brandLogo" src="assets/images/logo%20(2).png" alt="职途AI" />
+      <span>职途<br><strong>AI</strong></span>
+    </button>
+    <nav class="nav">
+      <button class="nav-item active" data-page="home"><i data-lucide="sparkles"></i><span>项目总览</span></button>
+      <a class="nav-item link-nav" href="showcase.html"><i data-lucide="presentation"></i><span>项目展示</span></a>
+      <button class="nav-item" data-page="resume"><i data-lucide="file-user"></i><span>简历实验室</span></button>
+      <button class="nav-item" data-page="interview"><i data-lucide="messages-square"></i><span>面试训练场</span></button>
+      <button class="nav-item" data-page="tracker"><i data-lucide="kanban-square"></i><span>投递看板</span></button>
+      <button class="nav-item" data-page="agent"><i data-lucide="bot"></i><span>AI 教练</span></button>
+    </nav>
+    <div class="provider-mini">
+      <span id="providerDot"></span>
+      <div>
+        <b id="providerName">本地兜底</b>
+        <small id="providerModel">规则引擎可用</small>
+      </div>
+    </div>
+  </aside>
+
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">AI Agent Career Studio</p>
+        <h1 id="pageTitle">项目总览</h1>
+      </div>
+      <div class="top-actions">
+        <div class="theme-block">
+          <span>主题</span>
+          <div class="theme-switch" role="group" aria-label="主题切换">
+          <button class="theme-option active" data-theme-choice="anime">Anime</button>
+          <button class="theme-option" data-theme-choice="glass">Glass</button>
+          </div>
+        </div>
+        <button class="ghost config-button" id="modelConfigBtn"><i data-lucide="settings-2"></i>模型配置</button>
+      </div>
+    </header>
+
+    <section id="modelConfigPanel" class="model-config-panel hidden">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Model Gateway</p>
+          <h3>多模型 API 配置</h3>
+        </div>
+        <button class="icon-button" id="closeModelPanel" title="关闭"><i data-lucide="x"></i></button>
+      </div>
+      <div class="model-config-grid">
+        <select id="providerSelect" class="input compact"></select>
+        <select id="modelSelect" class="input model-input"></select>
+        <input id="customModelInput" class="input custom-model-input hidden" placeholder="自定义模型 ID，例如 deepseek-chat" />
+        <input id="apiKeyInput" class="input key-input" type="password" placeholder="输入对应厂商 API Key" />
+        <button class="primary" id="saveProviderBtn"><i data-lucide="key-round"></i>应用配置</button>
+      </div>
+      <div id="providerLinkList" class="provider-links"></div>
+    </section>
+
+    <section id="page-home" class="page active">
+      <div class="hero anime-hero">
+        <img id="heroImage" src="assets/images/hero-bg%20(2).png" alt="AI 智能体求职辅助系统" />
+        <div class="hero-copy">
+          <p class="eyebrow">AI Agent × Resume × Interview</p>
+          <h2>AI 智能体求职辅助 Web 系统</h2>
+          <p class="hero-sub">围绕真实求职流程设计：简历管理、JD 匹配、模拟面试、语音表达分析、投递追踪和 AI 教练。</p>
+          <div class="hero-actions">
+            <button class="primary" data-page="resume"><i data-lucide="wand-sparkles"></i>进入简历实验室</button>
+            <button class="ghost" data-page="interview"><i data-lucide="gamepad-2"></i>开始面试训练</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="metric-grid">
+        <article class="metric"><span id="statResumes">0</span><small>份简历</small></article>
+        <article class="metric"><span id="statInterviews">0</span><small>次面试</small></article>
+        <article class="metric"><span id="statMatches">0</span><small>次匹配</small></article>
+        <article class="metric"><span id="statApps">0</span><small>条投递</small></article>
+      </div>
+
+      <section class="career-pulse" id="careerPulse">
+        <div class="pulse-score">
+          <span id="readinessScore">0</span>
+          <small>求职准备度</small>
+        </div>
+        <div class="pulse-body">
+          <div class="panel-head compact-head">
+            <h3>今日求职作战台</h3>
+            <span class="pill" id="readinessLabel">待启动</span>
+          </div>
+          <p id="readinessSummary">系统会根据简历、JD 匹配、面试训练和投递进度，给出下一步最该做的动作。</p>
+          <div id="pulseBlockers" class="pulse-chips"></div>
+          <div id="weeklyPlan" class="weekly-plan"></div>
+        </div>
+      </section>
+
+      <div class="home-grid">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>项目能力矩阵</h3>
+            <span class="pill">项目亮点</span>
+          </div>
+          <div class="feature-list">
+            <div><b>多模型 AI 网关</b><p>GLM、DeepSeek、Kimi 三类供应商可切换；未配置 Key 时自动进入本地兜底模式。</p></div>
+            <div><b>JD 驱动简历优化</b><p>根据岗位描述拆解关键词、风险点、匹配分和简历改写方向。</p></div>
+            <div><b>真实面试训练流程</b><p>包含完整模拟面试、题库练习、专业知识回答、语音表达分析。</p></div>
+            <div><b>实训可测闭环</b><p>提供稳定 API、核心单元测试、投递数据和可演示前端流程。</p></div>
+          </div>
+          <div id="nextActions" class="next-actions"></div>
+        </section>
+        <section class="panel poster-panel">
+          <img id="dashboardImage" src="assets/images/dashboard%20(2).png" alt="系统能力看板" />
+        </section>
+      </div>
+    </section>
+
+    <section id="page-resume" class="page">
+      <div class="page-subnav" data-filter-page="resume">
+        <button class="active" data-section-filter="resume:input">录入编辑</button>
+        <button data-section-filter="resume:manage">我的简历</button>
+        <button data-section-filter="resume:analysis">分析修改</button>
+        <button data-section-filter="resume:export">导出转换</button>
+        <button data-section-filter="resume:jd">JD 优化</button>
+        <button data-section-filter="resume:skills">技能图谱</button>
+      </div>
+      <div class="lab-grid">
+        <section class="panel media-strip wide resume-visual">
+          <img id="resumeImage" src="assets/images/resume-analysis%20(2).png" alt="简历智能分析" />
+          <div>
+            <p class="eyebrow">Resume Lab</p>
+            <h3>简历解析、JD 匹配、技能图谱，一条线完成。</h3>
+          </div>
+        </section>
+
+        <section class="panel input-panel module-panel" data-module-page="resume" data-module="input">
+          <div class="panel-head">
+            <h3>简历输入</h3>
+            <button class="ghost small" id="refreshResumesBtn"><i data-lucide="refresh-cw"></i>刷新</button>
+          </div>
+          <div id="editingResumeNotice" class="edit-notice hidden">
+            <div>
+              <b>正在编辑已保存简历</b>
+              <span id="editingResumeText">修改后点击“更新简历”保存到当前版本。</span>
+            </div>
+            <button class="ghost small" id="cancelResumeEditBtn" type="button">退出编辑</button>
+          </div>
+          <p class="module-copy">先上传原始 Word/PDF 或粘贴文本，系统会保存原文件用于高保真导出，同时提取文本用于 AI 分析。</p>
+          <div class="workflow-chips"><span>1 上传/粘贴</span><span>2 保存原件</span><span>3 进入分析优化</span></div>
+          <div class="form-grid">
+            <input id="resumeTitle" class="input" placeholder="简历标题，例如：唐乐-软件测试工程师" />
+            <input id="resumeFile" class="input" type="file" accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg" />
+          </div>
+          <textarea id="resumeContent" class="input textarea" placeholder="粘贴简历内容，或上传文件后保存。"></textarea>
+          <div class="button-row">
+            <button class="primary" id="saveResumeBtn"><i data-lucide="save"></i>保存简历</button>
+            <button class="ghost" id="generateResumeBtn"><i data-lucide="wand-sparkles"></i>生成示例</button>
+          </div>
+        </section>
+
+        <section class="panel resume-list-panel module-panel" data-module-page="resume" data-module="manage">
+          <div class="panel-head"><h3>我的简历</h3><span class="pill" id="resumeCount">0</span></div>
+          <p class="module-copy">集中管理多份简历版本，适合按岗位维护“测试岗版、AI 项目版、校招版”。</p>
+          <div class="workflow-chips"><span>版本管理</span><span>编辑原文</span><span>诊断问题</span></div>
+          <div id="resumeList" class="stack-list"></div>
+        </section>
+
+        <section class="panel wide module-panel" data-module-page="resume" data-module="analysis">
+          <div class="panel-head"><h3>简历分析与一键修改</h3><span class="pill">Review</span></div>
+          <p class="module-copy">选择一份简历后，系统会按 HR 初筛、岗位匹配、项目证据、量化表达、风险项五个维度诊断，并能直接生成可保存的新版本。</p>
+          <div class="workflow-chips"><span>选择版本</span><span>结构诊断</span><span>表达改写</span><span>保存新版本</span></div>
+          <div class="form-grid">
+            <select id="analysisResumeSelect" class="input"></select>
+            <input id="analysisJobTitle" class="input" placeholder="目标岗位，例如：软件测试工程师 / AI 应用测试" />
+          </div>
+          <textarea id="analysisJdInput" class="input textarea medium" placeholder="可选：粘贴岗位 JD，分析会更贴近真实投递场景。"></textarea>
+          <div class="button-row">
+            <button class="primary" id="resumeAuditBtn"><i data-lucide="clipboard-check"></i>生成诊断报告</button>
+            <button class="ghost" id="resumeImproveBtn"><i data-lucide="sparkles"></i>生成优化版并保存</button>
+          </div>
+          <div id="resumeAuditResult" class="result hidden"></div>
+        </section>
+
+        <section class="panel resume-tools-panel module-panel" data-module-page="resume" data-module="export">
+          <div class="panel-head"><h3>导出与格式转换</h3><span class="pill">PDF / Word</span></div>
+          <p class="module-copy">上传过原始文件的简历会优先保留版式；Word 转 PDF 会优先调用本机 Word 转换。</p>
+          <div class="workflow-chips"><span>选择简历</span><span>高保真导出</span><span>格式互转</span></div>
+          <select id="exportResumeSelect" class="input"></select>
+          <div class="button-row">
+            <button class="primary" id="exportPdfBtn"><i data-lucide="file-down"></i>导出 PDF</button>
+            <button class="ghost" id="exportWordBtn"><i data-lucide="file-text"></i>导出 Word</button>
+          </div>
+          <div class="tool-upload">
+            <label>
+              <span>PDF 转 Word</span>
+              <input id="pdfToWordFile" class="input" type="file" accept=".pdf" />
+            </label>
+            <label>
+              <span>Word 转 PDF</span>
+              <input id="wordToPdfFile" class="input" type="file" accept=".doc,.docx" />
+            </label>
+          </div>
+        </section>
+
+        <section class="panel wide module-panel" data-module-page="resume" data-module="jd">
+          <div class="panel-head"><h3>JD 定制优化</h3><span class="pill">Agent</span></div>
+          <p class="module-copy">把目标岗位 JD 放进来，系统会拆关键词、匹配差距、项目改写方向和面试讲述重点。</p>
+          <div class="workflow-chips"><span>选择简历</span><span>粘贴 JD</span><span>生成优化版</span><span>准备面试话术</span></div>
+          <div class="source-links">
+            <a href="https://www.zhipin.com/" target="_blank" rel="noreferrer">去 BOSS 直聘找 JD</a>
+            <a href="https://www.zhaopin.com/" target="_blank" rel="noreferrer">去智联招聘找 JD</a>
+            <a href="https://www.liepin.com/" target="_blank" rel="noreferrer">去猎聘找 JD</a>
+          </div>
+          <div class="inline-visual">
+            <img id="jobMatchImage" src="assets/images/job-match%20(2).png" alt="JD 与简历匹配" />
+            <p>粘贴岗位 JD 后，系统会分析关键词、匹配度、风险点、改写建议和面试讲述要点。</p>
+          </div>
+          <div class="form-grid">
+            <select id="tailorResumeSelect" class="input"></select>
+            <input id="jobTitleInput" class="input" placeholder="目标岗位，例如：AI 应用测试工程师" />
+          </div>
+          <textarea id="jdInput" class="input textarea medium" placeholder="粘贴招聘 JD，系统会分析关键词、匹配度和简历优化方向。"></textarea>
+          <div class="button-row">
+            <button class="primary" id="tailorBtn"><i data-lucide="scan-search"></i>按 JD 优化</button>
+            <button class="ghost" id="matchBtn"><i data-lucide="target"></i>匹配分析</button>
+            <button class="ghost" id="analyzeJdBtn"><i data-lucide="file-search"></i>只分析 JD</button>
+          </div>
+          <div id="tailorResult" class="result hidden"></div>
+        </section>
+
+        <section class="panel skill-panel module-panel" data-module-page="resume" data-module="skills">
+          <div class="panel-head"><h3>技能图谱</h3><span class="pill">Radar</span></div>
+          <p class="module-copy">根据简历关键词生成能力雷达，快速发现技能栏和项目证据之间的缺口。</p>
+          <div class="workflow-chips"><span>选择简历</span><span>抽取技能</span><span>发现短板</span><span>带入专业面试</span></div>
+          <select id="skillResumeSelect" class="input"></select>
+          <canvas id="skillChart"></canvas>
+          <button class="ghost full" id="skillsBtn"><i data-lucide="radar"></i>生成技能图谱</button>
+          <div id="skillResult" class="result hidden"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="page-interview" class="page">
+      <div class="page-subnav" data-filter-page="interview">
+        <button class="active" data-section-filter="interview:mock">模拟流程</button>
+        <button data-section-filter="interview:professional">专业知识面试</button>
+        <button data-section-filter="interview:practice">题库练习</button>
+        <button data-section-filter="interview:records">训练记录</button>
+      </div>
+      <div class="interview-grid">
+        <section class="interview-stage module-panel" data-module-page="interview" data-module="mock">
+          <div class="stage-bg"><img id="interviewImage" src="assets/images/interview-scene%20(2).png" alt="模拟面试场景" /></div>
+          <div class="interviewer-card">
+            <img id="interviewAvatar" src="assets/images/ai-avatar%20(2).png" alt="AI 面试官" />
+            <div>
+              <p class="eyebrow" id="interviewStageLabel">待开始</p>
+              <h3 id="currentQuestion">选择简历和岗位，开始一场完整模拟面试。</h3>
+            </div>
+          </div>
+          <div class="progress-track"><span id="interviewProgress"></span></div>
+        </section>
+
+        <section class="panel module-panel" data-module-page="interview" data-module="mock">
+          <div class="panel-head"><h3>完整模拟面试</h3><span class="pill">Flow</span></div>
+          <p class="module-copy">按真实流程推进：自我介绍、项目深挖、技术追问、行为面、反问和总结反馈。</p>
+          <div class="workflow-chips"><span>自我介绍</span><span>项目深挖</span><span>技术追问</span><span>行为面</span><span>反问总结</span></div>
+          <select id="interviewResumeSelect" class="input"></select>
+          <input id="interviewJobTitle" class="input" placeholder="面试岗位，例如：软件测试工程师" />
+          <textarea id="interviewJd" class="input textarea smallarea" placeholder="岗位 JD，可选"></textarea>
+          <button class="primary full" id="startInterviewBtn"><i data-lucide="play"></i>开始模拟</button>
+        </section>
+
+        <section class="panel answer-panel module-panel" data-module-page="interview" data-module="mock">
+          <div class="panel-head">
+            <h3>本轮回答与语音复盘</h3>
+            <button class="icon-button" id="voiceBtn" title="语音输入"><i data-lucide="mic"></i></button>
+          </div>
+          <p class="module-copy">模拟面试只保留这一个回答入口：可以打字、浏览器语音转文字，也可以录制真实音频回放并让 AI 分析语速、停顿、音量和表达结构。</p>
+          <div class="workflow-chips"><span>回答当前问题</span><span>录音回放</span><span>AI 表达分析</span><span>进入下一问</span></div>
+          <textarea id="answerInput" class="input textarea answer" placeholder="输入回答，或点击麦克风语音录入。"></textarea>
+          <div class="audio-lab">
+            <div class="audio-actions">
+              <button class="ghost" id="recordAudioBtn"><i data-lucide="circle-dot"></i>开始真实录音</button>
+              <button class="ghost" id="stopAudioBtn"><i data-lucide="square"></i>停止并回放</button>
+              <button class="ghost" id="analyzeAudioBtn"><i data-lucide="waveform"></i>分析录音</button>
+            </div>
+            <audio id="audioPlayback" controls></audio>
+            <label class="audio-upload">
+              <span>上传已有面试录音</span>
+              <input id="audioFileInput" class="input" type="file" accept="audio/*,.webm,.mp3,.wav,.m4a" />
+            </label>
+            <div id="audioMetricPreview" class="audio-metrics hidden"></div>
+          </div>
+          <div class="button-row">
+            <button class="primary" id="sendAnswerBtn"><i data-lucide="send"></i>提交回答</button>
+            <button class="ghost" id="analyzeVoiceBtn"><i data-lucide="audio-lines"></i>表达分析</button>
+          </div>
+          <div id="interviewFeedback" class="result hidden"></div>
+        </section>
+
+        <section class="panel wide module-panel" data-module-page="interview" data-module="professional">
+          <div class="panel-head"><h3>专业知识面试</h3><span class="pill">Technical</span></div>
+          <p class="module-copy">围绕目标岗位生成专业追问包：基础概念、项目场景、工具链、故障定位、加分扩展，适合面试前集中训练。</p>
+          <div class="workflow-chips"><span>选择方向</span><span>生成题组</span><span>按题作答</span><span>获得追问和参考答案</span></div>
+          <div class="form-grid four">
+            <select id="professionalCategory" class="input">
+              <option value="test">软件测试</option>
+              <option value="python">Python / Flask</option>
+              <option value="frontend">前端基础</option>
+              <option value="ai">AI Agent</option>
+            </select>
+            <select id="professionalLevel" class="input">
+              <option value="campus">校招/实习</option>
+              <option value="junior">初级岗位</option>
+              <option value="project">项目深挖</option>
+            </select>
+            <input id="professionalJobTitle" class="input" placeholder="目标岗位" />
+            <button class="primary" id="professionalPackBtn"><i data-lucide="brain"></i>生成题组</button>
+          </div>
+          <div class="practice-workbench">
+            <div id="professionalPack" class="question-list"></div>
+            <div class="answer-studio">
+              <div class="panel-head compact-head"><h4>答题工作台</h4><span class="pill">Answer</span></div>
+              <input id="professionalQuestion" class="input" placeholder="点击左侧题目后自动填入，也可以自己输入专业问题" />
+              <textarea id="professionalAnswer" class="input textarea smallarea" placeholder="在这里直接作答，不需要滑到页面底部。系统会按专业性、结构、项目关联和表达清晰度评分。"></textarea>
+              <button class="primary full" id="scoreProfessionalBtn"><i data-lucide="badge-check"></i>专业回答评分</button>
+              <div id="professionalResult" class="result hidden"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel wide practice-panel module-panel" data-module-page="interview" data-module="practice">
+          <div class="panel-head">
+            <h3>题库练习与专业知识回答</h3>
+            <span class="pill">Practice</span>
+          </div>
+          <p class="module-copy">按题型专项练习，系统会给出维度评分、问题清单和参考答案。</p>
+          <div class="workflow-chips"><span>选题型</span><span>作答</span><span>评分</span><span>看参考答案</span></div>
+          <div class="practice-toolbar">
+            <select id="questionCategory" class="input compact">
+              <option value="general">通用面试</option>
+              <option value="test">软件测试</option>
+              <option value="python">Python / Flask</option>
+              <option value="frontend">前端基础</option>
+              <option value="ai">AI Agent</option>
+            </select>
+            <button class="ghost" id="loadQuestionsBtn"><i data-lucide="book-open"></i>加载题库</button>
+          </div>
+          <div class="practice-workbench">
+            <div id="questionList" class="question-list"></div>
+            <div class="answer-studio">
+              <div class="panel-head compact-head"><h4>即时作答</h4><span class="pill">Score</span></div>
+              <input id="practiceQuestion" class="input" placeholder="选择左侧题目后会自动填入，也可以手动输入题目" />
+              <textarea id="practiceAnswer" class="input textarea smallarea" placeholder="在这里作答，提交后会保存到训练记录，后续可查看题目、回答、评分和参考答案。"></textarea>
+              <button class="primary full" id="scorePracticeBtn"><i data-lucide="badge-check"></i>评分与参考答案</button>
+              <div id="practiceResult" class="result hidden"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel wide module-panel" data-module-page="interview" data-module="records">
+          <div class="panel-head">
+            <h3>训练与语音记录</h3>
+            <button class="ghost small" id="clearTrainingRecordsBtn"><i data-lucide="trash-2"></i>清空记录</button>
+          </div>
+          <p class="module-copy">统一管理模拟面试、题库练习和真实录音分析结果，方便复盘，也可以删除无用数据。</p>
+          <div class="workflow-chips"><span>面试记录</span><span>答题记录</span><span>语音记录</span><span>删除清理</span></div>
+          <div id="trainingRecords" class="records-grid"></div>
+          <div id="recordDetail" class="record-detail result hidden"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="page-tracker" class="page">
+      <div class="page-subnav" data-filter-page="tracker">
+        <button class="active" data-section-filter="tracker:add">新增投递</button>
+        <button data-section-filter="tracker:board">投递看板</button>
+        <button data-section-filter="tracker:salary">薪资评估</button>
+      </div>
+      <div class="lab-grid">
+        <section class="panel media-strip wide track-visual">
+          <img id="trackImage" src="assets/images/application-track%20(2).png" alt="投递追踪" />
+          <div>
+            <p class="eyebrow">Offer Pipeline</p>
+            <h3>投递、笔试、面试、反馈，都放进一个看板。</h3>
+          </div>
+        </section>
+        <section class="panel module-panel" data-module-page="tracker" data-module="add">
+          <div class="panel-head"><h3>新增投递</h3><span class="pill">Pipeline</span></div>
+          <p class="module-copy">记录公司、岗位、阶段、城市和备注，避免投递多了之后进度混乱。</p>
+          <div class="workflow-chips"><span>公司岗位</span><span>投递阶段</span><span>备注待办</span></div>
+          <input id="appCompany" class="input" placeholder="公司名称" />
+          <input id="appJob" class="input" placeholder="岗位名称" />
+          <div class="form-grid">
+            <select id="appStatus" class="input">
+              <option>已投递</option><option>简历筛选</option><option>笔试</option><option>一面</option><option>二面</option><option>HR 面</option><option>Offer</option><option>已拒绝</option>
+            </select>
+            <input id="appCity" class="input" placeholder="城市" />
+          </div>
+          <textarea id="appNotes" class="input textarea smallarea" placeholder="记录面试反馈、待办和薪资信息。"></textarea>
+          <button class="primary full" id="saveAppBtn"><i data-lucide="plus"></i>添加记录</button>
+        </section>
+        <section class="panel wide module-panel" data-module-page="tracker" data-module="board">
+          <div class="panel-head"><h3>投递看板</h3><span class="pill">Live</span></div>
+          <p class="module-copy">按投递记录汇总当前机会池，后续可继续扩展为阶段看板和面试提醒。</p>
+          <div class="workflow-chips"><span>查看机会池</span><span>跟进状态</span><span>复盘反馈</span></div>
+          <div id="applicationList" class="kanban"></div>
+          <div id="applicationCoachResult" class="result hidden"></div>
+        </section>
+        <section class="panel wide module-panel" data-module-page="tracker" data-module="salary">
+          <div class="panel-head"><h3>薪资评估</h3><span class="pill">Offer</span></div>
+          <p class="module-copy">根据城市、经验和技能数量给出参考区间，辅助面试反问和谈薪准备。</p>
+          <div class="workflow-chips"><span>输入城市经验</span><span>估算区间</span><span>准备谈薪依据</span></div>
+          <div class="form-grid four">
+            <input id="salaryJob" class="input" placeholder="岗位类型" />
+            <select id="salaryExp" class="input"><option>应届生</option><option>1-3年</option><option>3-5年</option><option>5年以上</option></select>
+            <input id="salaryCity" class="input" placeholder="城市，例如：杭州" />
+            <input id="salarySkills" class="input" type="number" placeholder="技能数" />
+          </div>
+          <button class="ghost" id="salaryBtn"><i data-lucide="badge-dollar-sign"></i>评估薪资</button>
+          <div id="salaryResult" class="result hidden"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="page-agent" class="page">
+      <div class="chat-shell">
+        <section class="coach-profile">
+          <img id="coachAvatar" src="assets/images/ai-avatar%20(2).png" alt="AI 教练" />
+          <h3>JobHunter Coach</h3>
+          <p>简历、JD、面试、谈薪都能一起推演。</p>
+          <div class="quick-prompts">
+            <button data-prompt="帮我介绍这个 AI 求职辅助系统项目的技术亮点">项目亮点</button>
+            <button data-prompt="给我一套软件测试工程师自我介绍">自我介绍</button>
+            <button data-prompt="我该怎么回答你最大的缺点是什么">高频题</button>
+            <button id="careerReportBtn">生成求职作战报告</button>
+          </div>
+        </section>
+        <section class="panel chat-panel">
+          <div id="chatLog" class="chat-log">
+            <div class="message bot">你好，我是你的 AI 求职教练。把目标岗位、简历片段或面试问题发给我，我们直接打磨。</div>
+          </div>
+          <div class="chat-input">
+            <input id="agentInput" class="input" placeholder="输入你的求职问题" />
+            <button class="primary" id="sendAgentBtn"><i data-lucide="send"></i></button>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <section id="interviewRoom" class="interview-room hidden" aria-live="polite">
+    <div class="interview-room-card">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow" id="roomStageLabel">模拟面试</p>
+          <h3 id="roomQuestion">准备进入面试。</h3>
+        </div>
+        <button class="icon-button" id="closeInterviewRoom" title="收起"><i data-lucide="x"></i></button>
+      </div>
+      <div class="room-progress"><span id="roomProgress"></span></div>
+      <textarea id="roomAnswer" class="input textarea answer" placeholder="像真实面试一样回答。建议使用：结论一句话 + 项目证据 + 量化结果 + 岗位关联。"></textarea>
+      <div class="audio-lab compact-audio">
+        <div class="audio-actions">
+          <button class="ghost" id="roomRecordBtn"><i data-lucide="circle-dot"></i>录音回答</button>
+          <button class="ghost" id="roomStopRecordBtn"><i data-lucide="square"></i>停止回放</button>
+          <button class="ghost" id="roomAnalyzeAudioBtn"><i data-lucide="waveform"></i>分析录音</button>
+        </div>
+        <audio id="roomAudioPlayback" controls></audio>
+        <div id="roomAudioMetricPreview" class="audio-metrics hidden"></div>
+      </div>
+      <div class="button-row">
+        <button class="primary" id="roomSubmitBtn"><i data-lucide="send"></i>提交本轮回答</button>
+        <button class="ghost" id="roomVoiceCopyBtn"><i data-lucide="mic"></i>去语音回答区</button>
+      </div>
+      <div id="roomFeedback" class="result hidden"></div>
+    </div>
+  </section>
+
+  <div id="toast" class="toast hidden"></div>
+  <div id="loadingLayer" class="loading-layer hidden">
+    <video id="loadingVideo" src="assets/images/loading%20(2).mp4" autoplay muted loop playsinline></video>
+    <span>AI 正在整理你的求职策略...</span>
+  </div>
+
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
