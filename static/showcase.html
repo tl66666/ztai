@@ -46,6 +46,17 @@
       background-size: 46px 46px;
       mask-image: linear-gradient(to bottom, #000, transparent 78%);
     }
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 10% 46%, rgba(255,120,188,0.1), transparent 30%),
+        radial-gradient(circle at 88% 54%, rgba(116,240,211,0.1), transparent 30%),
+        linear-gradient(180deg, transparent 0, rgba(117,173,255,0.05) 48%, transparent 100%);
+    }
     a { color: inherit; text-decoration: none; }
     .wrap { width: min(1180px, calc(100% - 38px)); margin: 0 auto; position: relative; z-index: 2; }
     .full-bleed { width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); }
@@ -71,15 +82,18 @@
       pointer-events: none;
     }
     .nav {
-      position: sticky;
-      top: 16px;
+      position: fixed;
+      top: 18px;
+      left: 50%;
+      width: min(1180px, calc(100% - 38px));
+      transform: translateX(-50%);
       z-index: 20;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 14px;
       min-height: 72px;
-      margin: 16px auto;
+      margin: 0;
       padding: 10px 12px 10px 16px;
       border-radius: 999px;
     }
@@ -110,7 +124,7 @@
       align-items: end;
       position: relative;
       overflow: hidden;
-      padding: clamp(96px, 11vh, 132px) max(38px, calc((100vw - 1180px) / 2)) clamp(38px, 7vh, 70px);
+      padding: clamp(112px, 13vh, 154px) max(38px, calc((100vw - 1180px) / 2)) clamp(44px, 8vh, 82px);
       isolation: isolate;
       background: #070915 url("assets/images/hero-bg.png") center / cover no-repeat;
     }
@@ -130,18 +144,20 @@
       inset: 0;
       z-index: 1;
       background:
-        linear-gradient(90deg, rgba(5,6,10,0.88), rgba(5,6,10,0.52), rgba(5,6,10,0.08)),
-        linear-gradient(180deg, rgba(5,6,10,0.04), rgba(5,6,10,0.64));
+        radial-gradient(circle at 78% 24%, rgba(116,240,211,0.08), transparent 28%),
+        linear-gradient(90deg, rgba(5,6,10,0.86), rgba(5,6,10,0.42), rgba(5,6,10,0.06)),
+        linear-gradient(180deg, rgba(5,6,10,0.12), rgba(5,6,10,0.58));
     }
     .hero-panel {
       position: relative;
       z-index: 2;
-      max-width: 760px;
-      padding: clamp(18px, 2.5vw, 28px);
-      border-radius: 26px;
-      background: rgba(5,6,10,0.28);
-      border: 1px solid rgba(255,255,255,0.1);
-      backdrop-filter: blur(10px);
+      max-width: 820px;
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+      border: 0;
+      backdrop-filter: none;
+      text-shadow: 0 22px 48px rgba(0,0,0,0.72);
     }
     .eyebrow {
       margin: 0 0 14px;
@@ -168,7 +184,20 @@
     .hero-text { max-width: 660px; color: rgba(255,255,255,0.8); font-size: 17px; line-height: 1.78; }
     .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
     .hero-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
-    .section { padding: 88px 0 0; }
+    .section {
+      padding: 88px 0 0;
+      position: relative;
+    }
+    .section::before {
+      content: "";
+      position: absolute;
+      left: -70px;
+      right: -70px;
+      top: 44px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,120,188,0.22), rgba(116,240,211,0.2), transparent);
+      pointer-events: none;
+    }
     .section-head { display: flex; justify-content: space-between; gap: 20px; align-items: end; margin-bottom: 22px; }
     .section-head p { max-width: 620px; color: var(--muted); line-height: 1.8; }
     .grid { display: grid; gap: 18px; }
@@ -256,35 +285,38 @@
       min-height: 100vh;
       position: relative;
       display: grid;
-      align-items: start;
+      align-items: center;
       justify-items: end;
-      padding: clamp(110px, 13vh, 150px) max(38px, calc((100vw - 1180px) / 2)) clamp(42px, 7vh, 72px);
+      padding: clamp(104px, 12vh, 144px) max(38px, calc((100vw - 1180px) / 2)) clamp(42px, 7vh, 72px);
       isolation: isolate;
       overflow: hidden;
       margin-top: 92px;
       scroll-margin-top: 0;
     }
     .cinema video { opacity: 0.95; }
-    .cinema video { object-position: center bottom; filter: brightness(1.1) saturate(1.12); }
+    .cinema video { object-position: center center; filter: brightness(1.12) saturate(1.1); }
     .cinema::after {
       content: "";
       position: absolute;
       inset: 0;
       z-index: 1;
-      background: linear-gradient(180deg, rgba(5,6,10,0.08), rgba(5,6,10,0.72));
+      background:
+        linear-gradient(90deg, rgba(5,6,10,0.12), rgba(5,6,10,0.02), rgba(5,6,10,0.72)),
+        linear-gradient(180deg, rgba(5,6,10,0.1), rgba(5,6,10,0.5));
     }
     .cinema-title {
       position: relative;
       z-index: 2;
-      width: min(500px, 100%);
-      padding: 20px 22px;
-      border-radius: 26px;
-      background: rgba(5,6,10,0.36);
-      border: 1px solid rgba(255,255,255,0.12);
-      backdrop-filter: blur(16px);
+      width: min(430px, 100%);
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+      border: 0;
+      backdrop-filter: none;
+      text-shadow: 0 18px 42px rgba(0,0,0,0.78);
     }
     .cinema-title p { margin-bottom: 0; color: rgba(255,255,255,0.78); line-height: 1.7; }
-    .cinema-title h2 { font-size: clamp(30px, 4vw, 54px); }
+    .cinema-title h2 { font-size: clamp(32px, 4vw, 56px); }
     .api-table { width: 100%; border-collapse: collapse; overflow: hidden; }
     .api-table th, .api-table td { padding: 14px; border-bottom: 1px solid rgba(255,255,255,0.1); text-align: left; vertical-align: top; }
     .api-table th { color: #fff; }
@@ -322,6 +354,7 @@
       <a class="pill" href="#themes">双主题</a>
       <a class="pill" href="#tech">技术栈</a>
       <a class="pill" href="#agent">智能体</a>
+      <a class="pill" href="https://github.com/tl66666/ztai" target="_blank" rel="noreferrer">GitHub</a>
       <a class="button primary" href="/">进入系统</a>
     </div>
   </nav>
@@ -335,7 +368,7 @@
         <p class="hero-text">基于 AI 智能体的求职辅助 Web 系统。围绕真实求职流程，构建从简历整理、岗位匹配、模拟面试、语音复盘到投递跟进的一体化工作台。</p>
         <div class="hero-actions">
           <a class="button primary" href="/">进入系统</a>
-          <a class="button dark" href="https://open.bigmodel.cn/apikey/platform" target="_blank" rel="noreferrer">获取 GLM API Key</a>
+          <a class="button dark" href="https://github.com/tl66666/ztai" target="_blank" rel="noreferrer">GitHub 仓库</a>
           <a class="button dark" href="#tech">技术架构</a>
         </div>
         <div class="hero-badges">
@@ -475,7 +508,7 @@
     </section>
 
     <section id="cinema" class="cinema full-bleed fade-up">
-      <video src="assets/videos/career-motion-panel.mp4" poster="assets/images/hero-bg.png" autoplay muted loop playsinline preload="auto"></video>
+      <video src="assets/videos/career-hero-loop.mp4#t=2" poster="assets/images/hero-bg.png" autoplay muted loop playsinline preload="auto"></video>
       <div class="cinema-title">
         <p class="eyebrow">Career Flow</p>
         <h2>从准备到投递，一路推进</h2>
