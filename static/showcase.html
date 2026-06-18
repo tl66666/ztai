@@ -3,319 +3,519 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>职途AI 项目展示页</title>
+  <title>职途 AI 项目展示 | AI Agent Career Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800;900&family=Noto+Sans+SC:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Noto+Sans+SC:wght@400;500;700;800;900&display=swap" rel="stylesheet">
   <style>
     :root {
-      --ink: #1f2333;
-      --muted: #747b8f;
-      --paper: rgba(255,255,255,0.78);
-      --line: rgba(31,35,51,0.1);
-      --pink: #ff7ab6;
-      --mint: #66dbc2;
-      --lilac: #a78bfa;
-      --blue: #6aa8ff;
-      --yellow: #ffd166;
-      --dark: #242638;
-      --shadow: 0 26px 70px rgba(76,64,112,0.16);
+      --bg: #05060a;
+      --ink: #f7f4ff;
+      --muted: rgba(247,244,255,0.66);
+      --line: rgba(255,255,255,0.12);
+      --glass: rgba(255,255,255,0.045);
+      --pink: #ff78bc;
+      --mint: #74f0d3;
+      --blue: #75adff;
+      --lilac: #bd8cff;
+      --yellow: #ffd36b;
+      --card: rgba(255,255,255,0.06);
+      --shadow: 0 24px 90px rgba(0,0,0,0.42);
     }
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
     body {
       margin: 0;
+      min-height: 100vh;
       color: var(--ink);
       font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
       background:
-        radial-gradient(circle at 10% 8%, rgba(255,122,182,0.22), transparent 28%),
-        radial-gradient(circle at 88% 10%, rgba(102,219,194,0.24), transparent 30%),
-        radial-gradient(circle at 50% 92%, rgba(255,209,102,0.22), transparent 34%),
-        linear-gradient(135deg, #fff7fb 0%, #f5fbff 42%, #fffaf1 100%);
+        radial-gradient(circle at 12% 8%, rgba(255,120,188,0.18), transparent 28%),
+        radial-gradient(circle at 82% 12%, rgba(116,240,211,0.15), transparent 32%),
+        radial-gradient(circle at 50% 72%, rgba(117,173,255,0.12), transparent 38%),
+        var(--bg);
+      overflow-x: hidden;
     }
     body::before {
       content: "";
       position: fixed;
       inset: 0;
       pointer-events: none;
-      opacity: 0.28;
+      opacity: 0.18;
       background-image:
-        linear-gradient(rgba(31,35,51,0.05) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(31,35,51,0.05) 1px, transparent 1px);
-      background-size: 38px 38px;
-      mask-image: linear-gradient(to bottom, #000, transparent 80%);
+        linear-gradient(rgba(255,255,255,0.07) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.07) 1px, transparent 1px);
+      background-size: 46px 46px;
+      mask-image: linear-gradient(to bottom, #000, transparent 78%);
     }
     a { color: inherit; text-decoration: none; }
-    .wrap { width: min(1180px, calc(100% - 36px)); margin: 0 auto; position: relative; z-index: 1; }
+    .wrap { width: min(1180px, calc(100% - 38px)); margin: 0 auto; position: relative; z-index: 2; }
+    .liquid {
+      position: relative;
+      overflow: hidden;
+      background: var(--glass);
+      background-blend-mode: luminosity;
+      border: 1px solid rgba(255,255,255,0.1);
+      box-shadow: inset 0 1px 1px rgba(255,255,255,0.14), var(--shadow);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+    .liquid::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      padding: 1px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.5), rgba(255,255,255,0.08) 34%, rgba(255,255,255,0.02) 66%, rgba(255,255,255,0.34));
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
     .nav {
       position: sticky;
-      top: 14px;
-      z-index: 10;
+      top: 16px;
+      z-index: 20;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 14px;
-      margin: 14px auto 20px;
-      padding: 12px;
-      border: 1px solid rgba(255,255,255,0.78);
-      border-radius: 24px;
-      background: rgba(255,255,255,0.66);
-      backdrop-filter: blur(18px);
-      box-shadow: var(--shadow);
+      min-height: 72px;
+      margin: 16px auto;
+      padding: 10px 12px 10px 16px;
+      border-radius: 999px;
     }
-    .brand { display: flex; align-items: center; gap: 10px; font-weight: 900; }
-    .brand img { width: 44px; height: 44px; border-radius: 14px; object-fit: cover; }
-    .nav-links { display: flex; flex-wrap: wrap; gap: 8px; }
-    .nav-links a, .button {
+    .brand { display: flex; align-items: center; gap: 12px; font-weight: 900; }
+    .brand img { width: 46px; height: 46px; border-radius: 16px; object-fit: cover; box-shadow: 0 0 28px rgba(255,120,188,0.34); }
+    .brand small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .nav-links { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+    .pill, .button {
       display: inline-flex;
       align-items: center;
-      min-height: 40px;
-      padding: 0 14px;
+      justify-content: center;
+      min-height: 42px;
+      padding: 0 15px;
       border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.055);
+      color: rgba(255,255,255,0.82);
+      font-size: 14px;
       font-weight: 900;
-      background: rgba(255,255,255,0.72);
-      border: 1px solid rgba(31,35,51,0.07);
     }
-    .button.primary { background: var(--dark); color: #fff; border-color: var(--dark); }
+    .button.primary { color: #11131d; background: #fff; }
+    .button.dark { color: #fff; background: linear-gradient(135deg, rgba(255,120,188,0.46), rgba(116,240,211,0.24)); }
     .hero {
-      min-height: 620px;
+      min-height: calc(100vh - 104px);
       display: grid;
       align-items: end;
-      padding: 46px;
-      border-radius: 36px;
-      overflow: hidden;
       position: relative;
-      box-shadow: var(--shadow);
-      background: var(--dark);
+      overflow: hidden;
+      border-radius: 38px;
+      padding: clamp(28px, 5vw, 64px);
+      isolation: isolate;
     }
-    .hero img {
+    .hero video {
       position: absolute;
       inset: 0;
       width: 100%;
       height: 100%;
       object-fit: cover;
-      object-position: center;
-      opacity: 0.88;
+      object-position: center bottom;
+      opacity: 0.82;
+      z-index: -3;
     }
     .hero::after {
       content: "";
       position: absolute;
       inset: 0;
+      z-index: -2;
       background:
-        linear-gradient(90deg, rgba(36,38,56,0.88), rgba(36,38,56,0.32), rgba(36,38,56,0.06)),
-        linear-gradient(180deg, transparent, rgba(36,38,56,0.24));
+        linear-gradient(90deg, rgba(5,6,10,0.92), rgba(5,6,10,0.56), rgba(5,6,10,0.22)),
+        linear-gradient(180deg, rgba(5,6,10,0.14), rgba(5,6,10,0.74));
     }
-    .hero-copy {
-      position: relative;
-      z-index: 1;
-      max-width: 760px;
-      color: #fff;
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 18px;
+      z-index: -1;
+      border-radius: 30px;
+      border: 1px solid rgba(255,255,255,0.08);
+      pointer-events: none;
     }
     .eyebrow {
-      margin: 0 0 12px;
+      margin: 0 0 14px;
       color: var(--pink);
-      font: 900 13px/1 Outfit, sans-serif;
-      letter-spacing: 0.12em;
+      font: 900 13px/1 "Noto Sans SC", sans-serif;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
     }
-    h1, h2, h3 { margin: 0; letter-spacing: 0; }
-    h1 { font: 900 clamp(46px, 7vw, 92px)/0.98 Outfit, "Noto Sans SC", sans-serif; max-width: 900px; }
-    h2 { font-size: clamp(28px, 4vw, 48px); margin-bottom: 20px; }
-    h3 { font-size: 22px; }
-    .hero-copy p:not(.eyebrow) { color: rgba(255,255,255,0.82); font-size: 18px; line-height: 1.8; max-width: 720px; }
-    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
-    .section { margin: 24px 0; }
-    .grid { display: grid; gap: 16px; }
-    .grid.two { grid-template-columns: 1.05fr 0.95fr; }
-    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .card {
-      padding: 22px;
-      border-radius: 26px;
-      background: var(--paper);
-      border: 1px solid rgba(255,255,255,0.76);
-      box-shadow: 0 18px 46px rgba(31,35,51,0.08);
-      backdrop-filter: blur(16px);
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      max-width: 980px;
+      margin-bottom: 18px;
+      font: 900 clamp(46px, 8vw, 112px)/0.92 "Noto Sans SC", sans-serif;
+      letter-spacing: 0;
     }
-    .card p, .card li { color: var(--muted); line-height: 1.75; }
-    .card ul { padding-left: 18px; margin-bottom: 0; }
-    .metric-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: -44px; position: relative; z-index: 2; }
-    .metric { padding: 20px; border-radius: 24px; background: rgba(255,255,255,0.86); box-shadow: var(--shadow); }
-    .metric b { display: block; font: 900 38px/1 Outfit, sans-serif; }
+    h1 em, .serif {
+      font-family: "Instrument Serif", serif;
+      font-style: italic;
+      font-weight: 400;
+      color: rgba(255,255,255,0.78);
+    }
+    h2 { margin-bottom: 20px; font-size: clamp(30px, 4.8vw, 62px); line-height: 1.08; letter-spacing: 0; }
+    h3 { margin-bottom: 10px; font-size: 22px; letter-spacing: 0; }
+    .hero-text { max-width: 760px; color: rgba(255,255,255,0.78); font-size: 18px; line-height: 1.85; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 26px; }
+    .hero-badges { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 34px; }
+    .section { padding: 78px 0 0; }
+    .section-head { display: flex; justify-content: space-between; gap: 20px; align-items: end; margin-bottom: 22px; }
+    .section-head p { max-width: 620px; color: var(--muted); line-height: 1.8; }
+    .grid { display: grid; gap: 18px; }
+    .two { grid-template-columns: 1.05fr 0.95fr; }
+    .three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .card {
+      min-height: 190px;
+      padding: 24px;
+      border-radius: 28px;
+    }
+    .card p, .card li { color: var(--muted); line-height: 1.78; }
+    .card ul { margin: 0; padding-left: 18px; }
+    .metric { min-height: 150px; }
+    .metric b { display: block; margin-bottom: 8px; font: 400 58px/1 "Instrument Serif", serif; color: #fff; }
     .metric span { color: var(--muted); font-weight: 800; }
-    .feature-card { min-height: 235px; border-left: 8px solid var(--pink); }
+    .feature-card { border-left: 6px solid var(--pink); }
     .feature-card:nth-child(2) { border-left-color: var(--mint); }
     .feature-card:nth-child(3) { border-left-color: var(--blue); }
     .feature-card:nth-child(4) { border-left-color: var(--yellow); }
     .feature-card:nth-child(5) { border-left-color: var(--lilac); }
     .feature-card:nth-child(6) { border-left-color: var(--mint); }
-    .tech-stack { display: flex; flex-wrap: wrap; gap: 10px; }
-    .tech-stack span {
+    .feature-card:nth-child(7) { border-left-color: var(--blue); }
+    .feature-card:nth-child(8) { border-left-color: var(--pink); }
+    .theme-card {
+      min-height: 440px;
+      display: grid;
+      align-content: end;
+      overflow: hidden;
+      position: relative;
+    }
+    .theme-card img, .theme-card video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      opacity: 0.82;
+      z-index: -2;
+    }
+    .theme-card::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      background: linear-gradient(180deg, rgba(5,6,10,0.08), rgba(5,6,10,0.78));
+    }
+    .theme-copy { width: min(520px, 100%); padding: 24px; border-radius: 24px; background: rgba(5,6,10,0.48); border: 1px solid rgba(255,255,255,0.12); backdrop-filter: blur(14px); }
+    .stack-grid { grid-template-columns: 0.92fr 1.08fr; }
+    .tech-tags { display: flex; flex-wrap: wrap; gap: 10px; }
+    .tech-tags span {
       display: inline-flex;
       align-items: center;
       min-height: 36px;
       padding: 0 12px;
       border-radius: 999px;
-      background: rgba(255,255,255,0.78);
-      border: 1px solid rgba(31,35,51,0.08);
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.1);
       font-weight: 900;
+      color: rgba(255,255,255,0.86);
     }
     .flow {
       display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 12px;
     }
-    .flow div {
-      min-height: 130px;
-      padding: 16px;
-      border-radius: 22px;
-      background: linear-gradient(135deg, rgba(255,255,255,0.88), rgba(255,255,255,0.56));
-      border: 1px solid rgba(255,255,255,0.82);
+    .flow-step {
+      min-height: 150px;
+      padding: 18px;
+      border-radius: 26px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.035));
+      border: 1px solid rgba(255,255,255,0.1);
     }
-    .flow b { display: block; margin-bottom: 8px; }
-    .shot {
-      min-height: 430px;
+    .flow-step b { display: block; margin-bottom: 8px; color: #fff; }
+    .wide-video {
+      min-height: 520px;
       padding: 0;
       overflow: hidden;
+      position: relative;
     }
-    .shot img { width: 100%; height: 100%; min-height: 430px; object-fit: cover; object-position: center; display: block; }
-    .resume-block {
-      font-size: 15px;
-      line-height: 1.8;
-      color: var(--ink);
-      background: rgba(255,255,255,0.88);
+    .wide-video video {
+      display: block;
+      width: 100%;
+      height: 100%;
+      min-height: 520px;
+      object-fit: cover;
     }
-    footer { padding: 32px 0 48px; color: var(--muted); text-align: center; }
-    @media (max-width: 900px) {
-      .grid.two, .grid.three, .metric-row, .flow { grid-template-columns: 1fr; }
-      .hero { min-height: 560px; padding: 28px; }
-      .metric-row { margin-top: 16px; }
-      .nav { align-items: flex-start; flex-direction: column; }
+    .wide-video .overlay {
+      position: absolute;
+      inset: auto 24px 24px 24px;
+      max-width: 680px;
+      padding: 24px;
+      border-radius: 26px;
+      background: rgba(5,6,10,0.56);
+      border: 1px solid rgba(255,255,255,0.12);
+      backdrop-filter: blur(18px);
+    }
+    .api-table { width: 100%; border-collapse: collapse; overflow: hidden; }
+    .api-table th, .api-table td { padding: 14px; border-bottom: 1px solid rgba(255,255,255,0.1); text-align: left; vertical-align: top; }
+    .api-table th { color: #fff; }
+    .api-table td { color: var(--muted); line-height: 1.65; }
+    .fade-up { opacity: 0; transform: translateY(28px); transition: opacity 0.7s ease, transform 0.7s ease; }
+    .fade-up.visible { opacity: 1; transform: translateY(0); }
+    footer { padding: 72px 0 50px; color: var(--muted); text-align: center; }
+    @media (max-width: 980px) {
+      .nav { align-items: flex-start; border-radius: 28px; flex-direction: column; }
+      .two, .three, .four, .stack-grid, .flow { grid-template-columns: 1fr; }
+      .hero { min-height: 720px; }
+      .section-head { display: block; }
+    }
+    @media (max-width: 640px) {
+      .wrap { width: min(100% - 24px, 1180px); }
+      .hero { border-radius: 28px; padding: 28px; }
+      h1 { font-size: 44px; }
+      .theme-card, .wide-video, .wide-video video { min-height: 440px; }
+      .nav-links { width: 100%; }
+      .nav-links a { flex: 1 1 auto; }
     }
   </style>
 </head>
 <body>
-  <nav class="wrap nav">
+  <nav class="wrap nav liquid">
     <a class="brand" href="/">
-      <img src="assets/images/logo%20(2).png" alt="职途AI Logo" />
-      <span>职途AI 项目展示</span>
+      <img src="assets/images/logo%20(2).png" alt="职途 AI Logo" />
+      <span>职途 AI<small>AI Agent Career Studio</small></span>
     </a>
     <div class="nav-links">
-      <a href="#features">功能</a>
-      <a href="#tech">技术栈</a>
-      <a href="#flow">业务闭环</a>
-      <a href="#resume">简历写法</a>
-      <a href="/">进入系统</a>
+      <a class="pill" href="#features">功能</a>
+      <a class="pill" href="#themes">双主题</a>
+      <a class="pill" href="#tech">技术栈</a>
+      <a class="pill" href="#agent">智能体</a>
+      <a class="button primary" href="/">进入系统</a>
     </div>
   </nav>
 
   <main class="wrap">
-    <section class="hero">
-      <img src="assets/images/hero-bg%20(2).png" alt="职途AI 首页视觉" />
-      <div class="hero-copy">
-        <p class="eyebrow">AI Agent Career Studio</p>
-        <h1>基于 AI 智能体的求职辅助 Web 系统</h1>
-        <p>围绕真实求职流程构建：简历管理、JD 匹配、模拟面试、语音表达复盘、投递追踪和 AI 教练，让项目既能作为实训系统测试，也能写进简历作为完整项目经历。</p>
-        <div class="actions">
+    <section class="hero liquid fade-up">
+      <video src="assets/videos/career-hero-loop.mp4" autoplay muted loop playsinline preload="auto"></video>
+      <div>
+        <p class="eyebrow">AI Agent × Resume × Interview × Offer Pipeline</p>
+        <h1>职途 AI <em>Career OS</em></h1>
+        <p class="hero-text">基于 AI 智能体的求职辅助 Web 系统。围绕真实求职流程构建从简历整理、岗位匹配、模拟面试、语音复盘到投递跟进的一体化工作台。</p>
+        <div class="hero-actions">
           <a class="button primary" href="/">打开主系统</a>
-          <a class="button" href="https://open.bigmodel.cn/apikey/platform" target="_blank" rel="noreferrer">获取 GLM API Key</a>
+          <a class="button dark" href="https://open.bigmodel.cn/apikey/platform" target="_blank" rel="noreferrer">获取 GLM API Key</a>
+          <a class="button dark" href="#tech">查看技术架构</a>
+        </div>
+        <div class="hero-badges">
+          <span class="pill">Flask + SQLite</span>
+          <span class="pill">GLM / DeepSeek / Kimi</span>
+          <span class="pill">语音录制与分析</span>
+          <span class="pill">Anime / Glass 双主题</span>
         </div>
       </div>
     </section>
 
-    <section class="metric-row">
-      <article class="metric"><b>5</b><span>核心业务模块</span></article>
-      <article class="metric"><b>3</b><span>AI 模型供应商</span></article>
-      <article class="metric"><b>2</b><span>视觉主题</span></article>
-      <article class="metric"><b>1</b><span>求职闭环</span></article>
+    <section class="section grid four">
+      <article class="card liquid metric fade-up"><b>5</b><span>核心业务模块</span></article>
+      <article class="card liquid metric fade-up"><b>3</b><span>模型供应商接入</span></article>
+      <article class="card liquid metric fade-up"><b>2</b><span>可切换视觉主题</span></article>
+      <article class="card liquid metric fade-up"><b>1</b><span>完整求职闭环</span></article>
     </section>
 
     <section id="features" class="section">
-      <p class="eyebrow">Product Modules</p>
-      <h2>功能设计</h2>
-      <div class="grid three">
-        <article class="card feature-card">
+      <div class="section-head fade-up">
+        <div>
+          <p class="eyebrow">Product Modules</p>
+          <h2>功能模块设计</h2>
+        </div>
+        <p>每个模块都围绕真实使用场景设计，不只是表单和按钮，而是让用户能够完成一件具体求职任务，并把结果沉淀到后续流程。</p>
+      </div>
+      <div class="grid four">
+        <article class="card liquid feature-card fade-up">
           <h3>项目总览</h3>
-          <p>展示简历、面试、JD 匹配和投递数据；根据真实记录计算求职准备度，自动给出短板和下一步行动。</p>
+          <p>统计简历、面试、JD 匹配、投递数据；生成职业脉冲评分、当前短板和下一步行动。</p>
         </article>
-        <article class="card feature-card">
-          <h3>简历实验室</h3>
-          <p>支持录入、上传、编辑、原件替换、PDF/Word 导出转换、客观分析、JD 优化和技能图谱。</p>
+        <article class="card liquid feature-card fade-up">
+          <h3>简历录入与编辑</h3>
+          <p>支持文本录入、Word / PDF 上传、原文件保存、在线编辑、替换文件和打开原始文件。</p>
         </article>
-        <article class="card feature-card">
-          <h3>面试训练场</h3>
-          <p>完整模拟真实面试流程，包含专业知识面试、题库练习、语音输入、真实录音回放和 AI 表达分析。</p>
+        <article class="card liquid feature-card fade-up">
+          <h3>简历分析与修改</h3>
+          <p>从结构、项目证据、技能覆盖、量化表达、风险点等维度做客观分析，并生成修改建议。</p>
         </article>
-        <article class="card feature-card">
-          <h3>投递看板</h3>
-          <p>记录公司、岗位、阶段、城市和备注，支持阶段推进、跟进话术生成、风险提示和薪资评估。</p>
+        <article class="card liquid feature-card fade-up">
+          <h3>JD 定制优化</h3>
+          <p>粘贴真实 JD 后计算关键词命中、匹配度、能力差距和项目改写方向，支持跳转 Boss 直聘获取 JD。</p>
         </article>
-        <article class="card feature-card">
-          <h3>AI 求职教练</h3>
-          <p>读取当前简历、投递、面试训练上下文，生成可执行建议和求职作战报告。</p>
+        <article class="card liquid feature-card fade-up">
+          <h3>技能图谱</h3>
+          <p>根据简历提取技能关键词，生成雷达图、短板清单和补强路线。</p>
         </article>
-        <article class="card feature-card">
-          <h3>多模型网关</h3>
-          <p>支持 GLM、DeepSeek、Kimi / Moonshot，可配置 API Key、自定义模型 ID，并提供本地规则兜底。</p>
+        <article class="card liquid feature-card fade-up">
+          <h3>模拟真实面试</h3>
+          <p>按自我介绍、项目深挖、技术追问、行为面、反问总结推进，形成训练记录。</p>
+        </article>
+        <article class="card liquid feature-card fade-up">
+          <h3>语音回答复盘</h3>
+          <p>支持语音转文字、真实录音、回放、语速停顿分析和表达建议。</p>
+        </article>
+        <article class="card liquid feature-card fade-up">
+          <h3>投递看板与教练</h3>
+          <p>管理公司岗位阶段，生成跟进建议、薪资评估、复盘提醒和阶段性作战报告。</p>
         </article>
       </div>
     </section>
 
-    <section id="tech" class="section grid two">
-      <article class="card">
-        <p class="eyebrow">Tech Stack</p>
-        <h2>技术栈</h2>
-        <div class="tech-stack">
-          <span>Python</span><span>Flask</span><span>SQLite</span><span>Requests</span>
-          <span>python-docx</span><span>reportlab</span><span>pdf2docx</span><span>PyPDF2</span>
-          <span>HTML</span><span>CSS</span><span>JavaScript</span><span>Chart.js</span>
-          <span>Lucide Icons</span><span>Web Speech API</span><span>MediaRecorder API</span><span>Web Audio API</span>
+    <section id="themes" class="section">
+      <div class="section-head fade-up">
+        <div>
+          <p class="eyebrow">Visual System</p>
+          <h2>双主题视觉系统</h2>
         </div>
-        <p>后端负责业务流程、文件处理、多模型调用和数据持久化；前端负责模块化交互、主题系统、录音与语音输入、图表和结果复盘。</p>
-      </article>
-      <article class="card shot">
-        <img src="assets/images/dashboard%20(2).png" alt="能力矩阵视觉" />
-      </article>
+        <p>系统保留两套完整风格：Anime 更年轻、更轻潮流；Glass 更正式、更科技。主题切换不只是换颜色，而是同步影响 Logo、背景、Hero、卡片、视觉素材和状态组件。</p>
+      </div>
+      <div class="grid two">
+        <article class="card liquid theme-card fade-up">
+          <img src="assets/images/hero-bg%20(2).png" alt="Anime 主题展示" />
+          <div class="theme-copy">
+            <p class="eyebrow">Anime Theme</p>
+            <h3>二次元轻潮流</h3>
+            <p>柔和粉、薄荷绿、浅紫、插画角色和漂浮 UI 元素，适合年轻用户进入求职训练状态。</p>
+          </div>
+        </article>
+        <article class="card liquid theme-card fade-up">
+          <video src="assets/videos/career-motion-panel.mp4" autoplay muted loop playsinline preload="auto"></video>
+          <div class="theme-copy">
+            <p class="eyebrow">Glass Theme</p>
+            <h3>液态玻璃科技感</h3>
+            <p>暗色底、半透明面板、发光边缘和视频动效，更适合项目展示、答辩和正式演示。</p>
+          </div>
+        </article>
+      </div>
     </section>
 
     <section id="flow" class="section">
-      <p class="eyebrow">Career Loop</p>
-      <h2>业务闭环</h2>
-      <div class="flow">
-        <div><b>1. 建立简历资产</b><span>上传或录入简历，保存原件和解析文本。</span></div>
-        <div><b>2. 复制真实 JD</b><span>从招聘平台复制岗位描述，提取关键词和风险点。</span></div>
-        <div><b>3. 定制简历</b><span>生成匹配分、差距清单、项目改写和面试讲述点。</span></div>
-        <div><b>4. 模拟面试</b><span>按真实流程训练，并记录回答、评分和语音复盘。</span></div>
-        <div><b>5. 投递跟进</b><span>维护机会池，推进阶段，生成跟进话术和求职报告。</span></div>
+      <div class="section-head fade-up">
+        <div>
+          <p class="eyebrow">Career Loop</p>
+          <h2>业务闭环</h2>
+        </div>
+        <p>系统把分散的求职动作串成可追踪流程，每一步的数据都会进入后续智能分析。</p>
+      </div>
+      <div class="flow fade-up">
+        <div class="flow-step"><b>1. 建立简历资产</b><span>上传或录入简历，保留原始文件和解析文本。</span></div>
+        <div class="flow-step"><b>2. 获取真实 JD</b><span>从招聘平台复制岗位描述，提取技能和职责关键词。</span></div>
+        <div class="flow-step"><b>3. 定制简历</b><span>生成匹配分、缺口清单、改写建议和面试讲述点。</span></div>
+        <div class="flow-step"><b>4. 面试训练</b><span>按真实流程训练，保存回答、录音和反馈。</span></div>
+        <div class="flow-step"><b>5. 投递跟进</b><span>维护岗位阶段，生成跟进话术和风险提醒。</span></div>
+        <div class="flow-step"><b>6. 复盘提升</b><span>职业脉冲汇总全局数据，给出下一步行动。</span></div>
       </div>
     </section>
 
-    <section class="section grid two">
-      <article class="card shot">
-        <img src="assets/images/interview-scene%20(2).png" alt="模拟面试视觉" />
+    <section id="tech" class="section grid stack-grid">
+      <article class="card liquid fade-up">
+        <p class="eyebrow">Tech Stack</p>
+        <h2>技术栈完整说明</h2>
+        <p>项目采用轻量可运行架构，避免复杂部署门槛，同时保留文件处理、模型调用、语音能力、图表渲染和数据持久化。</p>
+        <div class="tech-tags">
+          <span>Python 3</span><span>Flask</span><span>SQLite</span><span>Requests</span>
+          <span>python-docx</span><span>reportlab</span><span>pdf2docx</span><span>PyPDF2</span>
+          <span>HTML5</span><span>CSS Variables</span><span>JavaScript</span><span>Chart.js</span>
+          <span>Lucide Icons</span><span>Web Speech API</span><span>MediaRecorder API</span><span>Web Audio API</span>
+          <span>HTML5 Video</span><span>unittest</span><span>Playwright</span><span>GitHub</span>
+        </div>
       </article>
-      <article class="card">
-        <p class="eyebrow">Agent Ability</p>
-        <h2>智能体能力设计</h2>
+      <article class="card liquid fade-up">
+        <h3>分层架构</h3>
         <ul>
-          <li>通过多模型网关统一 GLM、DeepSeek、Kimi 的调用参数和返回结构。</li>
-          <li>每个 AI 功能都有本地兜底逻辑，避免 API 不可用时系统完全失效。</li>
-          <li>面试训练保留 stage 状态，能按流程推进问题，而不是普通聊天。</li>
-          <li>语音分析结合文本和声音指标，给出语速、停顿、爆音、结构感建议。</li>
-          <li>训练记录和投递记录沉淀为 AI 教练上下文，支持持续复盘。</li>
+          <li><b>表现层：</b>原生 HTML / CSS / JavaScript 实现工作台、双主题、视频 Hero、图表、录音交互和模块跳转。</li>
+          <li><b>业务层：</b>Flask 组织简历、JD、面试、投递、训练记录和 AI 教练等流程。</li>
+          <li><b>数据层：</b>SQLite 保存结构化业务数据，上传文件和导出文件独立存放。</li>
+          <li><b>智能层：</b>统一 AI 网关接入 GLM、DeepSeek、Kimi，并提供本地规则兜底。</li>
+          <li><b>质量层：</b>通过 py_compile、node --check、unittest、截图验证和 Git 忽略规范保障交付。</li>
         </ul>
       </article>
     </section>
 
-    <section id="resume" class="section">
-      <p class="eyebrow">Resume Description</p>
-      <h2>可写进简历的项目描述</h2>
-      <article class="card resume-block">
-        <p><b>项目名称：</b>基于 AI 智能体的求职辅助 Web 系统</p>
-        <p>设计并实现面向求职场景的 AI Web 系统，覆盖简历管理、JD 匹配、模拟面试、语音表达分析、投递追踪和 AI 求职教练等模块。封装多模型 AI 网关，支持 GLM、DeepSeek、Kimi / Moonshot 切换，并设计本地规则兜底，保证 API 不可用时核心流程仍可演示和测试。实现 JD 驱动的简历优化能力，输出关键词命中、能力差距、匹配分、项目经历改写和面试讲述要点。使用 Flask + SQLite 提供后端接口，原生 JavaScript + Chart.js 构建前端交互，并补充核心接口测试，形成可演示、可测试、可迭代的实训项目。</p>
+    <section class="section">
+      <article class="wide-video liquid fade-up">
+        <video src="assets/videos/career-motion-panel.mp4" autoplay muted loop playsinline preload="auto"></video>
+        <div class="overlay">
+          <p class="eyebrow">Motion Showcase</p>
+          <h2>动效不是装饰，而是产品气质</h2>
+          <p>展示页使用液态玻璃面板、视频背景、滚动渐入和半透明信息层，让“AI 求职工作台”的科技感和年轻化视觉统一起来。</p>
+        </div>
+      </article>
+    </section>
+
+    <section id="agent" class="section grid two">
+      <article class="card liquid fade-up">
+        <p class="eyebrow">Agent Ability</p>
+        <h2>后端智能体能力</h2>
+        <ul>
+          <li>统一封装模型供应商、模型 ID、API Key、请求参数和返回结构。</li>
+          <li>按任务类型构造提示词：简历分析、JD 优化、面试追问、语音表达、投递复盘。</li>
+          <li>AI 失败时自动回落本地规则，不影响核心流程演示。</li>
+          <li>面试会话保存阶段状态，支持按流程追问，而不是普通闲聊。</li>
+          <li>针对“不知道、跳过、下一题”等回答做幻觉控制，给出合理反馈。</li>
+        </ul>
+      </article>
+      <article class="card liquid fade-up">
+        <p class="eyebrow">Model Gateway</p>
+        <h2>模型配置</h2>
+        <table class="api-table">
+          <thead>
+            <tr><th>厂商</th><th>模型</th><th>用途</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>智谱 GLM</td><td>glm-4.7-flash</td><td>默认免费模型，适合课堂演示和通用分析。</td></tr>
+            <tr><td>DeepSeek</td><td>deepseek-v4-flash / deepseek-v4-pro</td><td>适合 JD 分析、推理型简历优化和结构化反馈。</td></tr>
+            <tr><td>Kimi / Moonshot</td><td>kimi-2.6 / moonshot 系列</td><td>适合长文本简历、长 JD 和多轮面试上下文。</td></tr>
+            <tr><td>自定义模型</td><td>用户输入模型 ID</td><td>适配后续新增模型或 OpenAI 兼容接口。</td></tr>
+          </tbody>
+        </table>
+      </article>
+    </section>
+
+    <section id="delivery" class="section grid three">
+      <article class="card liquid fade-up">
+        <h3>仓库规范</h3>
+        <p>包含 README、API 配置说明、测试步骤说明、产品体检文档、MIT License、`.env.example` 和 `.gitignore`。</p>
+      </article>
+      <article class="card liquid fade-up">
+        <h3>测试验证</h3>
+        <p>使用 `python -m py_compile`、`node --check` 和 `python tests/test_core_features.py` 验证核心代码。</p>
+      </article>
+      <article class="card liquid fade-up">
+        <h3>隐私与提交</h3>
+        <p>数据库、上传目录、导出目录、截图输出、个人简历文件和 `.env` 均不提交到 GitHub。</p>
       </article>
     </section>
   </main>
 
-  <footer class="wrap">职途AI / AI Agent Career Studio / Flask + SQLite + Vanilla JavaScript</footer>
+  <footer class="wrap">
+    职途 AI / AI Agent Career Studio / Flask + SQLite + Vanilla JavaScript
+  </footer>
+
+  <script>
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) entry.target.classList.add("visible");
+      });
+    }, { threshold: 0.12 });
+    document.querySelectorAll(".fade-up").forEach((el, index) => {
+      el.style.transitionDelay = `${Math.min(index * 45, 240)}ms`;
+      observer.observe(el);
+    });
+  </script>
 </body>
 </html>
