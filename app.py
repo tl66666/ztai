@@ -180,6 +180,37 @@ def safe_filename(name: str, suffix: str = "") -> str:
     return f"{stem}{suffix}"
 
 
+def audio_mime(filename: str) -> str:
+    ext = os.path.splitext(filename.lower())[1]
+    return {
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".webm": "audio/webm",
+        ".ogg": "audio/ogg",
+        ".m4a": "audio/mp4",
+    }.get(ext, "application/octet-stream")
+
+
+def convert_audio_file(source_path: str, target_format: str) -> tuple[str, str]:
+    target_format = target_format.lower()
+    if target_format not in {"mp3", "wav"}:
+        raise ValueError("Unsupported audio format")
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("当前环境未安装 ffmpeg，无法转码为 MP3/WAV")
+    stem = os.path.splitext(os.path.basename(source_path))[0]
+    target_name = safe_filename(stem, f".{target_format}")
+    target_path = os.path.join(EXPORT_FOLDER, target_name)
+    command = [ffmpeg, "-y", "-i", source_path, "-vn"]
+    if target_format == "mp3":
+        command += ["-codec:a", "libmp3lame", "-b:a", "192k"]
+    else:
+        command += ["-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2"]
+    command.append(target_path)
+    subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return target_path, target_name
+
+
 def register_chinese_pdf_font() -> str:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
@@ -504,6 +535,28 @@ def static_files(path):
 @app.route("/api/uploads/<path:filename>")
 def uploaded_file(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
+
+
+@app.route("/api/uploads/<path:filename>/download/<format_type>")
+def download_audio_file(filename, format_type):
+    source_path = os.path.join(UPLOAD_FOLDER, filename)
+    if not os.path.exists(source_path):
+        return jsonify({"success": False, "message": "音频文件不存在或已被删除"}), 404
+    format_type = (format_type or "original").lower()
+    if format_type == "original":
+        return send_file(
+            source_path,
+            as_attachment=True,
+            download_name=os.path.basename(filename),
+            mimetype=audio_mime(filename),
+        )
+    try:
+        target_path, target_name = convert_audio_file(source_path, format_type)
+        return send_file(target_path, as_attachment=True, download_name=target_name, mimetype=audio_mime(target_name))
+    except RuntimeError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 501
+    except Exception as exc:
+        return jsonify({"success": False, "message": f"音频转码失败：{exc}"}), 500
 
 
 @app.route("/api/config/providers")

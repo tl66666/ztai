@@ -9,7 +9,7 @@ const state = {
   recognition: null,
   recognizing: false,
   currentPracticeCategory: "general",
-  theme: localStorage.getItem("jobhunter_theme") || "anime",
+  theme: localStorage.getItem("jobhunter_theme") || "glass",
   editingResumeId: null,
   editingAppId: null,
   mediaRecorder: null,
@@ -43,6 +43,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupSpeechRecognition();
   await loadProviders();
   await Promise.all([loadResumes(), loadDashboard(), loadApplications(), loadQuestions(), loadTrainingRecords()]);
+  applyInitialRouteFromQuery();
   lucide.createIcons();
 });
 
@@ -66,6 +67,23 @@ function showPage(page) {
   $("pageTitle").textContent = titles[page] || "JobHunter AI";
   activateCurrentPageDefaultModule(page);
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function applyInitialRouteFromQuery() {
+  const params = new URLSearchParams(window.location.search);
+  const page = params.get("page");
+  const moduleName = params.get("module");
+  const record = params.get("record");
+  if (page) showPage(page);
+  if (page && moduleName) {
+    document.querySelector(`[data-section-filter="${page}:${moduleName}"]`)?.click();
+  }
+  if (record === "audio") {
+    setTimeout(() => {
+      const audioCard = [...document.querySelectorAll(".record-card")].find((card) => card.textContent.includes("语音") || card.textContent.includes("录音") || card.textContent.includes("表达"));
+      audioCard?.querySelector(".record-actions button")?.click();
+    }, 500);
+  }
 }
 
 function bindActions() {
@@ -442,6 +460,79 @@ function downloadBlob(blob, filename) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function audioExtensionFromMime(mime = "") {
+  if (mime.includes("mp4") || mime.includes("m4a")) return "m4a";
+  if (mime.includes("ogg")) return "ogg";
+  if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
+  if (mime.includes("wav")) return "wav";
+  return "webm";
+}
+
+function audioDownloadBase(filename = "interview-answer") {
+  return filename.replace(/\.[^.]+$/, "") || "interview-answer";
+}
+
+async function blobToWav(blob) {
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) throw new Error("当前浏览器不支持音频解码");
+  const ctx = new AudioContext();
+  const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
+  const channels = Math.min(2, buffer.numberOfChannels);
+  const sampleRate = buffer.sampleRate;
+  const samples = buffer.length;
+  const bytesPerSample = 2;
+  const blockAlign = channels * bytesPerSample;
+  const dataSize = samples * blockAlign;
+  const wav = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(wav);
+  const writeString = (offset, text) => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, dataSize, true);
+  const channelData = Array.from({ length: channels }, (_, index) => buffer.getChannelData(index));
+  let offset = 44;
+  for (let i = 0; i < samples; i += 1) {
+    for (let channel = 0; channel < channels; channel += 1) {
+      const sample = Math.max(-1, Math.min(1, channelData[channel][i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += 2;
+    }
+  }
+  ctx.close?.();
+  return new Blob([wav], { type: "audio/wav" });
+}
+
+async function downloadSavedAudio(filename, format = "wav") {
+  if (!filename) return toast("没有可下载的音频文件");
+  if (format === "wav") {
+    try {
+      const response = await fetch(`${API}/uploads/${encodeURIComponent(filename)}`);
+      if (!response.ok) throw new Error("音频读取失败");
+      const wavBlob = await blobToWav(await response.blob());
+      downloadBlob(wavBlob, `${audioDownloadBase(filename)}.wav`);
+      toast("WAV 音频已开始下载");
+      return;
+    } catch (error) {
+      toast(`WAV 导出失败：${error.message}`);
+      return;
+    }
+  }
+  const response = await fetch(`${API}/uploads/${encodeURIComponent(filename)}/download/${format}`);
+  await downloadResponse(response, `${audioDownloadBase(filename)}.${format === "original" ? audioExtensionFromMime("") : format}`);
 }
 
 async function downloadResponse(response, fallbackName) {
@@ -944,7 +1035,7 @@ async function analyzeRecordedAudio(target = "answer") {
   const transcript = target === "room" ? $("roomAnswer").value.trim() : $("answerInput").value.trim();
   if (!transcript) return toast("请补充转写文本，AI 需要结合内容和声音一起分析");
   const form = new FormData();
-  form.append("audio", state.audioBlob, "interview-answer.webm");
+  form.append("audio", state.audioBlob, `interview-answer.${audioExtensionFromMime(state.audioBlob.type)}`);
   form.append("user_id", USER_ID);
   form.append("transcript", transcript);
   form.append("duration_seconds", String(state.audioMetrics?.duration_seconds || 0));
@@ -1068,7 +1159,15 @@ function renderRecordDetail(type, item) {
       <div><b>时间</b><br>${formatDate(item.created_at)}</div>
       <div><b>转写文本</b><br>${escapeHtml(item.transcript || "暂无转写文本")}</div>
       <div><b>声音指标</b><br>时长 ${metrics.duration_seconds || 0}s，平均音量 ${metrics.average_volume || 0}，停顿占比 ${Math.round((metrics.silence_ratio || 0) * 100)}%，爆音占比 ${Math.round((metrics.clipping_ratio || 0) * 100)}%</div>
-      ${item.audio_file ? `<audio controls src="${API}/uploads/${encodeURIComponent(item.audio_file)}"></audio>` : ""}
+      ${item.audio_file ? `
+        <audio controls src="${API}/uploads/${encodeURIComponent(item.audio_file)}"></audio>
+        <div class="audio-downloads">
+          <button class="ghost small" onclick="downloadSavedAudio('${escapeAttr(item.audio_file)}', 'wav')">下载 WAV</button>
+          <button class="ghost small" onclick="downloadSavedAudio('${escapeAttr(item.audio_file)}', 'mp3')">下载 MP3</button>
+          <button class="ghost small" onclick="downloadSavedAudio('${escapeAttr(item.audio_file)}', 'original')">下载原始音频</button>
+        </div>
+        <small>WAV 可由浏览器本地转换；MP3 由后端 ffmpeg 转码生成。</small>
+      ` : ""}
       <div><b>AI 建议</b><br>${escapeHtml(feedback.summary || "")}</div>
       ${(feedback.tips || []).map((tip) => `<div>• ${escapeHtml(tip)}</div>`).join("")}
     `;
