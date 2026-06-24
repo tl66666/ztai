@@ -39,6 +39,12 @@
       </div>
       <div class="top-actions">
         <div class="theme-block">
+          <span>求职方向</span>
+          <select id="careerProfileSelect" class="input compact">
+            <option value="tech">计算机 / 软件 / AI</option>
+          </select>
+        </div>
+        <div class="theme-block">
           <span>主题</span>
           <div class="theme-switch" role="group" aria-label="主题切换">
           <button class="theme-option" data-theme-choice="anime">Anime</button>
@@ -313,10 +319,16 @@
           <div class="workflow-chips"><span>选择方向</span><span>生成题组</span><span>按题作答</span><span>获得追问和参考答案</span></div>
           <div class="form-grid four">
             <select id="professionalCategory" class="input">
+              <option value="career">跟随求职方向</option>
               <option value="test">软件测试</option>
               <option value="python">Python / Flask</option>
               <option value="frontend">前端基础</option>
               <option value="ai">AI Agent</option>
+              <option value="ops">运营 / 新媒体</option>
+              <option value="marketing">市场 / 销售</option>
+              <option value="finance">财务 / 会计</option>
+              <option value="education">教育 / 师范</option>
+              <option value="hr">行政 / 人事</option>
             </select>
             <select id="professionalLevel" class="input">
               <option value="campus">校招/实习</option>
@@ -348,10 +360,16 @@
           <div class="practice-toolbar">
             <select id="questionCategory" class="input compact">
               <option value="general">通用面试</option>
+              <option value="career">跟随求职方向</option>
               <option value="test">软件测试</option>
               <option value="python">Python / Flask</option>
               <option value="frontend">前端基础</option>
               <option value="ai">AI Agent</option>
+              <option value="ops">运营 / 新媒体</option>
+              <option value="marketing">市场 / 销售</option>
+              <option value="finance">财务 / 会计</option>
+              <option value="education">教育 / 师范</option>
+              <option value="hr">行政 / 人事</option>
             </select>
             <button class="ghost" id="loadQuestionsBtn"><i data-lucide="book-open"></i>加载题库</button>
           </div>

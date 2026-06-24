@@ -34,6 +34,82 @@ os.makedirs(EXPORT_FOLDER, exist_ok=True)
 INTERVIEW_SESSIONS: dict[str, dict] = {}
 
 
+CAREER_PROFILES = {
+    "tech": {
+        "label": "计算机 / 软件 / AI",
+        "interviewer": "技术面试官",
+        "keywords": ["软件", "测试", "Python", "Java", "前端", "后端", "算法", "AI", "数据", "接口", "自动化"],
+        "abilities": {
+            "编程与工具": ["Python", "Java", "JavaScript", "SQL", "Git", "Linux"],
+            "工程实践": ["接口", "测试", "自动化", "部署", "数据库", "性能"],
+            "项目表达": ["项目", "需求", "方案", "结果", "复盘", "文档"],
+            "AI 应用": ["AI", "大模型", "Prompt", "智能体", "模型", "数据"],
+            "协作推进": ["沟通", "协作", "推进", "排查", "总结", "交付"],
+        },
+    },
+    "ops": {
+        "label": "运营 / 新媒体 / 内容",
+        "interviewer": "运营主管",
+        "keywords": ["运营", "新媒体", "内容", "用户", "社群", "活动", "转化", "增长", "公众号", "短视频"],
+        "abilities": {
+            "内容策划": ["选题", "文案", "脚本", "排版", "热点", "账号"],
+            "用户运营": ["用户", "社群", "留存", "转化", "私域", "增长"],
+            "活动执行": ["活动", "预算", "流程", "复盘", "报名", "转化"],
+            "数据复盘": ["数据", "PV", "UV", "点击", "转化率", "复盘"],
+            "跨部门协作": ["沟通", "协调", "推进", "资源", "反馈", "落地"],
+        },
+    },
+    "marketing": {
+        "label": "市场 / 销售 / 商务",
+        "interviewer": "市场负责人",
+        "keywords": ["市场", "销售", "商务", "客户", "渠道", "品牌", "竞品", "线索", "转化", "谈判"],
+        "abilities": {
+            "市场洞察": ["市场", "竞品", "用户画像", "行业", "调研", "定位"],
+            "客户沟通": ["客户", "需求", "异议", "跟进", "谈判", "成交"],
+            "渠道拓展": ["渠道", "BD", "合作", "资源", "线索", "转化"],
+            "方案表达": ["方案", "PPT", "报价", "价值", "案例", "演示"],
+            "结果复盘": ["业绩", "转化率", "复盘", "目标", "增长", "漏斗"],
+        },
+    },
+    "finance": {
+        "label": "财务 / 会计 / 审计",
+        "interviewer": "财务经理",
+        "keywords": ["财务", "会计", "审计", "税务", "报表", "凭证", "预算", "成本", "Excel", "金蝶", "用友"],
+        "abilities": {
+            "会计基础": ["凭证", "分录", "科目", "账务", "结账", "对账"],
+            "报表分析": ["资产负债表", "利润表", "现金流", "报表", "指标", "分析"],
+            "税务合规": ["增值税", "所得税", "发票", "申报", "税务", "合规"],
+            "工具效率": ["Excel", "透视表", "函数", "金蝶", "用友", "系统"],
+            "风险意识": ["审计", "内控", "风险", "异常", "流程", "证据"],
+        },
+    },
+    "education": {
+        "label": "教育 / 师范 / 教培",
+        "interviewer": "教研主管",
+        "keywords": ["教育", "教师", "师范", "课程", "教案", "课堂", "学生", "家长", "教研", "班级"],
+        "abilities": {
+            "教学设计": ["课程", "教案", "目标", "重难点", "活动", "评价"],
+            "课堂表达": ["讲解", "互动", "板书", "提问", "反馈", "节奏"],
+            "学生管理": ["学生", "班级", "纪律", "差异化", "激励", "沟通"],
+            "教研反思": ["教研", "听评课", "反思", "改进", "案例", "复盘"],
+            "家校沟通": ["家长", "沟通", "反馈", "记录", "协同", "问题"],
+        },
+    },
+    "hr": {
+        "label": "行政 / 人事 / 通用职能",
+        "interviewer": "职能部门主管",
+        "keywords": ["行政", "人事", "HR", "招聘", "员工", "流程", "制度", "档案", "培训", "组织"],
+        "abilities": {
+            "流程执行": ["流程", "制度", "审批", "归档", "规范", "执行"],
+            "招聘支持": ["招聘", "筛选", "面试", "邀约", "入职", "候选人"],
+            "沟通协调": ["沟通", "协调", "会议", "供应商", "跨部门", "反馈"],
+            "数据记录": ["表格", "台账", "统计", "报表", "记录", "分析"],
+            "服务意识": ["服务", "响应", "细致", "耐心", "问题", "跟进"],
+        },
+    },
+}
+
+
 class ClosingConnection(sqlite3.Connection):
     def __exit__(self, exc_type, exc_value, traceback):
         result = super().__exit__(exc_type, exc_value, traceback)
@@ -522,6 +598,134 @@ def question_bank() -> dict:
     }
 
 
+CAREER_QUESTION_BANK = {
+    "ops": [
+        {"question": "如果让你运营一个校园求职账号，你会如何从 0 到 1 做内容规划？", "answer": "先明确目标用户和账号定位，再做栏目规划、选题池、发布节奏、数据指标和复盘机制，重点说明如何用收藏率、完播率、互动率判断内容质量。"},
+        {"question": "一次活动报名人数不达预期，你会怎么排查问题？", "answer": "从目标人群、传播渠道、利益点、报名路径、时间节点和海报文案逐项排查，并给出补救动作，如二次推送、社群裂变、福利调整和报名链路简化。"},
+        {"question": "怎样判断一篇推文或短视频是否值得继续迭代？", "answer": "看曝光、点击、停留、互动、转化和评论反馈，结合选题价值与用户画像判断，不只看播放量。"},
+        {"question": "你如何做社群活跃和留存？", "answer": "通过入群欢迎、规则说明、固定栏目、话题任务、用户分层、及时反馈和活动承接提升留存。"},
+        {"question": "运营岗位最需要的能力是什么？", "answer": "用户理解、内容表达、数据复盘、执行推进和跨部门沟通，最好结合一次真实活动或账号运营经历说明。"},
+    ],
+    "marketing": [
+        {"question": "如果给你一个新产品，你会怎么做市场调研？", "answer": "从目标用户、使用场景、竞品、价格、渠道和痛点访谈入手，最后输出定位、卖点和推广建议。"},
+        {"question": "客户觉得价格高，你会怎么回应？", "answer": "先确认客户顾虑，再用价值、效果、成本节省、案例和可替代方案回应，避免直接降价。"},
+        {"question": "如何判断一个渠道是否值得继续投入？", "answer": "看获客成本、线索质量、转化率、成交周期和复购潜力，结合阶段目标决定保留、优化或停止。"},
+        {"question": "你如何理解销售漏斗？", "answer": "从线索获取、需求确认、方案沟通、异议处理、成交跟进到复盘，每层都有转化率和流失原因。"},
+        {"question": "市场岗位简历里最应该突出什么？", "answer": "突出用户洞察、活动/渠道动作、数据结果、协作角色和可复用方法，而不是只写参与宣传。"},
+    ],
+    "finance": [
+        {"question": "会计凭证审核时你会重点看什么？", "answer": "看原始单据真实性、科目使用、金额税率、审批流程、附件完整性和业务合理性。"},
+        {"question": "如何解释利润表和现金流量表的差异？", "answer": "利润表按权责发生制反映经营成果，现金流量表反映现金流入流出，盈利不等于现金充足。"},
+        {"question": "Excel 在财务工作中常用哪些能力？", "answer": "函数、数据透视表、条件格式、查重、分组汇总和基础可视化，用来提升对账、统计和报表效率。"},
+        {"question": "如果发现账实不符，你会如何处理？", "answer": "先核对原始单据、系统记录和盘点数据，定位时间差、录入错误、流程遗漏或异常风险，再形成调整说明。"},
+        {"question": "财务岗位为什么强调细致和合规？", "answer": "财务数据影响报表、税务和经营决策，细致能减少错误，合规能降低审计和税务风险。"},
+    ],
+    "education": [
+        {"question": "请设计一节 40 分钟课程的基本流程。", "answer": "包含导入、目标说明、新知讲解、课堂互动、练习反馈、总结和作业安排，并说明如何检查学生是否掌握。"},
+        {"question": "学生课堂注意力不集中，你会怎么处理？", "answer": "先观察原因，再通过提问、任务分解、互动活动、座位调整和课后沟通解决，不简单贴标签。"},
+        {"question": "你如何做差异化教学？", "answer": "根据学生基础分层设计目标、材料和练习，给不同学生不同支架，并用反馈调整后续教学。"},
+        {"question": "家长质疑教学效果时怎么沟通？", "answer": "用学习记录、课堂表现、阶段目标和改进计划沟通，保持共情和证据意识。"},
+        {"question": "教师岗位面试自我介绍应突出什么？", "answer": "突出学科基础、教学实践、课堂组织、学生沟通和教育理念，最好有一次教学案例。"},
+    ],
+    "hr": [
+        {"question": "如果让你支持一场校园招聘，你会怎么推进？", "answer": "拆成需求确认、岗位发布、简历筛选、面试邀约、现场组织、结果跟进和数据复盘。"},
+        {"question": "候选人临时爽约，你会怎么处理？", "answer": "先确认原因和是否改期，再同步面试官、更新记录，并优化提醒机制降低再次发生。"},
+        {"question": "行政工作中如何避免遗漏？", "answer": "建立清单、台账、时间节点提醒、责任人确认和交付复盘，重要事项留痕。"},
+        {"question": "如何理解 HR 的服务意识？", "answer": "既要响应员工和业务部门需求，也要守住制度边界，做到及时、准确、可追踪。"},
+        {"question": "通用职能岗位简历怎么写更有说服力？", "answer": "用流程、数据、协作对象和结果描述经历，比如处理多少份材料、提升多少效率、减少多少错误。"},
+    ],
+}
+
+
+def normalize_career_profile(value: str | None) -> str:
+    key = (value or "").strip().lower()
+    alias = {
+        "cs": "tech",
+        "it": "tech",
+        "software": "tech",
+        "operation": "ops",
+        "content": "ops",
+        "sales": "marketing",
+        "market": "marketing",
+        "teacher": "education",
+        "admin": "hr",
+        "general": "hr",
+    }
+    key = alias.get(key, key)
+    return key if key in CAREER_PROFILES else "tech"
+
+
+def infer_career_profile(text: str = "", job_title: str = "") -> str:
+    haystack = f"{job_title}\n{text}".lower()
+    scores = {}
+    for key, profile in CAREER_PROFILES.items():
+        score = 0
+        for word in profile["keywords"]:
+            if word.lower() in haystack:
+                score += 1
+        scores[key] = score
+    best_key, best_score = max(scores.items(), key=lambda item: item[1])
+    return best_key if best_score > 0 else "tech"
+
+
+def select_career_profile(data: dict | None = None, text: str = "", job_title: str = "") -> str:
+    data = data or {}
+    profile = data.get("career_profile") or data.get("profile")
+    if profile:
+        return normalize_career_profile(profile)
+    return infer_career_profile(text, job_title or data.get("job_title", ""))
+
+
+def career_profile_options() -> list[dict]:
+    return [
+        {
+            "id": key,
+            "label": profile["label"],
+            "interviewer": profile["interviewer"],
+            "keywords": profile["keywords"],
+        }
+        for key, profile in CAREER_PROFILES.items()
+    ]
+
+
+def build_career_radar(text: str, profile_key: str) -> list[dict]:
+    profile = CAREER_PROFILES[normalize_career_profile(profile_key)]
+    radar = []
+    lower_text = (text or "").lower()
+    for name, words in profile["abilities"].items():
+        matched = [word for word in words if word.lower() in lower_text]
+        missing = [word for word in words if word not in matched][:4]
+        score = min(10, 3 + len(matched) * 2)
+        if score <= 5:
+            suggestion = f"建议补充{name}证据：{', '.join(missing) or '真实任务、工具、结果'}，写进经历而不是只放技能栏。"
+        elif score <= 7:
+            suggestion = f"{name}基础可用，下一步补充量化结果、场景和个人贡献。"
+        else:
+            suggestion = f"{name}呈现较完整，建议保留最能贴合目标岗位的证据。"
+        radar.append({"category": name, "score": score, "matched": matched, "missing": missing, "suggestion": suggestion})
+    return radar
+
+
+def career_jd_focus(jd: str, profile_key: str) -> dict:
+    profile = CAREER_PROFILES[normalize_career_profile(profile_key)]
+    text = jd or ""
+    return {
+        name: [word for word in words if word.lower() in text.lower()]
+        for name, words in profile["abilities"].items()
+    }
+
+
+def extended_question_bank() -> dict:
+    bank = question_bank()
+    bank.update(CAREER_QUESTION_BANK)
+    return bank
+
+
+@app.route("/api/career/profiles")
+def career_profiles():
+    return jsonify({"success": True, "default": "tech", "profiles": career_profile_options()})
+
+
 @app.route("/")
 def index():
     return send_from_directory("static", "index.html")
@@ -998,6 +1202,8 @@ def start_interview_session():
     resume_id = data.get("resume_id")
     resume = get_resume_or_404(int(resume_id)) if resume_id else None
     job_title = data.get("job_title", "目标岗位")
+    profile_key = select_career_profile(data, text=resume["content"] if resume else "", job_title=job_title)
+    profile = CAREER_PROFILES[profile_key]
     session = {
         "session_id": session_id,
         "user_id": data.get("user_id", 1),
@@ -1005,14 +1211,16 @@ def start_interview_session():
         "job_title": job_title,
         "jd": data.get("jd", ""),
         "mode": data.get("mode", "standard"),
+        "career_profile": profile_key,
+        "interviewer": profile["interviewer"],
         "stage_index": 0,
         "conversation": [],
         "resume_content": resume["content"] if resume else "",
     }
-    question = "欢迎参加模拟面试。请先做一个 2 分钟自我介绍，重点说清楚目标岗位、核心项目和你的优势。"
+    question = f"欢迎参加{profile['interviewer']}模拟面试。请先做一个 2 分钟自我介绍，重点说清楚目标岗位、相关经历和你的优势。"
     session["conversation"].append({"role": "interviewer", "stage": "opening", "content": question})
     INTERVIEW_SESSIONS[session_id] = session
-    return jsonify({"success": True, "session_id": session_id, "stage": "opening", "question": question, "progress": 1, "total": 6})
+    return jsonify({"success": True, "session_id": session_id, "stage": "opening", "question": question, "profile": {"id": profile_key, "label": profile["label"], "interviewer": profile["interviewer"]}, "progress": 1, "total": 6})
 
 
 @app.route("/api/interview/sessions/<session_id>/answer", methods=["POST"])
@@ -1030,13 +1238,7 @@ def answer_interview_session(session_id):
         voice["overall_score"] = 0
         voice["dimension_scores"] = {"表达流畅": 0, "结构逻辑": 0, "岗位相关": 0, "信息密度": 0}
     session["conversation"].append({"role": "candidate", "content": answer, "voice": voice})
-    stages = [
-        ("resume_deep_dive", "我看到你简历里有项目经历。请展开讲一个最能体现你能力的项目，按 STAR 结构回答。"),
-        ("technical", f"如果你来测试/建设 {session['job_title']} 相关系统，你会如何设计核心用例和接口验证？"),
-        ("behavioral", "讲一次你发现问题并推动解决的经历，你做了什么，结果怎样？"),
-        ("candidate_questions", "现在进入反问环节。你会向面试官提哪两个问题？"),
-        ("finished", "面试结束。系统已生成综合反馈。"),
-    ]
+    stages = build_interview_stages(session)
     session["stage_index"] += 1
     stage, next_question = stages[min(session["stage_index"] - 1, len(stages) - 1)]
     if answer_intent in {"skip", "too_short"}:
@@ -1061,6 +1263,24 @@ def answer_interview_session(session_id):
     else:
         session["conversation"].append({"role": "interviewer", "stage": stage, "content": next_question})
     return jsonify({"success": True, "session_id": session_id, "stage": stage, "question": next_question, "feedback": feedback, "progress": min(session["stage_index"] + 1, 6), "total": 6})
+
+
+def build_interview_stages(session: dict) -> list[tuple[str, str]]:
+    job_title = session["job_title"]
+    profile_key = normalize_career_profile(session.get("career_profile"))
+    profile = CAREER_PROFILES[profile_key]
+    ability_names = list(profile["abilities"].keys())
+    if profile_key == "tech":
+        professional_question = f"如果你来测试/建设 {job_title} 相关系统，你会如何设计核心用例和接口验证？"
+    else:
+        professional_question = f"围绕 {job_title}，请讲讲你会如何处理一个典型的{ability_names[0]}任务，并说明判断结果好坏的指标。"
+    return [
+        ("resume_deep_dive", f"我看到你简历里有相关经历。请展开讲一个最能体现你适合{profile['label']}方向的经历，按 STAR 结构回答。"),
+        ("professional", professional_question),
+        ("behavioral", "讲一次你发现问题并推动解决的经历，你做了什么，结果怎样？"),
+        ("candidate_questions", f"现在进入反问环节。面对{profile['interviewer']}，你会问哪两个能体现你认真了解岗位的问题？"),
+        ("finished", "面试结束。系统已生成综合反馈。"),
+    ]
 
 
 def build_interview_summary(answer: str, voice: dict, job_title: str) -> str:
@@ -1164,9 +1384,12 @@ def build_audio_summary(result: dict, saved_name: str = "") -> str:
 def professional_pack():
     data = request.get_json() or {}
     category = data.get("category", "test")
+    profile_key = select_career_profile(data, job_title=data.get("job_title", ""))
+    if category == "career":
+        category = profile_key
     level = data.get("level", "campus")
     job_title = data.get("job_title", "目标岗位")
-    bank = question_bank()
+    bank = extended_question_bank()
     base_questions = bank.get(category, bank["general"])
     questions = []
     level_name = {"campus": "校招基础", "junior": "初级实战", "project": "项目深挖"}.get(level, "校招基础")
@@ -1178,10 +1401,33 @@ def professional_pack():
             "difficulty": level_name,
         })
     questions.extend(build_project_followup_questions(category, job_title, level))
-    return jsonify({"success": True, "category": category, "level": level, "questions": questions[:8]})
+    profile = CAREER_PROFILES[profile_key]
+    return jsonify({
+        "success": True,
+        "category": category,
+        "level": level,
+        "profile": {"id": profile_key, "label": profile["label"], "interviewer": profile["interviewer"]},
+        "questions": questions[:8],
+    })
 
 
 def build_project_followup_questions(category: str, job_title: str, level: str) -> list[dict]:
+    if category in CAREER_PROFILES and category != "tech":
+        profile = CAREER_PROFILES[category]
+        return [
+            {
+                "question": f"如果你入职{job_title}，前三周你会如何拆解工作目标并证明自己能上手？",
+                "reference": "先确认岗位核心任务和评价标准，再拆成学习资料、业务流程、工具熟悉、协作对象和第一批可交付成果，最后用数据或交付物复盘。",
+                "focus": f"{profile['label']} · 入职适应",
+                "difficulty": "真实场景",
+            },
+            {
+                "question": f"请结合一个经历说明你为什么适合{job_title}，不要泛泛说性格好。",
+                "reference": "用 STAR 结构说明背景、任务、行动和结果，重点突出岗位相关能力、工具方法、协作对象和可量化结果。",
+                "focus": f"{profile['interviewer']}追问",
+                "difficulty": "经历深挖",
+            },
+        ]
     if category == "test":
         return [
             {
@@ -1237,6 +1483,9 @@ def practice_feedback():
     question = (data.get("question") or "").strip()
     answer = (data.get("answer") or "").strip()
     category = data.get("category", "general")
+    profile_key = select_career_profile(data, text=answer, job_title=data.get("job_title", ""))
+    if category == "career":
+        category = profile_key
     if not question or not answer:
         return jsonify({"success": False, "message": "题目和回答不能为空"}), 400
 
@@ -1261,7 +1510,7 @@ def practice_feedback():
     technical_terms = extract_keywords(answer)
     structure_hit = any(word in answer for word in ["首先", "其次", "最后", "背景", "任务", "行动", "结果", "因此"])
     score = voice["overall_score"]
-    if category in {"test", "python", "frontend", "ai"}:
+    if category in {"test", "python", "frontend", "ai"} or category in CAREER_PROFILES:
         score = min(96, score + min(12, len(technical_terms) * 3))
     if not structure_hit:
         score = max(35, score - 8)
@@ -1271,6 +1520,7 @@ def practice_feedback():
         "success": True,
         "score": score,
         "category": category,
+        "profile": {"id": profile_key, "label": CAREER_PROFILES[profile_key]["label"]},
         "question": question,
         "dimension_scores": {
             "专业性": min(95, 48 + len(technical_terms) * 8),
@@ -1303,6 +1553,8 @@ def save_practice_record(user_id: int, category: str, question: str, answer: str
 
 
 def build_follow_up_question(question: str, category: str) -> str:
+    if category in CAREER_PROFILES and category != "tech":
+        return "追问：请把这个回答再补充一个真实经历，说明你当时用了什么方法、和谁协作、最后产生了什么结果。"
     if category == "test":
         return "追问：如果这个功能上线后出现偶发失败，你如何定位是前端、后端、数据库还是模型接口问题？"
     if category == "ai":
@@ -1315,6 +1567,10 @@ def build_follow_up_question(question: str, category: str) -> str:
 
 
 def build_sample_practice_answer(question: str, category: str) -> str:
+    if category in CAREER_PROFILES and category != "tech":
+        profile = CAREER_PROFILES[category]
+        first_ability = next(iter(profile["abilities"]))
+        return f"参考回答：我会先给结论，再用一个和{profile['label']}相关的经历说明。比如在一次任务中，我负责{first_ability}相关工作，先确认目标和评价标准，再拆解执行步骤、同步协作对象，最后用数据、交付物或反馈证明结果。"
     if category == "test":
         return "参考回答：我会先确认需求和核心业务流程，再从正常流程、边界值、异常输入、权限、接口契约、兼容性和性能几个维度设计用例。执行时会记录实际结果、缺陷复现步骤和优先级，最后通过回归测试确认问题闭环。"
     if category == "ai":
@@ -1485,7 +1741,7 @@ def build_agent_runtime_context(user_id: int = 1) -> str:
 @app.route("/api/questions")
 def questions():
     category = request.args.get("category", "all")
-    bank = question_bank()
+    bank = extended_question_bank()
     if category == "all":
         data = [{"category": key, **item} for key, items in bank.items() for item in items]
     else:
@@ -1839,6 +2095,17 @@ def skills_radar():
     if data.get("resume_id"):
         row = get_resume_or_404(int(data["resume_id"]))
         text = row["content"] if row else text
+    profile_key = select_career_profile(data, text=text, job_title=data.get("job_title", ""))
+    if profile_key != "tech" or data.get("career_profile") or data.get("profile"):
+        profile = CAREER_PROFILES[profile_key]
+        radar = build_career_radar(text, profile_key)
+        return jsonify({
+            "success": True,
+            "profile": {"id": profile_key, "label": profile["label"], "interviewer": profile["interviewer"]},
+            "radar_data": radar,
+            "ai_comment": f"能力图谱已按「{profile['label']}」画像生成，建议优先补足低分维度的真实任务、工具方法和结果证据。",
+            "ai_used": False,
+        })
     categories = {
         "编程基础": ["Python", "Java", "Flask", "Spring"],
         "测试能力": ["Selenium", "Pytest", "JMeter", "Postman", "接口测试", "自动化测试"],
@@ -1885,8 +2152,10 @@ def resume_generator():
 def analyze_jd():
     data = request.get_json() or {}
     jd = data.get("jd_content", "")
+    profile_key = select_career_profile(data, text=jd, job_title=data.get("job_title", ""))
+    profile = CAREER_PROFILES[profile_key]
     keywords = extract_keywords(jd)
-    focus = extract_jd_focus(jd)
+    focus = career_jd_focus(jd, profile_key) if profile_key != "tech" or data.get("career_profile") else extract_jd_focus(jd)
     risk_flags = []
     if any(word in jd for word in ["抗压", "高强度", "能加班", "狼性"]):
         risk_flags.append("JD 中出现高强度/加班暗示，面试时建议确认工作节奏。")
@@ -1895,14 +2164,15 @@ def analyze_jd():
     return jsonify({
         "success": True,
         "content": "## JD 解析\n"
+        f"- 求职画像：{profile['label']}（模拟面试官：{profile['interviewer']}）\n"
         f"- 核心关键词：{', '.join(keywords) or '需补充 JD'}\n"
-        f"- 硬技能：{', '.join(focus.get('硬技能', [])) or '未明显出现'}\n"
-        f"- 测试能力：{', '.join(focus.get('测试能力', [])) or '未明显出现'}\n"
+        f"- 能力焦点：{'; '.join(f'{name}: {', '.join(words) or '未明显出现'}' for name, words in list(focus.items())[:3])}\n"
         f"- 风险提示：{'；'.join(risk_flags) if risk_flags else '暂未发现明显风险词'}\n"
         "- 面试准备：准备一个项目深挖案例、一个问题定位案例、一个协作沟通案例。\n"
         "- 简历策略：把 JD 高频词写入项目经历，而不是只堆在技能栏。",
         "keywords": keywords,
         "focus": focus,
+        "profile": {"id": profile_key, "label": profile["label"], "interviewer": profile["interviewer"]},
         "risk_flags": risk_flags,
         "ai_used": False,
     })

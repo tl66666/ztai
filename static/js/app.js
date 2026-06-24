@@ -4,6 +4,8 @@ const USER_ID = 1;
 const state = {
   resumes: [],
   providers: [],
+  careerProfiles: [],
+  careerProfile: localStorage.getItem("jobhunter_career_profile") || "tech",
   activeInterview: null,
   skillChart: null,
   recognition: null,
@@ -41,6 +43,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindActions();
   applyTheme(state.theme);
   setupSpeechRecognition();
+  await loadCareerProfiles();
   await loadProviders();
   await Promise.all([loadResumes(), loadDashboard(), loadApplications(), loadQuestions(), loadTrainingRecords()]);
   applyInitialRouteFromQuery();
@@ -97,6 +100,13 @@ function bindActions() {
   $("modelSelect").addEventListener("change", toggleCustomModelInput);
   document.querySelectorAll("[data-theme-choice]").forEach((button) => {
     button.addEventListener("click", () => applyTheme(button.dataset.themeChoice));
+  });
+  $("careerProfileSelect")?.addEventListener("change", () => {
+    state.careerProfile = $("careerProfileSelect").value || "tech";
+    localStorage.setItem("jobhunter_career_profile", state.careerProfile);
+    syncCareerProfileToForms();
+    loadQuestions($("questionCategory")?.value || "general");
+    toast(`已切换求职方向：${careerProfileLabel(state.careerProfile)}`);
   });
   document.querySelectorAll("[data-section-filter]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -175,6 +185,46 @@ async function api(path, options = {}) {
   const type = response.headers.get("content-type") || "";
   if (type.includes("application/json")) return response.json();
   return { success: response.ok, content: await response.text() };
+}
+
+async function loadCareerProfiles() {
+  const data = await api("/career/profiles");
+  state.careerProfiles = data.success ? data.profiles : [];
+  const select = $("careerProfileSelect");
+  if (!select) return;
+  select.innerHTML = state.careerProfiles.map((item) => `<option value="${item.id}">${escapeHtml(item.label)}</option>`).join("");
+  select.value = state.careerProfiles.some((item) => item.id === state.careerProfile) ? state.careerProfile : (data.default || "tech");
+  state.careerProfile = select.value;
+  localStorage.setItem("jobhunter_career_profile", state.careerProfile);
+  syncCareerProfileToForms();
+}
+
+function selectedCareerProfile() {
+  return $("careerProfileSelect")?.value || state.careerProfile || "tech";
+}
+
+function careerProfileLabel(profileId = selectedCareerProfile()) {
+  return state.careerProfiles.find((item) => item.id === profileId)?.label || "计算机 / 软件 / AI";
+}
+
+function syncCareerProfileToForms() {
+  const profile = selectedCareerProfile();
+  const examples = {
+    tech: "软件测试工程师 / AI 应用测试",
+    ops: "新媒体运营 / 用户运营",
+    marketing: "市场专员 / 商务拓展",
+    finance: "财务助理 / 会计实习生",
+    education: "学科教师 / 教务助理",
+    hr: "人事行政专员 / 招聘助理",
+  };
+  const placeholder = examples[profile] || examples.tech;
+  ["analysisJobTitle", "jobTitleInput", "interviewJobTitle", "professionalJobTitle"].forEach((id) => {
+    const el = $(id);
+    if (el) el.placeholder = `目标岗位，例如：${placeholder}`;
+  });
+  if ($("professionalCategory")?.value === "career" && $("questionCategory")?.value === "career") {
+    loadQuestions("career");
+  }
 }
 
 async function withLoading(task, message = "AI 正在整理你的求职策略...") {
@@ -628,7 +678,7 @@ async function auditSelectedResume() {
   const data = await withLoading(
     () => api(`/resumes/${resumeId}/audit`, {
       method: "POST",
-      body: { job_title: $("analysisJobTitle").value, jd: $("analysisJdInput").value },
+      body: { job_title: $("analysisJobTitle").value, jd: $("analysisJdInput").value, career_profile: selectedCareerProfile() },
     }),
     "AI 正在做简历结构诊断..."
   );
@@ -645,6 +695,7 @@ async function improveSelectedResume() {
       body: {
         job_title: $("analysisJobTitle").value || $("jobTitleInput").value,
         jd: $("analysisJdInput").value || $("jdInput").value,
+        career_profile: selectedCareerProfile(),
         save: true,
       },
     }),
@@ -691,7 +742,7 @@ async function tailorResume() {
   const data = await withLoading(
     () => api(`/resumes/${resumeId}/tailor`, {
       method: "POST",
-      body: { job_title: $("jobTitleInput").value, jd: $("jdInput").value },
+      body: { job_title: $("jobTitleInput").value, jd: $("jdInput").value, career_profile: selectedCareerProfile() },
     }),
     "AI 正在按 JD 优化简历..."
   );
@@ -727,7 +778,7 @@ async function matchResume() {
   const data = await withLoading(
     () => api("/job-match", {
       method: "POST",
-      body: { resume_id: resumeId, job_title: $("jobTitleInput").value, jd: $("jdInput").value, job_requirements: $("jdInput").value },
+      body: { resume_id: resumeId, job_title: $("jobTitleInput").value, jd: $("jdInput").value, job_requirements: $("jdInput").value, career_profile: selectedCareerProfile() },
     }),
     "AI 正在计算岗位匹配度..."
   );
@@ -744,19 +795,17 @@ async function analyzeJdOnly() {
   const jd = $("jdInput").value.trim();
   if (!jd) return toast("请先粘贴岗位 JD");
   const data = await withLoading(
-    () => api("/ai/analyze-jd", { method: "POST", body: { jd_content: jd } }),
+    () => api("/ai/analyze-jd", { method: "POST", body: { jd_content: jd, job_title: $("jobTitleInput").value, career_profile: selectedCareerProfile() } }),
     "AI 正在拆解 JD..."
   );
   $("tailorResult").classList.remove("hidden");
   const focus = data.focus || {};
   $("tailorResult").innerHTML = `
     <h4>JD 岗位画像</h4>
+    <div><b>求职方向</b><br>${escapeHtml(data.profile?.label || careerProfileLabel())}</div>
     <div><b>核心关键词</b><br>${escapeHtml((data.keywords || []).join("、") || "暂无")}</div>
     <div><b>能力聚焦</b><br>
-      硬技能：${escapeHtml((focus["硬技能"] || []).join("、") || "未明显出现")}<br>
-      测试能力：${escapeHtml((focus["测试能力"] || []).join("、") || "未明显出现")}<br>
-      AI 能力：${escapeHtml((focus["AI 能力"] || []).join("、") || "未明显出现")}<br>
-      软技能：${escapeHtml((focus["软技能"] || []).join("、") || "未明显出现")}
+      ${Object.entries(focus).map(([key, value]) => `${escapeHtml(key)}：${escapeHtml((value || []).join("、") || "未明显出现")}`).join("<br>")}
     </div>
     <div><b>风险提示</b><br>${(data.risk_flags || []).map((item) => `• ${escapeHtml(item)}`).join("<br>") || "暂无明显风险词"}</div>
     ${renderText(data.content || "")}
@@ -785,7 +834,7 @@ function prepareApplicationFromJd() {
 async function renderSkills() {
   const resumeId = selectedSkillResumeId();
   if (!resumeId) return toast("请先选择简历");
-  const data = await api("/skills/radar", { method: "POST", body: { resume_id: Number(resumeId) } });
+  const data = await api("/skills/radar", { method: "POST", body: { resume_id: Number(resumeId), career_profile: selectedCareerProfile(), job_title: $("analysisJobTitle").value || $("jobTitleInput").value } });
   const ctx = $("skillChart");
   if (state.skillChart) state.skillChart.destroy();
   state.skillChart = new Chart(ctx, {
@@ -827,6 +876,7 @@ async function startInterview() {
       resume_id: Number(resumeId),
       job_title: $("interviewJobTitle").value || "软件测试工程师",
       jd: $("interviewJd").value,
+      career_profile: selectedCareerProfile(),
       mode: "campus",
     },
   });
@@ -861,6 +911,7 @@ function stageName(stage) {
     opening: "自我介绍",
     resume_deep_dive: "项目深挖",
     technical: "技术追问",
+    professional: "专业追问",
     behavioral: "行为面",
     candidate_questions: "反问环节",
     finished: "面试结束",
@@ -1056,8 +1107,9 @@ async function analyzeRecordedAudio(target = "answer") {
 }
 
 async function loadQuestions(category = "all") {
+  const resolvedCategory = category === "career" ? selectedCareerProfile() : category;
   state.currentPracticeCategory = category;
-  const data = await api(`/questions?category=${encodeURIComponent(category)}`);
+  const data = await api(`/questions?category=${encodeURIComponent(resolvedCategory)}`);
   const questions = data.success ? data.data : [];
   $("questionList").innerHTML = questions.length
     ? questions.map((item, index) => `
@@ -1065,7 +1117,7 @@ async function loadQuestions(category = "all") {
         <b>${index + 1}. ${escapeHtml(item.question)}</b>
         <small>${categoryName(item.category)} · 点击“练习”后可输入自己的回答</small>
         <div class="list-actions">
-          <button class="ghost small" onclick="selectQuestion('${escapeAttr(item.question)}', '${escapeAttr(item.category)}')">练习</button>
+          <button class="ghost small" onclick="selectQuestion('${escapeAttr(item.question)}', '${escapeAttr(category === "career" ? "career" : item.category)}')">练习</button>
           <button class="ghost small" onclick="showSampleAnswer('${escapeAttr(item.answer)}')">参考答案</button>
         </div>
       </article>
@@ -1078,7 +1130,20 @@ function escapeAttr(text = "") {
 }
 
 function categoryName(category) {
-  return { general: "通用面试", test: "软件测试", python: "Python / Flask", frontend: "前端基础", ai: "AI Agent" }[category] || category;
+  return {
+    general: "通用面试",
+    career: "跟随求职方向",
+    test: "软件测试",
+    python: "Python / Flask",
+    frontend: "前端基础",
+    ai: "AI Agent",
+    tech: "计算机 / 软件 / AI",
+    ops: "运营 / 新媒体",
+    marketing: "市场 / 销售",
+    finance: "财务 / 会计",
+    education: "教育 / 师范",
+    hr: "行政 / 人事",
+  }[category] || category;
 }
 
 function selectQuestion(question, category) {
@@ -1251,6 +1316,7 @@ async function loadProfessionalPack() {
       method: "POST",
       body: {
         category: $("professionalCategory").value,
+        career_profile: selectedCareerProfile(),
         level: $("professionalLevel").value,
         job_title: $("professionalJobTitle").value || $("interviewJobTitle").value || "目标岗位",
       },
@@ -1292,6 +1358,7 @@ async function scoreProfessionalAnswer() {
       answer,
       user_id: USER_ID,
       category: $("professionalCategory").value,
+      career_profile: selectedCareerProfile(),
       job_title: $("professionalJobTitle").value || $("interviewJobTitle").value || "目标岗位",
     },
   });
@@ -1314,7 +1381,7 @@ async function scorePractice() {
   if (!question || !answer) return toast("请先填写题目和你的回答");
   const data = await api("/interview/practice-feedback", {
     method: "POST",
-    body: { question, answer, category: state.currentPracticeCategory, job_title: $("interviewJobTitle").value || "目标岗位", user_id: USER_ID },
+    body: { question, answer, category: state.currentPracticeCategory, career_profile: selectedCareerProfile(), job_title: $("interviewJobTitle").value || "目标岗位", user_id: USER_ID },
   });
   if (!data.success) return toast(data.message || "评分失败");
   $("practiceResult").classList.remove("hidden");

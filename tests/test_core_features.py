@@ -111,6 +111,46 @@ class BackendFeatureTests(unittest.TestCase):
         self.assertIn("score", data["career_pulse"])
         self.assertIn("weekly_plan", data["career_pulse"])
 
+    def test_career_profiles_include_non_tech_directions(self):
+        response = self.client.get("/api/career/profiles")
+        data = response.get_json()
+
+        self.assertTrue(data["success"])
+        profile_ids = {item["id"] for item in data["profiles"]}
+        self.assertIn("finance", profile_ids)
+        self.assertIn("education", profile_ids)
+        self.assertIn("ops", profile_ids)
+
+    def test_finance_skill_radar_uses_finance_ability_model(self):
+        response = self.client.post(
+            "/api/skills/radar",
+            json={
+                "career_profile": "finance",
+                "resume_content": "熟悉会计凭证、Excel 透视表、发票整理、财务报表和税务申报。",
+            },
+        )
+        data = response.get_json()
+
+        self.assertTrue(data["success"])
+        self.assertEqual(data["profile"]["id"], "finance")
+        categories = {item["category"] for item in data["radar_data"]}
+        self.assertIn("会计基础", categories)
+        self.assertIn("税务合规", categories)
+
+    def test_non_tech_question_bank_and_professional_pack(self):
+        questions = self.client.get("/api/questions?category=ops").get_json()
+        self.assertTrue(questions["success"])
+        self.assertGreaterEqual(len(questions["data"]), 5)
+
+        pack = self.client.post(
+            "/api/interview/professional-pack",
+            json={"category": "career", "career_profile": "education", "job_title": "小学语文教师"},
+        ).get_json()
+
+        self.assertTrue(pack["success"])
+        self.assertEqual(pack["profile"]["id"], "education")
+        self.assertGreaterEqual(len(pack["questions"]), 5)
+
 
 if __name__ == "__main__":
     unittest.main()
