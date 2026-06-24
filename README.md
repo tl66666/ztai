@@ -4,9 +4,9 @@
 
 项目展示页：启动后访问 [http://localhost:5000/showcase.html](http://localhost:5000/showcase.html)
 
-GitHub Pages 展示入口：[https://tl66666.github.io/ztai/](https://tl66666.github.io/ztai/)
+GitHub Pages 展示入口：[https://tl66666.github.io/ztai/static/showcase.html](https://tl66666.github.io/ztai/static/showcase.html)
 
-说明：GitHub 仓库地址用于查看源码，GitHub Pages 地址用于打开项目展示页；本地 Flask 的 `/` 入口是主系统页面，`/showcase.html` 是项目展示页。
+说明：GitHub 仓库地址用于查看源码，GitHub Pages 地址用于打开项目展示页；本地 Flask 的 `/` 入口是主系统页面，`/showcase.html` 是项目展示页；GitHub Pages 的静态展示页位于 `/static/showcase.html`。
 
 主系统入口：启动后访问 [http://localhost:5000](http://localhost:5000)
 
