@@ -2,11 +2,9 @@
 
 职途 AI 是一个围绕真实求职流程设计的 AI Agent Web 系统。系统把简历管理、JD 匹配、简历优化、模拟面试、语音表达分析、题库训练、投递追踪和 AI 求职教练整合成一条完整闭环，目标不是做一个简单聊天页面，而是让用户能按“整理简历 → 匹配岗位 → 优化表达 → 训练面试 → 跟进投递 → 复盘提升”的路径持续推进。
 
-项目展示页：启动后访问 [http://localhost:5000/showcase.html](http://localhost:5000/showcase.html)
-
 GitHub Pages 展示入口：[https://tl66666.github.io/ztai/static/showcase.html](https://tl66666.github.io/ztai/static/showcase.html)
 
-说明：GitHub 仓库地址用于查看源码，GitHub Pages 地址用于打开项目展示页；本地 Flask 的 `/` 入口是主系统页面，`/showcase.html` 是项目展示页；GitHub Pages 的静态展示页位于 `/static/showcase.html`。
+说明：GitHub 仓库地址用于查看源码，GitHub Pages 地址用于打开项目展示页；本地 Flask 的 `/` 入口是主系统页面。
 
 主系统入口：启动后访问 [http://localhost:5000](http://localhost:5000)
 
@@ -174,7 +172,6 @@ python app.py
 
 ```text
 http://localhost:5000
-http://localhost:5000/showcase.html
 ```
 
 ## 模型配置
