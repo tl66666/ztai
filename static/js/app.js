@@ -20,6 +20,8 @@ const state = {
   audioMetrics: null,
   audioStartedAt: 0,
   recordingTarget: "answer",
+  soundEnabled: localStorage.getItem("jobhunter_sound") !== "off",
+  audioContext: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -52,7 +54,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 function bindNavigation() {
   document.querySelectorAll("[data-page]").forEach((item) => {
-    item.addEventListener("click", () => showPage(item.dataset.page));
+    item.addEventListener("click", () => {
+      playUiTone("jump");
+      showPage(item.dataset.page);
+    });
   });
 }
 
@@ -90,7 +95,18 @@ function applyInitialRouteFromQuery() {
 }
 
 function bindActions() {
-  $("modelConfigBtn").addEventListener("click", () => $("modelConfigPanel").classList.toggle("hidden"));
+  updateSoundButton();
+  $("modelConfigBtn").addEventListener("click", () => {
+    playUiTone("tap");
+    $("modelConfigPanel").classList.toggle("hidden");
+  });
+  $("soundToggleBtn")?.addEventListener("click", () => {
+    state.soundEnabled = !state.soundEnabled;
+    localStorage.setItem("jobhunter_sound", state.soundEnabled ? "on" : "off");
+    updateSoundButton();
+    if (state.soundEnabled) playUiTone("success");
+    toast(state.soundEnabled ? "界面音效已开启" : "界面音效已关闭", { silent: true });
+  });
   $("closeModelPanel").addEventListener("click", () => $("modelConfigPanel").classList.add("hidden"));
   $("saveProviderBtn").addEventListener("click", saveProvider);
   $("providerSelect").addEventListener("change", () => {
@@ -99,7 +115,10 @@ function bindActions() {
   });
   $("modelSelect").addEventListener("change", toggleCustomModelInput);
   document.querySelectorAll("[data-theme-choice]").forEach((button) => {
-    button.addEventListener("click", () => applyTheme(button.dataset.themeChoice));
+    button.addEventListener("click", () => {
+      playUiTone("tap");
+      applyTheme(button.dataset.themeChoice);
+    });
   });
   $("careerProfileSelect")?.addEventListener("change", () => {
     state.careerProfile = $("careerProfileSelect").value || "tech";
@@ -111,12 +130,14 @@ function bindActions() {
   document.querySelectorAll("[data-flow-jump]").forEach((button) => {
     button.addEventListener("click", () => {
       const [page, module] = button.dataset.flowJump.split(":");
+      playUiTone("jump");
       jumpToModule(page, module);
     });
   });
   document.querySelectorAll("[data-section-filter]").forEach((button) => {
     button.addEventListener("click", () => {
       const [page, module] = button.dataset.sectionFilter.split(":");
+      playUiTone("tap");
       filterModules(page, module, button);
     });
   });
@@ -246,12 +267,57 @@ async function withLoading(task, message = "AI 正在整理你的求职策略...
   }
 }
 
-function toast(message) {
+function updateSoundButton() {
+  const button = $("soundToggleBtn");
+  if (!button) return;
+  button.classList.toggle("is-off", !state.soundEnabled);
+  button.title = state.soundEnabled ? "关闭界面音效" : "开启界面音效";
+  button.innerHTML = `<i data-lucide="${state.soundEnabled ? "volume-2" : "volume-x"}"></i>`;
+  if (window.lucide) lucide.createIcons();
+}
+
+function playUiTone(type = "tap") {
+  if (!state.soundEnabled) return;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  try {
+    state.audioContext = state.audioContext || new AudioCtx();
+    if (state.audioContext.state === "suspended") state.audioContext.resume();
+    const now = state.audioContext.currentTime;
+    const oscillator = state.audioContext.createOscillator();
+    const gain = state.audioContext.createGain();
+    const presets = {
+      tap: { freq: 520, duration: 0.055, volume: 0.018 },
+      jump: { freq: 660, duration: 0.075, volume: 0.022 },
+      success: { freq: 840, duration: 0.09, volume: 0.025 },
+      warn: { freq: 260, duration: 0.08, volume: 0.018 },
+    };
+    const tone = presets[type] || presets.tap;
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(tone.freq, now);
+    oscillator.frequency.exponentialRampToValueAtTime(Math.max(120, tone.freq * 0.82), now + tone.duration);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(tone.volume, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + tone.duration);
+    oscillator.connect(gain);
+    gain.connect(state.audioContext.destination);
+    oscillator.start(now);
+    oscillator.stop(now + tone.duration + 0.02);
+  } catch (error) {
+    console.warn("UI sound skipped", error);
+  }
+}
+
+function toast(message, options = {}) {
   const node = $("toast");
   node.textContent = message;
   node.classList.remove("hidden");
   clearTimeout(node.timer);
   node.timer = setTimeout(() => node.classList.add("hidden"), 2600);
+  if (!options.silent) {
+    const isWarning = /失败|请先|不支持|不存在|错误/.test(message);
+    playUiTone(isWarning ? "warn" : "success");
+  }
 }
 
 function escapeHtml(text = "") {

@@ -52,6 +52,7 @@
           </div>
         </div>
         <button class="ghost config-button" id="modelConfigBtn"><i data-lucide="settings-2"></i>模型配置</button>
+        <button class="icon-button sound-toggle" id="soundToggleBtn" title="界面音效"><i data-lucide="volume-2"></i></button>
       </div>
     </header>
 
@@ -83,6 +84,12 @@
           <div class="hero-actions">
             <button class="primary" data-page="resume"><i data-lucide="wand-sparkles"></i>进入简历实验室</button>
             <button class="ghost" data-page="interview"><i data-lucide="gamepad-2"></i>开始面试训练</button>
+          </div>
+          <div class="hero-route">
+            <button data-flow-jump="resume:input"><b>01</b><span>上传简历</span></button>
+            <button data-flow-jump="resume:jd"><b>02</b><span>粘贴 JD</span></button>
+            <button data-flow-jump="interview:mock"><b>03</b><span>模拟面试</span></button>
+            <button data-flow-jump="tracker:add"><b>04</b><span>记录投递</span></button>
           </div>
         </div>
       </div>

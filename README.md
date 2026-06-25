@@ -33,7 +33,8 @@ GitHub Pages 展示入口：[https://tl66666.github.io/ztai/static/showcase.html
 - 汇总简历数量、面试次数、JD 匹配次数、投递数量。
 - 根据真实数据生成“职业脉冲”状态，包括准备度评分、当前短板、下一步行动建议。
 - 支持从总览直接跳转到简历实验室、面试训练场、投递看板。
-- 首页 Hero 支持动态视频背景和主题化图片兜底，视觉上区分 Anime / Glass 风格。
+- 首页 Hero 支持主题化视觉素材，视觉上区分 Anime / Glass 风格，并提供上传简历、粘贴 JD、模拟面试、记录投递四个快速入口。
+- 支持轻量界面音效和一键开关，页面跳转、操作成功、提醒信息都有更明确的交互反馈。
 
 ### 2. 简历实验室
 
@@ -56,6 +57,7 @@ GitHub Pages 展示入口：[https://tl66666.github.io/ztai/static/showcase.html
 - **语音分析**：结合音频时长、文本长度、语速、停顿、语气词和结构感给出表达建议。
 - **训练记录**：保存模拟面试、题库练习、语音回答和 AI 反馈，可查看详情、回放语音、删除记录。
 - **幻觉控制**：当用户回答“不知道、下一题、跳过”时，系统不会强行编造高分反馈，而是给出合理跳过、参考答案或学习方向。
+- **交互反馈**：关键跳转、保存、提醒和错误信息带有轻量音效提示，可在顶部一键关闭。
 
 ### 4. 投递看板
 
@@ -91,13 +93,13 @@ GitHub Pages 展示入口：[https://tl66666.github.io/ztai/static/showcase.html
 
 ### 前端
 
-- **HTML / CSS / JavaScript 原生实现**：无复杂构建链，适合本地部署、课堂演示和实训验收。
+- **HTML / CSS / JavaScript 原生实现**：无复杂构建链，适合本地部署、项目演示和功能验证。
 - **CSS Variables**：实现 Anime / Glass 双主题切换。
 - **Chart.js**：绘制技能雷达图和能力结构图。
 - **Lucide Icons**：统一图标系统。
 - **Web Speech API**：浏览器语音转文字。
 - **MediaRecorder API**：录制真实音频回答。
-- **Web Audio API**：辅助分析音频音量、时长、停顿等基础指标。
+- **Web Audio API**：辅助分析音频音量、时长、停顿等基础指标，并生成轻量界面提示音。
 - **HTML5 Video**：独立产品页面使用视频素材增强视觉表现。
 
 ### AI 网关
@@ -146,7 +148,7 @@ jobhunter/
 ├── requirements.txt               # Python 依赖
 ├── README.md                      # 项目说明
 ├── API配置说明.md                 # 模型 API 配置说明
-├── 测试步骤说明.md                # 验收和测试步骤
+├── 测试步骤说明.md                # 本地体验和测试步骤
 ├── LICENSE                        # MIT License
 ├── .env.example                   # 环境变量示例
 ├── .gitignore                     # Git 忽略规则
