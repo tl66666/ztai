@@ -533,6 +533,61 @@ h3 { font-size: 19px; margin-bottom: 0; }
 }
 .plan-step:hover { transform: translateY(-1px); }
 
+.journey-panel {
+  margin: 18px 0;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,0.92), rgba(239,252,250,0.72)),
+    radial-gradient(circle at 88% 12%, rgba(255,123,198,0.16), transparent 28%),
+    radial-gradient(circle at 8% 90%, rgba(105,226,204,0.18), transparent 34%);
+}
+.journey-panel .module-copy {
+  margin: 6px 0 0;
+  max-width: 760px;
+}
+.journey-steps {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+}
+.journey-step {
+  min-height: 142px;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid rgba(255,255,255,0.88);
+  border-radius: 22px;
+  background: rgba(255,255,255,0.72);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 18px 40px rgba(31,35,51,0.08);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+.journey-step:hover {
+  transform: translateY(-4px);
+  background: rgba(255,255,255,0.95);
+  box-shadow: 0 24px 54px rgba(31,35,51,0.13);
+}
+.journey-step b {
+  width: 42px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(255,123,198,0.22), rgba(105,226,204,0.22));
+  color: #246c60;
+  font-size: 13px;
+}
+.journey-step span {
+  font-size: 16px;
+  font-weight: 950;
+}
+.journey-step small {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .home-grid, .lab-grid, .interview-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.18fr) minmax(340px, 0.82fr);
@@ -1235,6 +1290,7 @@ canvas { max-width: 100%; }
   .model-config-grid .primary { width: 100%; }
   .compact, .model-input, .custom-model-input, .key-input { width: calc(50% - 28px); flex: 1; }
   .home-grid, .lab-grid, .interview-grid, .chat-shell, .records-grid, .practice-workbench, .career-pulse { grid-template-columns: 1fr; }
+  .journey-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .answer-studio { position: relative; top: auto; }
   .lab-grid .media-strip, .input-panel, .resume-list-panel, .resume-tools-panel, .skill-panel, .practice-panel { grid-column: auto; }
   .interview-stage { grid-row: auto; min-height: 430px; }
@@ -1247,6 +1303,7 @@ canvas { max-width: 100%; }
   .model-config-grid { grid-template-columns: 1fr; }
   .compact, .model-input, .custom-model-input, .key-input { width: 100%; }
   .top-actions .icon-button { width: 100%; }
+  .journey-steps { grid-template-columns: 1fr; }
   .interviewer-card { left: 12px; right: 12px; bottom: 12px; align-items: flex-start; }
   .interviewer-card img { width: 54px; height: 54px; }
   .button-row { align-items: stretch; }

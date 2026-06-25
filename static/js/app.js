@@ -108,6 +108,12 @@ function bindActions() {
     loadQuestions($("questionCategory")?.value || "general");
     toast(`已切换求职方向：${careerProfileLabel(state.careerProfile)}`);
   });
+  document.querySelectorAll("[data-flow-jump]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const [page, module] = button.dataset.flowJump.split(":");
+      jumpToModule(page, module);
+    });
+  });
   document.querySelectorAll("[data-section-filter]").forEach((button) => {
     button.addEventListener("click", () => {
       const [page, module] = button.dataset.sectionFilter.split(":");
@@ -209,6 +215,7 @@ function careerProfileLabel(profileId = selectedCareerProfile()) {
 
 function syncCareerProfileToForms() {
   const profile = selectedCareerProfile();
+  if ($("flowProfileLabel")) $("flowProfileLabel").textContent = careerProfileLabel(profile);
   const examples = {
     tech: "软件测试工程师 / AI 应用测试",
     ops: "新媒体运营 / 用户运营",
