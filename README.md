@@ -146,6 +146,8 @@ jobhunter/
 ├── app.py                         # Flask 后端入口和主要业务 API
 ├── config.py                      # 兼容旧版的题库、技能词和配置数据
 ├── requirements.txt               # Python 依赖
+├── start.bat                      # Windows 一键启动入口（双击运行）
+├── start-jobhunter.ps1            # 一键启动 PowerShell 脚本（端口检测/依赖检查/自动开浏览器）
 ├── README.md                      # 项目说明
 ├── API配置说明.md                 # 模型 API 配置说明
 ├── 测试步骤说明.md                # 本地体验和测试步骤
@@ -172,6 +174,18 @@ jobhunter/
 运行时生成的 `jobhunter.db`、`uploads/`、`exports/`、`output/` 不提交到仓库。
 
 ## 快速开始
+
+### 方式一：一键启动（推荐）
+
+双击项目根目录下的 `start.bat`，或运行：
+
+```powershell
+.\start-jobhunter.ps1
+```
+
+脚本会自动完成：切换工作目录 → 检测 Python（优先选择已装依赖的版本）→ 检测并释放端口冲突 → 检查依赖 → 启动 Flask 服务 → 等待就绪后打开默认浏览器。按 `Ctrl+C` 可停止服务并自动释放端口。
+
+### 方式二：手动启动
 
 ```powershell
 cd "C:\Users\唐乐\Desktop\实训\项目\jobhunter"
