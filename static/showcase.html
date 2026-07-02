@@ -326,6 +326,21 @@
     .feature-card:nth-child(6) { border-left-color: var(--mint); }
     .feature-card:nth-child(7) { border-left-color: var(--blue); }
     .feature-card:nth-child(8) { border-left-color: var(--pink); }
+    .pain-card { border-top: 4px solid var(--danger, #ff5b5b); }
+    .pain-card:nth-child(2) { border-top-color: var(--yellow); }
+    .pain-card:nth-child(3) { border-top-color: var(--pink); }
+    .pain-card:nth-child(4) { border-top-color: var(--blue); }
+    .pain-card:nth-child(5) { border-top-color: var(--lilac); }
+    .pain-card:nth-child(6) { border-top-color: var(--mint); }
+    .pain-card .pain-icon { font-size: 28px; margin-bottom: 10px; display: block; }
+    .pain-card p { font-size: 14px; }
+    .highlight-card { border-left: 6px solid var(--mint); }
+    .highlight-card:nth-child(2) { border-left-color: var(--blue); }
+    .highlight-card:nth-child(3) { border-left-color: var(--pink); }
+    .highlight-card:nth-child(4) { border-left-color: var(--yellow); }
+    .highlight-card:nth-child(5) { border-left-color: var(--lilac); }
+    .highlight-card:nth-child(6) { border-left-color: var(--mint); }
+    .highlight-card .hl-icon { font-size: 26px; margin-bottom: 8px; display: block; }
     .screens-grid {
       display: block;
       position: relative;
@@ -622,7 +637,9 @@
       <span>职途 AI<small>AI Agent Career Studio</small></span>
     </a>
     <div class="nav-links">
+      <a class="pill" href="#pains">痛点</a>
       <a class="pill" href="#features">功能</a>
+      <a class="pill" href="#highlights">亮点</a>
       <a class="pill" href="#themes">双主题</a>
       <a class="pill" href="#screens">实景</a>
       <a class="pill" href="#tech">技术栈</a>
@@ -638,7 +655,7 @@
       <div class="hero-panel">
         <p class="eyebrow">AI Agent × Resume × Interview × Offer Pipeline</p>
         <h1>职途 AI <em>Career OS</em></h1>
-        <p class="hero-text">基于 AI 智能体的求职辅助 Web 系统。围绕真实求职流程，构建从简历整理、岗位匹配、模拟面试、语音复盘到投递跟进的一体化工作台。</p>
+        <p class="hero-text">求职不该靠零散工具和记忆硬扛。职途 AI 把简历诊断、JD 匹配、模拟面试、语音复盘和投递跟进串成一条数据闭环，让每一步准备都有依据、有反馈、可复盘。</p>
         <div class="hero-actions">
           <a class="button primary" href="index.html">进入系统</a>
           <a class="button dark" href="https://github.com/tl66666/ztai" target="_blank" rel="noreferrer">GitHub 仓库</a>
@@ -658,6 +675,48 @@
       <article class="card liquid metric fade-up"><b>3</b><span>模型供应商接入</span></article>
       <article class="card liquid metric fade-up"><b>2</b><span>可切换视觉主题</span></article>
       <article class="card liquid metric fade-up"><b>1</b><span>完整求职闭环</span></article>
+    </section>
+
+    <section id="pains" class="wrap section">
+      <div class="section-head fade-up">
+        <div>
+          <p class="eyebrow">Why We Built This</p>
+          <h2>求职者的真实痛点</h2>
+        </div>
+        <p>求职是一个长达数周甚至数月的过程，但大多数人靠零散工具和记忆硬扛。以下是我们观察到的真实问题，也是这个项目存在的原因。</p>
+      </div>
+      <div class="grid three">
+        <article class="card liquid pain-card fade-up">
+          <span class="pain-icon">📝</span>
+          <h3>简历改了又改，不知道改得对不对</h3>
+          <p>投出去石沉大海，不知道是结构问题、技能描述问题还是项目证据不足。缺乏客观诊断，只能凭感觉反复修改。</p>
+        </article>
+        <article class="card liquid pain-card fade-up">
+          <span class="pain-icon">🔍</span>
+          <h3>JD 看了上百条，匹配度全靠感觉</h3>
+          <p>每条 JD 都手动对比关键词，费时且容易遗漏。没有量化匹配分和缺口清单，不知道自己到底差在哪里。</p>
+        </article>
+        <article class="card liquid pain-card fade-up">
+          <span class="pain-icon">😰</span>
+          <h3>面试紧张，一开口就忘词</h3>
+          <p>平时只看面经不练嘴，到面试时大脑空白。缺乏真实模拟场景，回答没有结构，紧张时连项目都讲不清楚。</p>
+        </article>
+        <article class="card liquid pain-card fade-up">
+          <span class="pain-icon">📋</span>
+          <h3>投递记录散落各处</h3>
+          <p>公司名、岗位、进度、HR 联系方式散落在 Excel、备忘录和微信聊天里。投多了以后进度一团乱，复盘时无从下手。</p>
+        </article>
+        <article class="card liquid pain-card fade-up">
+          <span class="pain-icon">🧩</span>
+          <h3>工具割裂，数据不流通</h3>
+          <p>简历工具只做模板、面试工具只做题库、投递工具只做看板，各管各的。数据无法串联，每换一个工具就要重新输入。</p>
+        </article>
+        <article class="card liquid pain-card fade-up">
+          <span class="pain-icon">🤖</span>
+          <h3>AI 工具不结合求职场景</h3>
+          <p>通用 AI 能聊天但不懂求职流程，给的建议泛泛而谈。无法基于用户真实简历和 JD 做针对性反馈，更不会追踪进度。</p>
+        </article>
+      </div>
     </section>
 
     <section id="features" class="wrap section">
@@ -816,6 +875,48 @@
         <div class="flow-step fade-up"><b>4. 面试训练</b><span>按真实流程训练，保存回答、录音和反馈。</span></div>
         <div class="flow-step fade-up"><b>5. 投递跟进</b><span>维护岗位阶段，生成跟进话术和风险提醒。</span></div>
         <div class="flow-step fade-up"><b>6. 复盘提升</b><span>职业脉冲汇总全局数据，给出下一步行动。</span></div>
+      </div>
+    </section>
+
+    <section id="highlights" class="wrap section">
+      <div class="section-head fade-up">
+        <div>
+          <p class="eyebrow">Core Highlights</p>
+          <h2>项目核心亮点</h2>
+        </div>
+        <p>不只是一个功能清单，而是从架构到体验的系统性设计，让求职准备真正可追踪、可复盘、可持续优化。</p>
+      </div>
+      <div class="grid three">
+        <article class="card liquid highlight-card fade-up">
+          <span class="hl-icon">🔄</span>
+          <h3>完整求职闭环</h3>
+          <p>从简历到 Offer，六步数据流转，每步结果沉淀到下一步。告别割裂工具拼凑，所有数据在同一个系统里流通。</p>
+        </article>
+        <article class="card liquid highlight-card fade-up">
+          <span class="hl-icon">🧠</span>
+          <h3>多模型 AI 网关 + 本地兜底</h3>
+          <p>接入智谱 GLM、DeepSeek、Kimi 三大供应商，API 可用时智能分析，无 Key 时自动回落本地规则，核心功能不受影响。</p>
+        </article>
+        <article class="card liquid highlight-card fade-up">
+          <span class="hl-icon">🎯</span>
+          <h3>多专业求职画像</h3>
+          <p>支持计算机、运营、市场、财务、教育、行政人事六大方向，题库、技能雷达和面试追问随方向自动切换。</p>
+        </article>
+        <article class="card liquid highlight-card fade-up">
+          <span class="hl-icon">🎤</span>
+          <h3>语音表达深度分析</h3>
+          <p>不只是语音转文字，还结合语速、停顿、语气词、逻辑结构给出多维度表达评分和改进建议，帮用户练"怎么说"。</p>
+        </article>
+        <article class="card liquid highlight-card fade-up">
+          <span class="hl-icon">🛡️</span>
+          <h3>面试幻觉控制</h3>
+          <p>识别"不知道、跳过、下一题"等回答，不强行编造高分反馈，而是给出合理跳过、参考答案或学习方向。</p>
+        </article>
+        <article class="card liquid highlight-card fade-up">
+          <span class="hl-icon">⚡</span>
+          <h3>一键启动，零配置上手</h3>
+          <p>双击 start.bat 自动检测 Python、释放端口、检查依赖、启动服务并打开浏览器。克隆仓库即可运行，无需复杂配置。</p>
+        </article>
       </div>
     </section>
 
