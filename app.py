@@ -1674,6 +1674,14 @@ def agent_chat():
     })
 
 
+@app.route("/api/agent/clear-memory", methods=["POST"])
+def agent_clear_memory():
+    """清空 Agent 的对话记忆"""
+    from utils.agent import clear_memory
+    clear_memory()
+    return jsonify({"success": True, "message": "对话记忆已清空"})
+
+
 @app.route("/api/career/report/<int:user_id>", methods=["POST"])
 def career_report(user_id):
     with get_db() as conn:
