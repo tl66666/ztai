@@ -1673,9 +1673,26 @@ async function sendAgentMessage() {
   input.value = "";
   const data = await withLoading(
     () => api("/agent/chat", { method: "POST", body: { message } }),
-    "AI 教练正在思考..."
+    "Agent 正在思考并选择工具..."
   );
-  appendMessage(data.reply || data.message || "我暂时没想好，换个问法试试。", "bot");
+  const reply = data.reply || data.message || "我暂时没想好，换个问法试试。";
+  appendMessage(reply, "bot");
+
+  // 如果有 Agent 思考链路，展示工具使用过程
+  if (data.tools_used && data.tools_used.length > 0) {
+    const traceHtml = `<div class="agent-trace" style="margin-top:0.5rem;padding:0.6rem 0.8rem;background:rgba(78,168,222,0.08);border:1px solid rgba(78,168,222,0.2);border-radius:6px;font-size:0.8rem;color:var(--text-secondary)">
+      <div style="color:var(--accent);font-weight:600;margin-bottom:0.3rem">🤖 Agent 自主决策过程</div>
+      <div>循环轮次：${data.iterations} | 使用工具：${data.tools_used.join(" → ")}</div>
+    </div>`;
+    const lastMsg = $("chatLog").lastChild;
+    if (lastMsg) lastMsg.insertAdjacentHTML("beforeend", traceHtml);
+  } else if (data.tools_used && data.tools_used.length === 0) {
+    const traceHtml = `<div class="agent-trace" style="margin-top:0.5rem;padding:0.6rem 0.8rem;background:rgba(92,184,92,0.08);border:1px solid rgba(92,184,92,0.2);border-radius:6px;font-size:0.8rem;color:var(--text-secondary)">
+      <div style="color:var(--success);font-weight:600">🤖 Agent 判断：无需调用工具，直接回答</div>
+    </div>`;
+    const lastMsg = $("chatLog").lastChild;
+    if (lastMsg) lastMsg.insertAdjacentHTML("beforeend", traceHtml);
+  }
 }
 
 async function generateCareerReport() {

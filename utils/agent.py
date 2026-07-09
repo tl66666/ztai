@@ -1,0 +1,481 @@
+"""
+职途AI - ReAct Agent 执行器
+
+核心设计：流程、工具、模型全部交给大模型自己决定。
+- 工具集注册：把简历分析、JD匹配、面试题等能力封装成工具
+- ReAct 循环：思考 → 行动 → 观察 → 再思考，直到 LLM 判断任务完成
+- LLM 自主决策：调不调工具、调哪个、调几次、何时结束，全部由模型决定
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sqlite3
+from typing import Any, Callable, Dict, List, Optional
+
+from utils.ai_client import get_ai_client
+
+
+# ==================== 工具定义 ====================
+
+TOOL_DEFINITIONS = [
+    {
+        "name": "analyze_resume",
+        "description": "分析简历内容，从岗位匹配、项目含金量、表达质量、量化结果、风险点五个维度给出诊断。当用户想了解简历质量、找简历问题时使用。",
+        "parameters": "resume_text (必填, 简历文本内容)",
+    },
+    {
+        "name": "match_job",
+        "description": "将简历与目标岗位JD进行匹配，给出0-100匹配分、已命中能力、技能缺口和投递建议。当用户想看自己和某个岗位的匹配度时使用。",
+        "parameters": "resume_text (必填), job_title (必填, 岗位名称), jd (选填, 岗位描述)",
+    },
+    {
+        "name": "get_interview_question",
+        "description": "从面试题库中获取指定方向的面试题。当用户想练习面试、获取面试题时使用。",
+        "parameters": "category (选填, 如 python/java/frontend/test/general, 默认general)",
+    },
+    {
+        "name": "evaluate_answer",
+        "description": "评估用户对面试题的回答，从完整性、逻辑性、技术深度、表达能力打分。当用户回答了面试题想要反馈时使用。",
+        "parameters": "question (必填, 面试题), answer (必填, 用户的回答)",
+    },
+    {
+        "name": "analyze_jd",
+        "description": "智能解析岗位JD，提取核心要求、技能关键词、能力维度。当用户粘贴了一段JD想了解岗位需求时使用。",
+        "parameters": "jd_text (必填, JD原文)",
+    },
+    {
+        "name": "evaluate_salary",
+        "description": "根据城市、经验、技能数量评估合理薪资范围。当用户想了解某岗位薪资水平时使用。",
+        "parameters": "city (选填, 如 北京/上海), experience (选填, 如 应届生/1-3年), skills_count (选填, 技能数量)",
+    },
+    {
+        "name": "get_user_resumes",
+        "description": "获取用户已保存的简历列表。当需要查看用户有哪些简历、获取简历内容时使用。",
+        "parameters": "user_id (选填, 默认1)",
+    },
+    {
+        "name": "get_user_applications",
+        "description": "获取用户投递记录，包括公司、岗位、状态。当用户想了解投递情况、跟进进度时使用。",
+        "parameters": "user_id (选填, 默认1)",
+    },
+]
+
+
+def _build_tool_schema_text() -> str:
+    """生成工具清单文本，告诉 LLM 有哪些工具可用"""
+    lines = []
+    for t in TOOL_DEFINITIONS:
+        lines.append(f"- 工具名：{t['name']}\n  功能：{t['description']}\n  参数：{t['parameters']}")
+    return "\n".join(lines)
+
+
+# ==================== 工具执行函数 ====================
+
+def _exec_analyze_resume(params: dict, db_path: str) -> str:
+    client = get_ai_client()
+    resume_text = params.get("resume_text", "")
+    if not resume_text:
+        return "错误：缺少 resume_text 参数"
+    result = client.analyze_resume(resume_text)
+    return result.get("content", "分析失败")
+
+
+def _exec_match_job(params: dict, db_path: str) -> str:
+    client = get_ai_client()
+    result = client.match_job(
+        params.get("resume_text", ""),
+        params.get("job_title", "目标岗位"),
+        params.get("jd", ""),
+    )
+    return result.get("content", "匹配失败")
+
+
+def _exec_get_interview_question(params: dict, db_path: str) -> str:
+    try:
+        from config import INTERVIEW_QUESTIONS
+        category = params.get("category", "general")
+        questions = INTERVIEW_QUESTIONS.get(category, INTERVIEW_QUESTIONS.get("general", []))
+        if not questions:
+            return f"暂无 {category} 方向的面试题"
+        import random
+        q = random.choice(questions)
+        if isinstance(q, dict):
+            return f"面试题：{q.get('question', '')}\n\n参考答案：{q.get('answer', '暂无答案')}"
+        return f"面试题：{q}"
+    except Exception as e:
+        return f"获取面试题失败：{e}"
+
+
+def _exec_evaluate_answer(params: dict, db_path: str) -> str:
+    from utils.interview_engine import InterviewEngine
+    engine = InterviewEngine()
+    engine.candidate_answers = [params.get("answer", "")]
+    result = engine.evaluate()
+    return f"评分：{result['score']}分\n反馈：{result['feedback']}\nAI评价：{result['ai_comment']}"
+
+
+def _exec_analyze_jd(params: dict, db_path: str) -> str:
+    client = get_ai_client()
+    jd_text = params.get("jd_text", "")
+    if not jd_text:
+        return "错误：缺少 jd_text 参数"
+    result = client.chat([
+        {"role": "system", "content": "你是岗位分析专家。请解析JD，提取：1 核心要求 2 必备技能 3 加分技能 4 能力维度 5 面试可能考察点。用中文回答。"},
+        {"role": "user", "content": jd_text[:3000]},
+    ])
+    return result.get("content", "解析失败")
+
+
+def _exec_evaluate_salary(params: dict, db_path: str) -> str:
+    city = params.get("city", "")
+    experience = params.get("experience", "应届生")
+    skills_count = int(params.get("skills_count", 0) or 0)
+    city_factor = {"北京": 1.25, "上海": 1.25, "深圳": 1.2, "广州": 1.05, "杭州": 1.15, "成都": 0.9}.get(city, 1)
+    base = {"应届生": 9000, "1-3年": 15000, "3-5年": 24000, "5年以上": 36000}.get(experience, 12000)
+    skills_bonus = min(5000, skills_count * 500)
+    avg = int((base + skills_bonus) * city_factor)
+    return f"薪资评估结果：\n城市：{city or '未指定'}\n经验：{experience}\n建议薪资范围：{int(avg*0.75)}-{int(avg*1.35)}元/月\n平均值：{avg}元/月"
+
+
+def _exec_get_user_resumes(params: dict, db_path: str) -> str:
+    user_id = int(params.get("user_id", 1))
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT id, title, substr(content,1,200) as preview FROM resumes WHERE user_id=? ORDER BY updated_at DESC LIMIT 5", (user_id,)).fetchall()
+        conn.close()
+        if not rows:
+            return "用户暂无保存的简历"
+        lines = [f"简历ID:{r['id']} | 标题:{r['title']} | 预览:{r['preview']}..." for r in rows]
+        return "\n".join(lines)
+    except Exception as e:
+        return f"查询简历失败：{e}"
+
+
+def _exec_get_user_applications(params: dict, db_path: str) -> str:
+    user_id = int(params.get("user_id", 1))
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT company, job_title, status, city FROM job_applications WHERE user_id=? ORDER BY updated_at DESC LIMIT 8", (user_id,)).fetchall()
+        conn.close()
+        if not rows:
+            return "用户暂无投递记录"
+        lines = [f"公司:{r['company']} | 岗位:{r['job_title']} | 状态:{r['status']} | 城市:{r['city'] or '未填'}" for r in rows]
+        return "\n".join(lines)
+    except Exception as e:
+        return f"查询投递记录失败：{e}"
+
+
+TOOL_EXECUTORS: Dict[str, Callable] = {
+    "analyze_resume": _exec_analyze_resume,
+    "match_job": _exec_match_job,
+    "get_interview_question": _exec_get_interview_question,
+    "evaluate_answer": _exec_evaluate_answer,
+    "analyze_jd": _exec_analyze_jd,
+    "evaluate_salary": _exec_evaluate_salary,
+    "get_user_resumes": _exec_get_user_resumes,
+    "get_user_applications": _exec_get_user_applications,
+}
+
+
+# ==================== ReAct Agent 执行器 ====================
+
+SYSTEM_PROMPT = """你是职途AI求职Agent，一个能够自主思考和调用工具的智能体。
+
+你有以下工具可以使用：
+
+{tools}
+
+## 你的工作方式（ReAct 框架）
+
+每次收到用户消息，你必须按以下格式思考和行动：
+
+思考：分析用户的需求，判断需要什么信息、是否需要调用工具。
+行动：工具名称（或"直接回答"）
+参数：JSON格式的参数，如 {{"resume_text": "...", "job_title": "..."}}
+（如果行动是"直接回答"，则不需要参数，直接在下一行写回答内容）
+
+## 关键规则
+
+1. 简单问题（打招呼、闲聊、通用建议）→ 不需要工具，直接回答
+2. 需要分析的问题 → 先思考需要什么信息，调用对应工具
+3. 一次工具调用不够 → 可以继续思考、继续调用其他工具
+4. 拿到足够信息后 → 行动写"任务完成"，然后整理最终回答
+5. 你可以连续调用多个工具，直到你认为信息足够为止
+6. 每次只能调用一个工具
+
+## 示例
+
+用户：帮我看看我的简历有什么问题
+思考：用户想分析简历，但我需要先获取用户的简历内容。先调用get_user_resumes获取简历列表。
+行动：get_user_resumes
+参数：{{"user_id": 1}}
+
+（系统返回简历列表后）
+
+思考：用户有一份简历，ID为1。现在调用analyze_resume分析这份简历的内容。
+行动：analyze_resume
+参数：{{"resume_text": "..."}}
+
+（系统返回分析结果后）
+
+思考：已经获取到简历分析结果，信息充足，可以整理最终回答了。
+行动：任务完成
+（然后整理最终回答给用户）
+"""
+
+
+def _parse_react_response(text: str) -> dict:
+    """解析 LLM 的 ReAct 格式输出"""
+    result = {"thought": "", "action": "", "params": "", "finished": False, "final_answer": ""}
+
+    # 提取思考
+    thought_match = re.search(r"思考[：:]\s*(.+?)(?=行动[：:]|$)", text, re.DOTALL)
+    if thought_match:
+        result["thought"] = thought_match.group(1).strip()
+
+    # 提取行动
+    action_match = re.search(r"行动[：:]\s*(.+?)(?=参数[：:]|思考[：:]|$)", text, re.DOTALL)
+    if action_match:
+        action = action_match.group(1).strip()
+        result["action"] = action
+        if action in ("直接回答", "任务完成", "完成"):
+            result["finished"] = True
+            # 提取最终回答（行动之后的所有内容）
+            final_match = re.search(r"行动[：:]\s*(?:直接回答|任务完成|完成)\s*\n?(.*)", text, re.DOTALL)
+            if final_match:
+                result["final_answer"] = final_match.group(1).strip()
+
+    # 提取参数
+    params_match = re.search(r"参数[：:]\s*(.+?)(?=思考[：:]|行动[：:]|$)", text, re.DOTALL)
+    if params_match:
+        result["params"] = params_match.group(1).strip()
+
+    return result
+
+
+def run_agent(
+    user_message: str,
+    context: str = "",
+    db_path: str = "",
+    max_iterations: int = 5,
+) -> dict:
+    """
+    执行 ReAct Agent 循环。
+
+    返回:
+        {
+            "reply": 最终回答,
+            "iterations": 执行了几轮,
+            "trace": 每轮的思考-行动-观察记录,
+            "tools_used": 使用了哪些工具,
+            "ai_used": 是否用了大模型,
+        }
+    """
+    client = get_ai_client()
+    tools_text = _build_tool_schema_text()
+    system = SYSTEM_PROMPT.replace("{tools}", tools_text)
+
+    # 短期记忆：保存本轮所有思考和工具返回结果
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"上下文：{context}\n\n用户问题：{user_message}"},
+    ]
+
+    trace = []
+    tools_used = []
+
+    # ===== 降级模式：无 API Key 时，用意图识别模拟 Agent 工具选择 =====
+    if not client.api_key:
+        return _run_local_agent(user_message, context, db_path, trace, tools_used)
+
+    for i in range(max_iterations):
+        # 1. LLM 思考并决定下一步行动
+        result = client.chat(messages, temperature=0.4, max_tokens=800)
+        llm_output = result.get("content", "")
+
+        trace.append({
+            "iteration": i + 1,
+            "type": "thought",
+            "content": llm_output,
+        })
+
+        # 2. 解析 LLM 输出
+        parsed = _parse_react_response(llm_output)
+
+        # 3. 判断是否完成
+        if parsed["finished"]:
+            final = parsed["final_answer"] or llm_output
+            # 如果最终回答为空，可能是"直接回答"模式，取全文
+            if not final and parsed["action"] == "直接回答":
+                final = llm_output.split("行动：直接回答")[-1].strip() if "直接回答" in llm_output else llm_output
+            if not final:
+                final = llm_output
+            return {
+                "reply": final,
+                "iterations": i + 1,
+                "trace": trace,
+                "tools_used": tools_used,
+                "ai_used": result.get("success", False),
+            }
+
+        # 4. 执行工具
+        action = parsed["action"]
+        if action not in TOOL_EXECUTORS:
+            # LLM 输出了无法解析的格式或未知工具，直接返回原文
+            return {
+                "reply": llm_output,
+                "iterations": i + 1,
+                "trace": trace,
+                "tools_used": tools_used,
+                "ai_used": result.get("success", False),
+            }
+
+        # 解析参数
+        params = {}
+        if parsed["params"]:
+            try:
+                params = json.loads(parsed["params"])
+            except json.JSONDecodeError:
+                # 尝试提取 key: value 格式
+                params = {"raw": parsed["params"]}
+
+        # 执行工具
+        observation = TOOL_EXECUTORS[action](params, db_path)
+        tools_used.append(action)
+
+        trace.append({
+            "iteration": i + 1,
+            "type": "action",
+            "action": action,
+            "params": params,
+            "observation": observation[:500],
+        })
+
+        # 5. 把工具返回结果塞回上下文，让 LLM 再次思考
+        messages.append({"role": "assistant", "content": llm_output})
+        messages.append({
+            "role": "user",
+            "content": f"工具【{action}】返回结果：\n{observation}\n\n请根据以上结果继续思考，决定下一步行动。如果信息足够，请输出[行动：任务完成]并给出最终回答。",
+        })
+
+    # 超过最大轮次
+    # 让 LLM 做最终总结
+    messages.append({
+        "role": "user",
+        "content": "已达到最大工具调用次数。请根据已有信息，直接给出最终回答。",
+    })
+    final_result = client.chat(messages, temperature=0.5, max_tokens=800)
+    return {
+        "reply": final_result.get("content", "抱歉，处理超时，请重试。"),
+        "iterations": max_iterations,
+        "trace": trace,
+        "tools_used": tools_used,
+        "ai_used": final_result.get("success", False),
+    }
+
+
+# ==================== 降级模式：无 API Key 时的本地 Agent ====================
+
+def _run_local_agent(user_message: str, context: str, db_path: str, trace: list, tools_used: list) -> dict:
+    """
+    无 API Key 时的降级 Agent。
+    用关键词意图识别来决定调用哪些工具，模拟 Agent 的工具选择行为。
+
+    注意：这是降级模式，不是真正的 Agent。
+    真正的 Agent 行为在配置 API Key 后由 LLM 自主决策。
+    """
+    msg = user_message.lower()
+    observations = []
+
+    # 意图识别 → 工具选择（由关键词驱动，非代码写死流程）
+    intent_rules = [
+        (["简历", "分析", "问题", "看看", "诊断", "评估"], "analyze_resume", {"resume_text": context[:2000] if context else ""}),
+        (["匹配", "岗位", "jd", "适合", "合适"], "match_job", {"resume_text": context[:2000] if context else "", "job_title": "目标岗位", "jd": ""}),
+        (["面试题", "练习", "考题", "题目"], "get_interview_question", {"category": "general"}),
+        (["jd", "岗位描述", "招聘", "解析"], "analyze_jd", {"jd_text": user_message[:2000]}),
+        (["薪资", "工资", "待遇", "多少钱"], "evaluate_salary", {"city": "", "experience": "应届生"}),
+        (["投递", "进度", "记录", "申请"], "get_user_applications", {"user_id": 1}),
+        (["简历列表", "我的简历", "有哪些简历"], "get_user_resumes", {"user_id": 1}),
+    ]
+
+    # 检测用户意图，选择工具
+    selected_tools = []
+    for keywords, tool_name, params in intent_rules:
+        if any(kw in msg for kw in keywords):
+            selected_tools.append((tool_name, params))
+
+    if not selected_tools:
+        # 无需工具，直接回答
+        trace.append({
+            "iteration": 1,
+            "type": "thought",
+            "content": "本地降级模式：用户问题不匹配任何工具意图，直接回答。",
+        })
+        return {
+            "reply": _local_chat_response(user_message, context),
+            "iterations": 1,
+            "trace": trace,
+            "tools_used": [],
+            "ai_used": False,
+        }
+
+    # 执行选中的工具（最多3个，防止过度调用）
+    for tool_name, params in selected_tools[:3]:
+        trace.append({
+            "iteration": len(tools_used) + 1,
+            "type": "thought",
+            "content": f"本地降级模式：检测到用户意图匹配 [{tool_name}]，调用该工具。",
+        })
+        trace.append({
+            "iteration": len(tools_used) + 1,
+            "type": "action",
+            "action": tool_name,
+            "params": params,
+        })
+
+        executor = TOOL_EXECUTORS.get(tool_name)
+        if executor:
+            observation = executor(params, db_path)
+            observations.append(f"[{tool_name}] 结果：\n{observation}")
+            tools_used.append(tool_name)
+
+            trace.append({
+                "iteration": len(tools_used),
+                "type": "observation",
+                "observation": observation[:500],
+            })
+
+    # 整理最终回答
+    if observations:
+        reply = "## Agent 分析结果（本地降级模式）\n\n"
+        reply += "我自主选择了以下工具来处理你的问题：\n"
+        reply += " → ".join(tools_used) + "\n\n"
+        reply += "---\n\n"
+        reply += "\n\n".join(observations)
+        reply += "\n\n---\n"
+        reply += "\n💡 配置 API Key 后，Agent 将由大模型自主思考决策，支持更灵活的工具组合和推理。"
+    else:
+        reply = _local_chat_response(user_message, context)
+
+    return {
+        "reply": reply,
+        "iterations": len(tools_used),
+        "trace": trace,
+        "tools_used": tools_used,
+        "ai_used": False,
+    }
+
+
+def _local_chat_response(user_message: str, context: str) -> str:
+    """无工具调用时的本地回答"""
+    msg = user_message.lower()
+    if any(w in msg for w in ["你好", "hi", "hello", "在吗"]):
+        return "你好！我是职途AI求职Agent。我可以帮你：\n1. 分析简历问题\n2. 匹配岗位JD\n3. 获取面试题\n4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n\n告诉我你需要什么帮助？"
+    if any(w in msg for w in ["你是谁", "你能做什么", "功能"]):
+        return "我是职途AI求职Agent，一个能够自主思考和调用工具的智能体。我有8个工具可用，会根据你的问题自主选择合适的工具来处理。\n\n试试问我：[帮我分析简历] [给我一道面试题] [这个岗位适合我吗]"
+    return f"我理解你的问题：{user_message}\n\n目前运行在本地降级模式（未配置API Key），我能做的基础分析有限。配置 API Key 后，我将由大模型自主思考、选择工具、多轮推理，提供更智能的回答。"

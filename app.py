@@ -1653,8 +1653,25 @@ def agent_chat():
     if not message:
         return jsonify({"success": False, "message": "请输入问题"}), 400
     context = data.get("context") or build_agent_runtime_context(data.get("user_id", 1))
-    result = get_ai_client().agent_chat(message, context)
-    return jsonify({"success": True, "reply": result["content"], "ai_used": result["success"], "provider": result["provider"]})
+
+    # ===== 真正的 Agent 执行器（ReAct 框架）=====
+    # 不再代码写死调用哪个模型/工具，而是让 LLM 自主思考、选择工具、决定何时结束
+    from utils.agent import run_agent
+    agent_result = run_agent(
+        user_message=message,
+        context=context,
+        db_path=DB_PATH,
+        max_iterations=5,
+    )
+    return jsonify({
+        "success": True,
+        "reply": agent_result["reply"],
+        "ai_used": agent_result["ai_used"],
+        "agent_trace": agent_result["trace"],       # 思考-行动-观察的完整链路
+        "tools_used": agent_result["tools_used"],    # 使用了哪些工具
+        "iterations": agent_result["iterations"],     # 执行了几轮
+        "provider": "react-agent",
+    })
 
 
 @app.route("/api/career/report/<int:user_id>", methods=["POST"])
@@ -2166,7 +2183,7 @@ def analyze_jd():
         "content": "## JD 解析\n"
         f"- 求职画像：{profile['label']}（模拟面试官：{profile['interviewer']}）\n"
         f"- 核心关键词：{', '.join(keywords) or '需补充 JD'}\n"
-        f"- 能力焦点：{'; '.join(f'{name}: {', '.join(words) or '未明显出现'}' for name, words in list(focus.items())[:3])}\n"
+        f"- 能力焦点：{'; '.join(f'{name}: ' + (', '.join(words) or '未明显出现') for name, words in list(focus.items())[:3])}\n"
         f"- 风险提示：{'；'.join(risk_flags) if risk_flags else '暂未发现明显风险词'}\n"
         "- 面试准备：准备一个项目深挖案例、一个问题定位案例、一个协作沟通案例。\n"
         "- 简历策略：把 JD 高频词写入项目经历，而不是只堆在技能栏。",
