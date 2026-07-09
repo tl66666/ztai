@@ -503,13 +503,13 @@ def _run_local_agent(user_message: str, context: str, db_path: str, trace: list,
     observations = []
 
     intent_rules = [
-        (["简历", "分析", "问题", "看看", "诊断"], "analyze_resume", {"resume_text": context[:2000] if context else ""}),
-        (["匹配", "岗位", "jd", "适合", "合适"], "match_job", {"resume_text": context[:2000] if context else "", "job_title": "目标岗位", "jd": ""}),
-        (["面试题", "练习", "考题", "题目"], "get_interview_question", {"category": "general"}),
-        (["jd", "岗位描述", "招聘", "解析"], "analyze_jd", {"jd_text": user_message[:2000]}),
-        (["薪资", "工资", "待遇", "多少钱"], "evaluate_salary", {"city": "", "experience": "应届生"}),
-        (["投递", "进度", "记录", "申请"], "get_user_applications", {"user_id": 1}),
-        (["简历列表", "我的简历", "有哪些简历"], "get_user_resumes", {"user_id": 1}),
+        (["分析简历", "简历问题", "简历诊断", "简历分析", "看看简历"], "analyze_resume", {"resume_text": context[:2000] if context else ""}),
+        (["匹配岗位", "岗位匹配", "jd匹配", "适合吗", "匹配度"], "match_job", {"resume_text": context[:2000] if context else "", "job_title": "目标岗位", "jd": ""}),
+        (["面试题", "练习面试", "考题", "来一道题", "出一道题"], "get_interview_question", {"category": "general"}),
+        (["解析jd", "岗位描述", "分析jd", "jd分析"], "analyze_jd", {"jd_text": user_message[:2000]}),
+        (["薪资多少", "工资多少", "待遇多少", "评估薪资", "薪资水平"], "evaluate_salary", {"city": "", "experience": "应届生"}),
+        (["投递记录", "投递进度", "申请记录", "投递情况"], "get_user_applications", {"user_id": 1}),
+        (["简历列表", "我的简历", "有哪些简历", "查看简历"], "get_user_resumes", {"user_id": 1}),
     ]
 
     selected_tools = []
@@ -580,10 +580,66 @@ def _run_local_agent(user_message: str, context: str, db_path: str, trace: list,
 
 
 def _local_chat_response(user_message: str, context: str) -> str:
-    """无工具调用时的本地回答"""
-    msg = user_message.lower()
-    if any(w in msg for w in ["你好", "hi", "hello", "在吗"]):
+    """无工具调用时的本地回答 — 支持日期、时间、简单问答等通用能力"""
+    from datetime import datetime
+    import calendar
+
+    msg = user_message.lower().strip()
+
+    # --- 日期/时间类问题 ---
+    weekdays_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    now = datetime.now()
+
+    if any(w in msg for w in ["周几", "星期几", "今天周", "今天星期", "今天几号", "今天多少号", "今天日期", "今天几号"]):
+        if "几号" in msg or "多少号" in msg or "日期" in msg:
+            return f"今天是 {now.year}年{now.month}月{now.day}日，{weekdays_cn[now.weekday()]}。"
+        return f"今天是{weekdays_cn[now.weekday()]}，{now.year}年{now.month}月{now.day}日。"
+
+    if any(w in msg for w in ["几点", "现在时间", "什么时间", "现在几点"]):
+        return f"现在是 {now.strftime('%H:%M')}，{weekdays_cn[now.weekday()]}。"
+
+    if "今天" in msg and ("月" in msg or "日" in msg):
+        return f"今天是 {now.year}年{now.month}月{now.day}日。"
+
+    if "这个月" in msg and ("几" in msg or "什么" in msg):
+        return f"这个月是 {now.month} 月。"
+
+    if "今年" in msg and ("几" in msg or "什么" in msg):
+        return f"今年是 {now.year} 年。"
+
+    # --- 简单问答 ---
+    if any(w in msg for w in ["你好", "hi", "hello", "在吗", "嗨"]):
         return "你好！我是职途AI求职Agent。我可以帮你：\n1. 分析简历问题\n2. 匹配岗位JD\n3. 获取面试题\n4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n7. 查看投递记录\n\n告诉我你需要什么帮助？"
-    if any(w in msg for w in ["你是谁", "你能做什么", "功能", "agent"]):
+
+    if any(w in msg for w in ["你是谁", "你能做什么", "功能", "agent", "智能体", "你是agent吗"]):
         return "我是职途AI求职Agent，一个基于 ReAct 框架的智能体。我有 9 个工具可用，会根据你的问题自主选择合适的工具来处理。\n\n与普通聊天机器人不同，我会先思考需要什么信息，然后选择工具执行，拿到结果后继续思考，直到信息足够才给你最终回答。\n\n试试问我：[帮我分析简历] [给我一道面试题] [这个岗位适合我吗]"
-    return f"我理解你的问题：{user_message}\n\n目前运行在本地降级模式（未配置API Key），我能做的基础分析有限。配置 API Key 后，我将由大模型自主思考、选择工具、多轮推理，提供更智能的回答。"
+
+    if any(w in msg for w in ["谢谢", "感谢", "thx", "thanks"]):
+        return "不客气！有其他问题随时问我。"
+
+    if any(w in msg for w in ["再见", "拜拜", "bye", "88"]):
+        return "再见！祝你求职顺利，Offer 拿到手软！"
+
+    if any(w in msg for w in ["吃饭", "吃什么", "午餐", "晚饭", "早餐"]):
+        return "这个问题超出了我的求职专长范围 😄 不过说到吃饭，吃饱了才有力气面试！建议先填饱肚子，然后回来练习面试题。"
+
+    if any(w in msg for w in ["天气", "下雨", "出太阳"]):
+        return "我暂时没有天气查询工具。建议你看一下手机自带的天气应用。不过不管天气如何，准备好简历和面试题才是正经事！"
+
+    if any(w in msg for w in ["笑话", "讲个", "无聊", "郁闷", "焦虑", "紧张"]):
+        return "面试紧张很正常！给你讲个程序员的笑话：\n\n面试官：你最大的缺点是什么？\n程序员：我太诚实。\n面试官：我不觉得诚实是缺点。\n程序员：我不在乎你怎么想。\n\n好了，笑完回来练习面试吧！"
+
+    # --- 常识类简单问题 ---
+    if "1+1" in msg or "1 + 1" in msg:
+        return "1+1=2。这种问题可以直接问我，不需要调用任何工具。"
+
+    if any(w in msg for w in ["你是ai吗", "你是机器人吗", "你是真人吗", "你是人工智能吗"]):
+        return "我是 AI Agent，不是真人。我基于 ReAct 框架运行，能自主思考和调用工具来帮你解决求职问题。"
+
+    # --- 默认回答 ---
+    # 尝试识别更多简单问题，避免无脑返回模板
+    if len(msg) < 15 and msg.endswith("吗"):
+        # 简单的是非问题
+        return f"这个问题取决于具体情况。作为求职Agent，我更擅长帮你解决简历、面试、岗位匹配等问题。你要不要试试问我这些方面的内容？"
+
+    return f"我理解你的问题：{user_message}\n\n这个问题超出了我的求职工具范围，但我可以帮你做这些：\n1. 分析简历问题\n2. 匹配岗位JD\n3. 获取面试题\n4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n\n要不要试试？"
