@@ -45,6 +45,7 @@ GitHub Pages 展示入口：[https://tl66666.github.io/ztai/static/showcase.html
 ## 核心亮点
 
 - **完整求职闭环**：从简历到 Offer，六步数据流转，每步结果沉淀到下一步，告别割裂工具拼凑。
+- **ReAct Agent 架构**：AI 教练不是固定流程的工作流，而是基于 ReAct 框架的真正 Agent。LLM 自主思考、自主选择 9 个工具、自主决定调几次、自主判断何时完成。有 API Key 时由大模型决策，无 Key 时降级为关键词意图识别。
 - **多模型 AI 网关 + 本地兜底**：接入智谱 GLM、DeepSeek、Kimi 三大供应商，API 可用时智能分析，无 Key 或网络异常时自动回落本地规则，核心功能不受影响。
 - **多专业求职画像**：不只为程序员服务，六大专业方向各自有专属题库、技能雷达和面试追问策略。
 - **语音表达深度分析**：不只是语音转文字，还结合语速、停顿、语气词、逻辑结构给出 11 维度表达评分和改进建议。
@@ -155,6 +156,18 @@ GitHub Pages 展示入口：[https://tl66666.github.io/ztai/static/showcase.html
 - **自定义模型 ID**：前端可以输入自定义模型名称，用于适配后续新增模型。
 - **本地规则兜底**：无 Key、网络失败或 API 异常时，系统仍能基于规则完成简历诊断、JD 匹配、面试反馈和展示流程。
 
+### ReAct Agent 架构
+
+AI 教练模块（`/api/agent/chat`）不是固定调用某个模型的工作流，而是基于 ReAct（Reasoning + Acting）框架的真正 Agent：
+
+- **9 个工具**：简历分析、岗位匹配、面试题获取、回答评估、JD 解析、薪资评估、简历查询、投递查询、追问用户。
+- **自主决策**：LLM 拿到工具清单后，自己判断调不调工具、调哪个、调几次、何时结束。代码只做调度和执行，不规定步骤。
+- **思考-行动-观察循环**：每轮 LLM 先思考，再选择工具执行，拿到观察结果后继续思考，直到信息足够输出最终回答。最多 5 轮。
+- **多轮对话记忆**：保存最近 20 条消息，Agent 能引用之前的对话上下文。
+- **工具错误恢复**：工具执行失败时，错误信息返回给 LLM，由 LLM 决定换工具还是告知用户。
+- **追问能力**：信息不足时，Agent 通过 `ask_user` 工具主动向用户提问，而不是瞎猜。
+- **降级模式**：无 API Key 时用关键词意图识别模拟工具选择，简单问题（日期、时间、闲聊）直接回答。
+
 ### 测试与质量
 
 - **unittest + Flask test client**：覆盖核心后端接口和 AI 客户端配置逻辑。
@@ -211,6 +224,7 @@ jobhunter/
 │   └── test_core_features.py      # 核心功能测试
 └── utils/
     ├── ai_client.py               # 多模型 AI 网关
+    ├── agent.py                   # ReAct Agent 执行器（9 工具 + 多轮记忆 + 降级模式）
     ├── resume_analyzer.py         # 兼容旧版简历分析工具
     ├── job_matcher.py             # 兼容旧版岗位匹配工具
     └── interview_engine.py        # 兼容旧版面试引擎
@@ -289,6 +303,8 @@ python app.py
 - `POST /api/applications`：新增投递记录。
 - `POST /api/applications/<application_id>/coach`：生成投递跟进建议。
 - `POST /api/career/report/<user_id>`：生成求职作战报告。
+- `POST /api/agent/chat`：ReAct Agent 对话（LLM 自主选择工具、多轮推理）。
+- `POST /api/agent/clear-memory`：清空 Agent 对话记忆。
 - `POST /api/config/model`：保存模型配置。
 
 ## 测试

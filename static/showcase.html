@@ -898,6 +898,11 @@
           <p>接入智谱 GLM、DeepSeek、Kimi 三大供应商，API 可用时智能分析，无 Key 时自动回落本地规则，核心功能不受影响。</p>
         </article>
         <article class="card liquid highlight-card fade-up">
+          <span class="hl-icon">🤖</span>
+          <h3>ReAct Agent 自主决策</h3>
+          <p>AI 教练不是固定流程的工作流，而是基于 ReAct 框架的真正 Agent。LLM 自主思考、选择 9 个工具、决定调几次、判断何时完成。代码只做调度，不规定步骤。</p>
+        </article>
+        <article class="card liquid highlight-card fade-up">
           <span class="hl-icon">🎯</span>
           <h3>多专业求职画像</h3>
           <p>支持计算机、运营、市场、财务、教育、行政人事六大方向，题库、技能雷达和面试追问随方向自动切换。</p>
@@ -947,14 +952,16 @@
 
     <section id="agent" class="wrap section grid two">
       <article class="card liquid fade-up">
-        <p class="eyebrow">Agent Ability</p>
-        <h2>后端智能体能力</h2>
+        <p class="eyebrow">Agent Architecture</p>
+        <h2>ReAct Agent 智能体</h2>
         <ul>
-          <li>统一封装模型供应商、模型 ID、API Key、请求参数和返回结构。</li>
-          <li>按任务类型构造提示词：简历分析、JD 优化、面试追问、语音表达、投递复盘。</li>
-          <li>AI 失败时自动回落本地规则，不影响核心流程使用。</li>
-          <li>面试会话保存阶段状态，支持按流程追问，而不是普通闲聊。</li>
-          <li>针对“不知道、跳过、下一题”等回答做幻觉控制，给出合理反馈。</li>
+          <li><b>9 个工具</b>：简历分析、岗位匹配、面试题、回答评估、JD 解析、薪资评估、简历查询、投递查询、追问用户。</li>
+          <li><b>自主决策</b>：LLM 拿到工具清单后自己判断调不调、调哪个、调几次、何时结束。</li>
+          <li><b>思考-行动-观察循环</b>：每轮先思考再执行工具，拿到结果后继续推理，最多 5 轮。</li>
+          <li><b>多轮对话记忆</b>：保存最近 20 条消息，Agent 能引用之前的对话上下文。</li>
+          <li><b>工具错误恢复</b>：工具失败时把错误返回给 LLM，由模型决定换工具还是告知用户。</li>
+          <li><b>追问能力</b>：信息不足时 Agent 主动向用户提问，而不是瞎猜。</li>
+          <li><b>降级模式</b>：无 API Key 时用关键词意图识别模拟工具选择，简单问题直接回答。</li>
         </ul>
       </article>
       <article class="card liquid fade-up">
