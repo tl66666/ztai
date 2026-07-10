@@ -900,7 +900,7 @@
         <article class="card liquid highlight-card fade-up">
           <span class="hl-icon">🤖</span>
           <h3>ReAct Agent 自主决策</h3>
-          <p>AI 教练不是固定流程的工作流，而是基于 ReAct 框架的真正 Agent。LLM 自主思考、选择 12 个工具（含联网搜索和天气查询）、决定调几次、判断何时完成。代码只做调度，不规定步骤。</p>
+          <p>AI 教练不是固定流程的工作流，而是基于 ReAct 框架的真正 Agent。LLM 自主思考、选择 9 个工具、决定调几次、判断何时完成。知识类问题由 LLM 自身能力直接回答。代码只做调度，不规定步骤。</p>
         </article>
         <article class="card liquid highlight-card fade-up">
           <span class="hl-icon">🎯</span>
@@ -955,9 +955,9 @@
         <p class="eyebrow">Agent Architecture</p>
         <h2>ReAct Agent 智能体</h2>
         <ul>
-          <li><b>12 个工具</b>：简历分析、岗位匹配、面试题、回答评估、JD 解析、薪资评估、简历查询、投递查询、追问用户、联网搜索、天气查询、网页抓取。</li>
+          <li><b>9 个工具</b>：简历分析、岗位匹配、面试题、回答评估、JD 解析、薪资评估、简历查询、投递查询、追问用户。全部聚焦求职场景。</li>
           <li><b>自主决策</b>：LLM 拿到工具清单后自己判断调不调、调哪个、调几次、何时结束。</li>
-          <li><b>外部连接</b>：联网搜索（DuckDuckGo + Wikipedia）、天气查询（Open-Meteo）、网页抓取，Agent 能获取实时外部信息。</li>
+          <li><b>知识内化</b>：知识类问题（什么是 Docker、解释某个概念）由 LLM 自身能力直接回答，不需要外部搜索 API。</li>
           <li><b>思考-行动-观察循环</b>：每轮先思考再执行工具，拿到结果后继续推理，最多 5 轮。</li>
           <li><b>多轮对话记忆</b>：保存最近 20 条消息，Agent 能引用之前的对话上下文。</li>
           <li><b>工具错误恢复</b>：工具失败时把错误返回给 LLM，由模型决定换工具还是告知用户。</li>
