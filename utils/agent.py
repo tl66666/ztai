@@ -100,6 +100,16 @@ TOOL_DEFINITIONS = [
         "parameters": "question (必填, 想问用户的问题)",
     },
     {
+        "name": "generate_career_report",
+        "description": "汇总用户所有求职数据（简历、匹配记录、面试记录、投递记录），生成一份结构化的求职作战报告。当用户想看整体求职进度、需要阶段性总结时使用。",
+        "parameters": "user_id (选填, 默认1)",
+    },
+    {
+        "name": "get_dashboard",
+        "description": "获取用户求职看板数据，包括简历数量、面试次数、投递数量、平均匹配分等统计信息。当用户想快速了解自己整体情况时使用。",
+        "parameters": "user_id (选填, 默认1)",
+    },
+    {
         "name": "web_search",
         "description": "联网搜索互联网信息，获取实时面试经验、公司评价、技术趋势、薪资行情等。当用户问的问题需要最新信息或你自身知识不足时使用。比如'字节跳动面试经验''2024年Python就业前景'。",
         "parameters": "query (必填, 搜索关键词)",
@@ -237,6 +247,102 @@ def _exec_ask_user(params: dict, db_path: str) -> str:
     return f"[需要用户补充信息] {question}"
 
 
+def _exec_generate_career_report(params: dict, db_path: str) -> str:
+    """生成求职作战报告：汇总简历、匹配、面试、投递数据，调 AI 生成结构化报告"""
+    user_id = int(params.get("user_id", 1))
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        resumes = conn.execute(
+            "SELECT title, content, updated_at FROM resumes WHERE user_id=? ORDER BY updated_at DESC LIMIT 3", (user_id,)
+        ).fetchall()
+        matches = conn.execute(
+            "SELECT job_title, match_score, created_at FROM job_matches WHERE user_id=? ORDER BY created_at DESC LIMIT 5", (user_id,)
+        ).fetchall()
+        interviews = conn.execute(
+            "SELECT job_title, score, feedback, created_at FROM interviews WHERE user_id=? ORDER BY created_at DESC LIMIT 5", (user_id,)
+        ).fetchall()
+        apps = conn.execute(
+            "SELECT company, job_title, status, city FROM job_applications WHERE user_id=? ORDER BY updated_at DESC LIMIT 8", (user_id,)
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        return f"[工具错误] 查询数据失败：{e}"
+
+    # 构建报告素材
+    parts = []
+    if resumes:
+        parts.append("已保存简历：" + "、".join(r["title"] for r in resumes))
+    else:
+        parts.append("暂无简历，第一优先级是录入一份可分析简历。")
+
+    if matches:
+        avg = round(sum(r["match_score"] or 0 for r in matches) / len(matches))
+        parts.append(f"最近{len(matches)}次JD匹配平均分约{avg}")
+    else:
+        parts.append("暂无JD匹配记录")
+
+    if interviews:
+        avg = round(sum(r["score"] or 0 for r in interviews) / len(interviews))
+        parts.append(f"最近{len(interviews)}次面试训练平均分约{avg}")
+    else:
+        parts.append("暂无模拟面试记录")
+
+    if apps:
+        parts.append(f"投递记录{len(apps)}条：" + "、".join(f"{r['company']}({r['status']})" for r in apps[:4]))
+    else:
+        parts.append("暂无投递记录")
+
+    # 调 AI 生成结构化报告
+    client = get_ai_client()
+    if client.api_key:
+        result = client.chat([
+            {"role": "system", "content": "你是求职策略教练。请把用户当前求职数据整理成一份结构清晰、行动明确的中文作战报告。包含：当前进度、优势分析、短板提醒、下一步行动建议。"},
+            {"role": "user", "content": "\n".join(parts)},
+        ], temperature=0.35, max_tokens=1100)
+        if result.get("success"):
+            return result["content"]
+
+    # 本地兜底报告
+    return f"## 求职作战报告（本地版）\n\n" + "\n\n".join(f"- {p}" for p in parts) + "\n\n---\n配置 API Key 后可获得 AI 生成的深度分析报告。"
+
+
+def _exec_get_dashboard(params: dict, db_path: str) -> str:
+    """获取求职看板统计数据"""
+    user_id = int(params.get("user_id", 1))
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        resume_count = conn.execute("SELECT COUNT(*) as c FROM resumes WHERE user_id=?", (user_id,)).fetchone()["c"]
+        match_count = conn.execute("SELECT COUNT(*) as c FROM job_matches WHERE user_id=?", (user_id,)).fetchone()["c"]
+        interview_count = conn.execute("SELECT COUNT(*) as c FROM interviews WHERE user_id=?", (user_id,)).fetchone()["c"]
+        app_count = conn.execute("SELECT COUNT(*) as c FROM job_applications WHERE user_id=?", (user_id,)).fetchone()["c"]
+
+        avg_match = 0
+        if match_count > 0:
+            avg_match = round(conn.execute("SELECT AVG(match_score) as a FROM job_matches WHERE user_id=?", (user_id,)).fetchone()["a"] or 0)
+        avg_score = 0
+        if interview_count > 0:
+            avg_score = round(conn.execute("SELECT AVG(score) as a FROM interviews WHERE user_id=?", (user_id,)).fetchone()["a"] or 0)
+
+        # 投递状态分布
+        status_rows = conn.execute(
+            "SELECT status, COUNT(*) as c FROM job_applications WHERE user_id=? GROUP BY status", (user_id,)
+        ).fetchall()
+        conn.close()
+
+        status_line = "、".join(f"{r['status']}{r['c']}个" for r in status_rows) if status_rows else "无"
+        return (
+            f"求职看板统计：\n"
+            f"简历：{resume_count}份\n"
+            f"JD匹配：{match_count}次（平均{avg_match}分）\n"
+            f"模拟面试：{interview_count}次（平均{avg_score}分）\n"
+            f"投递记录：{app_count}条（{status_line}）"
+        )
+    except Exception as e:
+        return f"[工具错误] 查询失败：{e}"
+
+
 def _exec_web_search(params: dict, db_path: str) -> str:
     """联网搜索：多源搜索，DuckDuckGo + Wikipedia（中英文）"""
     import requests as req
@@ -347,6 +453,8 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "get_user_resumes": _exec_get_user_resumes,
     "get_user_applications": _exec_get_user_applications,
     "ask_user": _exec_ask_user,
+    "generate_career_report": _exec_generate_career_report,
+    "get_dashboard": _exec_get_dashboard,
     "web_search": _exec_web_search,
     "fetch_webpage": _exec_fetch_webpage,
 }
@@ -625,6 +733,9 @@ def _run_local_agent(user_message: str, context: str, db_path: str, trace: list,
         (["薪资多少", "工资多少", "待遇多少", "评估薪资", "薪资水平"], "evaluate_salary", {"city": "", "experience": "应届生"}),
         (["投递记录", "投递进度", "申请记录", "投递情况"], "get_user_applications", {"user_id": 1}),
         (["简历列表", "我的简历", "有哪些简历", "查看简历"], "get_user_resumes", {"user_id": 1}),
+        # 求职报告和看板
+        (["作战报告", "求职报告", "阶段总结", "进度报告", "总结一下"], "generate_career_report", {"user_id": 1}),
+        (["看板", "统计", "整体情况", "总览", "概览", "数据汇总"], "get_dashboard", {"user_id": 1}),
         # 外部工具：联网搜索（面试经验、公司评价、技术趋势等实时信息）
         (["搜索", "查一下", "查查", "百度", "谷歌", "最新", "新闻", "面试经验", "公司评价", "前景", "趋势", "行情"], "web_search", {"query": user_message[:100]}),
     ]
@@ -728,7 +839,7 @@ def _local_chat_response(user_message: str, context: str) -> str:
     if intent == "identity":
         return (
             "我是职途AI求职Agent，一个基于 ReAct 框架的智能体。\n\n"
-            "我有 11 个工具可用，会根据你的问题自主选择合适的工具来处理。\n\n"
+            "我有 13 个工具可用，会根据你的问题自主选择合适的工具来处理。\n\n"
             "与普通聊天机器人不同，我会先思考需要什么信息，然后选择工具执行，"
             "拿到结果后继续思考，直到信息足够才给你最终回答。\n\n"
             "试试问我：[帮我分析简历] [给我一道面试题] [这个岗位适合我吗]"
@@ -789,7 +900,7 @@ def _local_chat_response(user_message: str, context: str) -> str:
         f"我理解你的问题：{user_message}\n\n"
         "这个问题超出了我的求职工具范围，但我可以帮你做这些：\n"
         "1. 分析简历问题\n2. 匹配岗位JD\n3. 获取面试题\n"
-        "4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n7. 联网搜索\n\n"
+        "4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n7. 求职看板统计\n8. 生成作战报告\n9. 联网搜索\n\n"
         "要不要试试？"
     )
 

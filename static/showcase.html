@@ -900,7 +900,7 @@
         <article class="card liquid highlight-card fade-up">
           <span class="hl-icon">🤖</span>
           <h3>ReAct Agent 自主决策</h3>
-          <p>AI 教练不是固定流程的工作流，而是基于 ReAct 框架的真正 Agent。LLM 自主思考、选择 11 个工具（9 内部 + 2 外部）、决定调几次、判断何时完成。代码只做调度，不规定步骤。</p>
+          <p>AI 教练不是固定流程的工作流，而是基于 ReAct 框架的真正 Agent。LLM 自主思考、选择 13 个工具（11 内部 + 2 外部）、决定调几次、判断何时完成。代码只做调度，不规定步骤。</p>
         </article>
         <article class="card liquid highlight-card fade-up">
           <span class="hl-icon">🎯</span>
@@ -955,7 +955,7 @@
         <p class="eyebrow">Agent Architecture</p>
         <h2>ReAct Agent 智能体</h2>
         <ul>
-          <li><b>11 个工具</b>：9 个内部工具（简历分析、岗位匹配、面试题、回答评估、JD 解析、薪资评估、简历查询、投递查询、追问用户）+ 2 个外部工具（联网搜索、网页抓取）。</li>
+          <li><b>13 个工具</b>：11 个内部工具（简历分析、岗位匹配、面试题、回答评估、JD 解析、薪资评估、简历查询、投递查询、追问用户、求职报告、看板统计）+ 2 个外部工具（联网搜索、网页抓取）。</li>
           <li><b>自主决策</b>：LLM 拿到工具清单后自己判断调不调、调哪个、调几次、何时结束。</li>
           <li><b>内外结合</b>：知识类问题由 LLM 自身能力直接回答；实时信息（面试经验、公司评价、技术趋势）通过联网搜索获取，搜索结果可用网页抓取深入阅读。</li>
           <li><b>思考-行动-观察循环</b>：每轮先思考再执行工具，拿到结果后继续推理，最多 5 轮。</li>
@@ -967,13 +967,13 @@
       </article>
       <article class="card liquid fade-up">
         <p class="eyebrow">Tool Registry</p>
-        <h2>11 个工具清单</h2>
+        <h2>13 个工具清单</h2>
         <table class="api-table">
           <thead>
             <tr><th>类型</th><th>工具名</th><th>能力</th></tr>
           </thead>
           <tbody>
-            <tr><td rowspan="9">内部</td><td>analyze_resume</td><td>简历五维诊断</td></tr>
+            <tr><td rowspan="11">内部</td><td>analyze_resume</td><td>简历五维诊断</td></tr>
             <tr><td>match_job</td><td>简历-JD 匹配度评分</td></tr>
             <tr><td>get_interview_question</td><td>题库随机抽题</td></tr>
             <tr><td>evaluate_answer</td><td>回答五维评分</td></tr>
@@ -982,6 +982,8 @@
             <tr><td>get_user_resumes</td><td>查询用户简历</td></tr>
             <tr><td>get_user_applications</td><td>查询投递记录</td></tr>
             <tr><td>ask_user</td><td>信息不足时追问</td></tr>
+            <tr><td>generate_career_report</td><td>求职作战报告生成</td></tr>
+            <tr><td>get_dashboard</td><td>求职看板统计</td></tr>
             <tr><td rowspan="2">外部</td><td>web_search</td><td>联网搜索（DuckDuckGo + Wikipedia）</td></tr>
             <tr><td>fetch_webpage</td><td>网页内容抓取</td></tr>
           </tbody>
