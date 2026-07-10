@@ -99,6 +99,16 @@ TOOL_DEFINITIONS = [
         "description": "当信息不足、需要用户补充更多细节时使用。比如用户说'帮我分析简历'但没提供简历内容。",
         "parameters": "question (必填, 想问用户的问题)",
     },
+    {
+        "name": "web_search",
+        "description": "联网搜索互联网信息，获取实时面试经验、公司评价、技术趋势、薪资行情等。当用户问的问题需要最新信息或你自身知识不足时使用。比如'字节跳动面试经验''2024年Python就业前景'。",
+        "parameters": "query (必填, 搜索关键词)",
+    },
+    {
+        "name": "fetch_webpage",
+        "description": "抓取指定网页的文本内容，用于深入了解某个链接的详细信息。当搜索结果中某个网页需要进一步阅读时使用。",
+        "parameters": "url (必填, 网页地址)",
+    },
 ]
 
 
@@ -227,6 +237,105 @@ def _exec_ask_user(params: dict, db_path: str) -> str:
     return f"[需要用户补充信息] {question}"
 
 
+def _exec_web_search(params: dict, db_path: str) -> str:
+    """联网搜索：多源搜索，DuckDuckGo + Wikipedia（中英文）"""
+    import requests as req
+
+    query = params.get("query", "").strip()
+    if not query:
+        return "[工具错误] 缺少 query 参数"
+
+    results = []
+
+    # 源1：DuckDuckGo Instant Answer API（免费、无需 Key）
+    try:
+        resp = req.get(
+            "https://api.duckduckgo.com/",
+            params={"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"},
+            timeout=5,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            abstract = data.get("Abstract", "")
+            if abstract:
+                results.append(f"[摘要] {abstract}")
+            for topic in (data.get("RelatedTopics") or [])[:5]:
+                if isinstance(topic, dict) and topic.get("Text"):
+                    results.append(f"[相关] {topic['Text'][:200]}")
+            definition = data.get("Definition", "")
+            if definition:
+                results.append(f"[定义] {definition}")
+    except Exception:
+        pass
+
+    # 源2：Wikipedia 中文
+    if not results:
+        try:
+            resp2 = req.get(
+                "https://zh.wikipedia.org/api/rest_v1/page/summary/" + req.utils.quote(query),
+                timeout=5,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if resp2.status_code == 200:
+                extract = resp2.json().get("extract", "")
+                if extract:
+                    results.append(f"[百科] {extract[:500]}")
+        except Exception:
+            pass
+
+    # 源3：Wikipedia 英文
+    if not results:
+        try:
+            resp3 = req.get(
+                "https://en.wikipedia.org/api/rest_v1/page/summary/" + req.utils.quote(query),
+                timeout=5,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if resp3.status_code == 200:
+                extract = resp3.json().get("extract", "")
+                if extract:
+                    results.append(f"[Encyclopedia] {extract[:500]}")
+        except Exception:
+            pass
+
+    if not results:
+        return f"搜索未找到关于「{query}」的信息。可能是网络受限，建议换个关键词或稍后再试。"
+
+    return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
+
+
+def _exec_fetch_webpage(params: dict, db_path: str) -> str:
+    """网页抓取：获取指定 URL 的文本内容"""
+    import requests as req
+    import re as _re
+
+    url = params.get("url", "").strip()
+    if not url:
+        return "[工具错误] 缺少 url 参数"
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    try:
+        resp = req.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code != 200:
+            return f"抓取失败：HTTP {resp.status_code}"
+
+        html = resp.text
+        html = _re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=_re.DOTALL | _re.IGNORECASE)
+        text = _re.sub(r"<[^>]+>", " ", html)
+        text = _re.sub(r"\s+", " ", text).strip()
+
+        if not text:
+            return "抓取到了网页但未提取到文本内容"
+        if len(text) > 1500:
+            text = text[:1500] + "...[内容已截断]"
+
+        return f"网页内容（{url}）：\n\n{text}"
+    except Exception as e:
+        return f"网页抓取失败：{e}"
+
+
 
 TOOL_EXECUTORS: Dict[str, Callable] = {
     "analyze_resume": _exec_analyze_resume,
@@ -238,6 +347,8 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "get_user_resumes": _exec_get_user_resumes,
     "get_user_applications": _exec_get_user_applications,
     "ask_user": _exec_ask_user,
+    "web_search": _exec_web_search,
+    "fetch_webpage": _exec_fetch_webpage,
 }
 
 
@@ -269,6 +380,8 @@ SYSTEM_PROMPT = """你是职途AI求职Agent，一个能够自主思考和调用
 7. 如果工具返回 [工具错误] 或 [需要用户补充信息] → 立即输出"行动：任务完成"，把问题转达给用户
 8. 如果用户问题不完整（比如"帮我分析简历"但没给简历内容）→ 使用 ask_user 工具向用户提问
 9. 知识类问题（什么是Docker、解释某个概念）→ 直接用你自身知识回答，不需要调用工具
+10. 需要实时信息（面试经验、公司评价、技术趋势、薪资行情）→ 使用 web_search 联网搜索
+11. 搜索结果中某个网页需要深入阅读 → 使用 fetch_webpage 抓取具体内容
 
 ## 示例
 
@@ -512,6 +625,8 @@ def _run_local_agent(user_message: str, context: str, db_path: str, trace: list,
         (["薪资多少", "工资多少", "待遇多少", "评估薪资", "薪资水平"], "evaluate_salary", {"city": "", "experience": "应届生"}),
         (["投递记录", "投递进度", "申请记录", "投递情况"], "get_user_applications", {"user_id": 1}),
         (["简历列表", "我的简历", "有哪些简历", "查看简历"], "get_user_resumes", {"user_id": 1}),
+        # 外部工具：联网搜索（面试经验、公司评价、技术趋势等实时信息）
+        (["搜索", "查一下", "查查", "百度", "谷歌", "最新", "新闻", "面试经验", "公司评价", "前景", "趋势", "行情"], "web_search", {"query": user_message[:100]}),
     ]
 
     selected_tools = []
@@ -636,10 +751,10 @@ def _local_chat_response(user_message: str, context: str) -> str:
         return "1+1=2。这种问题可以直接问我，不需要调用任何工具。"
 
     if any(w in msg for w in ["你是ai吗", "你是机器人吗", "你是真人吗", "你是人工智能吗"]):
-        return "我是 AI Agent，不是真人。我基于 ReAct 框架运行，能自主思考、调用 9 个工具来帮你解决求职问题。"
+        return "我是 AI Agent，不是真人。我基于 ReAct 框架运行，能自主思考、调用 11 个工具（含联网搜索和网页抓取）来帮你解决求职问题。"
 
     # --- 默认回答 ---
     if len(msg) < 15 and msg.endswith("吗"):
         return f"这个问题取决于具体情况。作为求职Agent，我更擅长帮你解决简历、面试、岗位匹配等问题。你要不要试试问我这些方面的内容？"
 
-    return f"我理解你的问题：{user_message}\n\n这个问题超出了我的求职工具范围，但我可以帮你做这些：\n1. 分析简历问题\n2. 匹配岗位JD\n3. 获取面试题\n4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n\n要不要试试？"
+    return f"我理解你的问题：{user_message}\n\n这个问题超出了我的求职工具范围，但我可以帮你做这些：\n1. 分析简历问题\n2. 匹配岗位JD\n3. 获取面试题\n4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n7. 联网搜索面试经验/公司评价\n\n要不要试试？"
