@@ -99,6 +99,21 @@ TOOL_DEFINITIONS = [
         "description": "当信息不足、需要用户补充更多细节时使用。比如用户说'帮我分析简历'但没提供简历内容。",
         "parameters": "question (必填, 想问用户的问题)",
     },
+    {
+        "name": "web_search",
+        "description": "联网搜索互联网信息，获取实时新闻、技术文档、公司信息、面试经验等外部内容。当用户问的问题需要最新信息或你自身知识不足时使用。",
+        "parameters": "query (必填, 搜索关键词)",
+    },
+    {
+        "name": "get_weather",
+        "description": "查询指定城市的实时天气信息，包括温度、天气状况、风力、湿度。当用户问天气相关问题时使用。",
+        "parameters": "city (必填, 城市名如 北京/上海/深圳)",
+    },
+    {
+        "name": "fetch_webpage",
+        "description": "抓取指定网页的文本内容，用于深入了解某个链接的详细信息。当搜索结果中某个网页需要进一步阅读时使用。",
+        "parameters": "url (必填, 网页地址)",
+    },
 ]
 
 
@@ -227,6 +242,187 @@ def _exec_ask_user(params: dict, db_path: str) -> str:
     return f"[需要用户补充信息] {question}"
 
 
+def _exec_web_search(params: dict, db_path: str) -> str:
+    """联网搜索：多源搜索，DuckDuckGo + Wikipedia + 百度百科"""
+    import requests as req
+
+    query = params.get("query", "").strip()
+    if not query:
+        return "[工具错误] 缺少 query 参数"
+
+    results = []
+
+    # 方式1：DuckDuckGo Instant Answer API（免费、无需 Key，超时3秒）
+    try:
+        resp = req.get(
+            "https://api.duckduckgo.com/",
+            params={"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"},
+            timeout=3,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            abstract = data.get("Abstract", "")
+            if abstract:
+                results.append(f"[摘要] {abstract}")
+            for topic in (data.get("RelatedTopics") or [])[:5]:
+                if isinstance(topic, dict) and topic.get("Text"):
+                    results.append(f"[相关] {topic['Text'][:200]}")
+            definition = data.get("Definition", "")
+            if definition:
+                results.append(f"[定义] {definition}")
+    except Exception:
+        pass
+
+    # 方式2：Wikipedia 中文百科（超时3秒）
+    if not results:
+        try:
+            resp2 = req.get(
+                "https://zh.wikipedia.org/api/rest_v1/page/summary/" + req.utils.quote(query),
+                timeout=3,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if resp2.status_code == 200:
+                wiki = resp2.json()
+                extract = wiki.get("extract", "")
+                if extract:
+                    results.append(f"[百科] {extract[:500]}")
+        except Exception:
+            pass
+
+    # 方式3：Wikipedia 英文（超时3秒）
+    if not results:
+        try:
+            resp3 = req.get(
+                "https://en.wikipedia.org/api/rest_v1/page/summary/" + req.utils.quote(query),
+                timeout=3,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if resp3.status_code == 200:
+                wiki = resp3.json()
+                extract = wiki.get("extract", "")
+                if extract:
+                    results.append(f"[Encyclopedia] {extract[:500]}")
+        except Exception:
+            pass
+
+    if not results:
+        return f"搜索未找到关于「{query}」的相关信息。可能是网络受限，建议换个关键词或稍后再试。"
+
+    return f"搜索「{query}」的结果：\n\n" + "\n\n".join(results)
+
+
+def _exec_get_weather(params: dict, db_path: str) -> str:
+    """天气查询：使用 Open-Meteo 免费 API（无需 Key）"""
+    import requests as req
+
+    city = params.get("city", "").strip()
+    if not city:
+        return "[工具错误] 缺少 city 参数"
+
+    # 第1步：城市名 → 经纬度（用 Open-Meteo Geocoding API）
+    try:
+        geo_resp = req.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": city, "count": 1, "language": "zh", "format": "json"},
+            timeout=8,
+        )
+        if geo_resp.status_code != 200:
+            return f"查询「{city}」天气失败：地理编码服务无响应"
+
+        geo = geo_resp.json()
+        locations = geo.get("results", [])
+        if not locations:
+            return f"未找到城市「{city}」，请确认城市名"
+
+        loc = locations[0]
+        lat = loc["latitude"]
+        lon = loc["longitude"]
+        full_name = loc.get("name", city)
+        if loc.get("admin1"):
+            full_name += f"（{loc['admin1']}）"
+    except Exception as e:
+        return f"地理编码失败：{e}"
+
+    # 第2步：经纬度 → 天气（用 Open-Meteo Forecast API）
+    try:
+        weather_resp = req.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m",
+                "timezone": "Asia/Shanghai",
+            },
+            timeout=8,
+        )
+        if weather_resp.status_code != 200:
+            return f"查询「{city}」天气失败：天气服务无响应"
+
+        w = weather_resp.json().get("current", {})
+        temp = w.get("temperature_2m", "?")
+        humidity = w.get("relative_humidity_2m", "?")
+        wind = w.get("wind_speed_10m", "?")
+        code = w.get("weather_code", 0)
+
+        # WMO 天气码 → 中文描述
+        weather_map = {
+            0: "晴", 1: "大致晴朗", 2: "局部多云", 3: "阴",
+            45: "雾", 48: "雾凇", 51: "毛毛雨", 53: "毛毛雨", 55: "毛毛雨",
+            61: "小雨", 63: "中雨", 65: "大雨", 71: "小雪", 73: "中雪", 75: "大雪",
+            80: "阵雨", 81: "中阵雨", 82: "大阵雨", 95: "雷暴", 96: "雷暴夹冰雹", 99: "雷暴夹冰雹",
+        }
+        weather_text = weather_map.get(code, f"天气码{code}")
+
+        return (
+            f"📍 {full_name} 实时天气\n"
+            f"🌡 温度：{temp}°C\n"
+            f"🌤 天气：{weather_text}\n"
+            f"💧 湿度：{humidity}%\n"
+            f"💨 风速：{wind} km/h"
+        )
+    except Exception as e:
+        return f"天气查询失败：{e}"
+
+
+def _exec_fetch_webpage(params: dict, db_path: str) -> str:
+    """网页抓取：获取指定 URL 的文本内容"""
+    import requests as req
+    import re as _re
+
+    url = params.get("url", "").strip()
+    if not url:
+        return "[工具错误] 缺少 url 参数"
+
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    try:
+        resp = req.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code != 200:
+            return f"抓取失败：HTTP {resp.status_code}"
+
+        html = resp.text
+        # 简易 HTML → 纯文本
+        # 去掉 script 和 style
+        html = _re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=_re.DOTALL | _re.IGNORECASE)
+        # 去掉所有标签
+        text = _re.sub(r"<[^>]+>", " ", html)
+        # 去掉多余空白
+        text = _re.sub(r"\s+", " ", text).strip()
+
+        if not text:
+            return f"抓取到了网页但未提取到文本内容"
+
+        # 截断到 1500 字
+        if len(text) > 1500:
+            text = text[:1500] + "...[内容已截断]"
+
+        return f"网页内容（{url}）：\n\n{text}"
+    except Exception as e:
+        return f"网页抓取失败：{e}"
+
+
 TOOL_EXECUTORS: Dict[str, Callable] = {
     "analyze_resume": _exec_analyze_resume,
     "match_job": _exec_match_job,
@@ -237,6 +433,9 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "get_user_resumes": _exec_get_user_resumes,
     "get_user_applications": _exec_get_user_applications,
     "ask_user": _exec_ask_user,
+    "web_search": _exec_web_search,
+    "get_weather": _exec_get_weather,
+    "fetch_webpage": _exec_fetch_webpage,
 }
 
 
@@ -267,6 +466,9 @@ SYSTEM_PROMPT = """你是职途AI求职Agent，一个能够自主思考和调用
 6. 每次只能调用一个工具
 7. 如果工具返回 [工具错误] 或 [需要用户补充信息] → 立即输出"行动：任务完成"，把问题转达给用户
 8. 如果用户问题不完整（比如"帮我分析简历"但没给简历内容）→ 使用 ask_user 工具向用户提问
+9. 需要最新信息、外部知识、新闻资讯 → 使用 web_search 联网搜索
+10. 需要天气信息 → 使用 get_weather 查询实时天气
+11. 需要深入阅读某个网页 → 先 web_search 搜索，再用 fetch_webpage 抓取具体网页
 
 ## 示例
 
@@ -510,6 +712,10 @@ def _run_local_agent(user_message: str, context: str, db_path: str, trace: list,
         (["薪资多少", "工资多少", "待遇多少", "评估薪资", "薪资水平"], "evaluate_salary", {"city": "", "experience": "应届生"}),
         (["投递记录", "投递进度", "申请记录", "投递情况"], "get_user_applications", {"user_id": 1}),
         (["简历列表", "我的简历", "有哪些简历", "查看简历"], "get_user_resumes", {"user_id": 1}),
+        # 外部工具：联网搜索
+        (["搜索", "查一下", "查查", "百度", "谷歌", "最新", "新闻", "是什么", "是什么意思", "什么是", "介绍", "解释一下", "告诉我"], "web_search", {"query": user_message[:100]}),
+        # 外部工具：天气查询
+        (["天气", "气温", "下雨吗", "冷吗", "热吗", "穿什么"], "get_weather", {"city": _extract_city(msg)}),
     ]
 
     selected_tools = []
@@ -579,6 +785,18 @@ def _run_local_agent(user_message: str, context: str, db_path: str, trace: list,
     }
 
 
+def _extract_city(msg: str) -> str:
+    """从用户消息中提取城市名"""
+    cities = ["北京", "上海", "深圳", "广州", "杭州", "成都", "武汉", "南京", "西安", "重庆",
+              "苏州", "天津", "长沙", "青岛", "大连", "厦门", "无锡", "合肥", "郑州", "济南",
+              "沈阳", "哈尔滨", "长春", "昆明", "贵阳", "南宁", "兰州", "太原", "石家庄", "福州",
+              "南昌", "珠海", "东莞", "佛山", "宁波", "温州"]
+    for c in cities:
+        if c in msg:
+            return c
+    return "北京"  # 默认
+
+
 def _local_chat_response(user_message: str, context: str) -> str:
     """无工具调用时的本地回答 — 支持日期、时间、简单问答等通用能力"""
     from datetime import datetime
@@ -624,7 +842,7 @@ def _local_chat_response(user_message: str, context: str) -> str:
         return "这个问题超出了我的求职专长范围 😄 不过说到吃饭，吃饱了才有力气面试！建议先填饱肚子，然后回来练习面试题。"
 
     if any(w in msg for w in ["天气", "下雨", "出太阳"]):
-        return "我暂时没有天气查询工具。建议你看一下手机自带的天气应用。不过不管天气如何，准备好简历和面试题才是正经事！"
+        return "我可以帮你查实时天气！请告诉我你想查哪个城市的天气，比如'北京天气怎么样'。"
 
     if any(w in msg for w in ["笑话", "讲个", "无聊", "郁闷", "焦虑", "紧张"]):
         return "面试紧张很正常！给你讲个程序员的笑话：\n\n面试官：你最大的缺点是什么？\n程序员：我太诚实。\n面试官：我不觉得诚实是缺点。\n程序员：我不在乎你怎么想。\n\n好了，笑完回来练习面试吧！"
@@ -634,7 +852,7 @@ def _local_chat_response(user_message: str, context: str) -> str:
         return "1+1=2。这种问题可以直接问我，不需要调用任何工具。"
 
     if any(w in msg for w in ["你是ai吗", "你是机器人吗", "你是真人吗", "你是人工智能吗"]):
-        return "我是 AI Agent，不是真人。我基于 ReAct 框架运行，能自主思考和调用工具来帮你解决求职问题。"
+        return "我是 AI Agent，不是真人。我基于 ReAct 框架运行，能自主思考、调用 12 个工具（包括联网搜索和天气查询）来帮你解决求职问题。"
 
     # --- 默认回答 ---
     # 尝试识别更多简单问题，避免无脑返回模板
@@ -642,4 +860,4 @@ def _local_chat_response(user_message: str, context: str) -> str:
         # 简单的是非问题
         return f"这个问题取决于具体情况。作为求职Agent，我更擅长帮你解决简历、面试、岗位匹配等问题。你要不要试试问我这些方面的内容？"
 
-    return f"我理解你的问题：{user_message}\n\n这个问题超出了我的求职工具范围，但我可以帮你做这些：\n1. 分析简历问题\n2. 匹配岗位JD\n3. 获取面试题\n4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n\n要不要试试？"
+    return f"我理解你的问题：{user_message}\n\n这个问题超出了我的求职工具范围，但我可以帮你做这些：\n1. 分析简历问题\n2. 匹配岗位JD\n3. 获取面试题\n4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n7. 联网搜索信息\n8. 查询实时天气\n\n要不要试试？"
