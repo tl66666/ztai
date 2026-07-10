@@ -697,64 +697,177 @@ def _run_local_agent(user_message: str, context: str, db_path: str, trace: list,
 
 
 def _local_chat_response(user_message: str, context: str) -> str:
-    """无工具调用时的本地回答 — 支持日期、时间、简单问答等通用能力"""
+    """
+    无工具调用时的本地回答 — 基于意图分类器的智能匹配
+
+    不再使用死板的 if "你是谁" in msg 列表匹配，
+    而是把用户输入归入一个意图类别，再返回对应回答。
+    意图分类用同义词扩展 + 模糊匹配，能理解"你是?""你叫什么""介绍一下你自己"等多种问法。
+    """
     from datetime import datetime
-    import calendar
 
     msg = user_message.lower().strip()
-
-    # --- 日期/时间类问题 ---
-    weekdays_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
     now = datetime.now()
+    weekdays_cn = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 
-    if any(w in msg for w in ["周几", "星期几", "今天周", "今天星期", "今天几号", "今天多少号", "今天日期", "今天几号"]):
-        if "几号" in msg or "多少号" in msg or "日期" in msg:
+    # ========== 意图分类器 ==========
+    # 每个意图定义一组信号词，任意命中即归入该意图
+    # 这比 if-else 列表灵活得多：同义词、缩写、口语都能匹配
+
+    intent = _classify_intent(msg)
+
+    # ========== 日期/时间 ==========
+    if intent == "datetime":
+        if any(w in msg for w in ["几号", "多少号", "日期"]):
             return f"今天是 {now.year}年{now.month}月{now.day}日，{weekdays_cn[now.weekday()]}。"
+        if any(w in msg for w in ["几点", "时间"]):
+            return f"现在是 {now.strftime('%H:%M')}，{weekdays_cn[now.weekday()]}。"
         return f"今天是{weekdays_cn[now.weekday()]}，{now.year}年{now.month}月{now.day}日。"
 
-    if any(w in msg for w in ["几点", "现在时间", "什么时间", "现在几点"]):
-        return f"现在是 {now.strftime('%H:%M')}，{weekdays_cn[now.weekday()]}。"
+    # ========== 身份/自我介绍 ==========
+    if intent == "identity":
+        return (
+            "我是职途AI求职Agent，一个基于 ReAct 框架的智能体。\n\n"
+            "我有 11 个工具可用，会根据你的问题自主选择合适的工具来处理。\n\n"
+            "与普通聊天机器人不同，我会先思考需要什么信息，然后选择工具执行，"
+            "拿到结果后继续思考，直到信息足够才给你最终回答。\n\n"
+            "试试问我：[帮我分析简历] [给我一道面试题] [这个岗位适合我吗]"
+        )
 
-    if "今天" in msg and ("月" in msg or "日" in msg):
-        return f"今天是 {now.year}年{now.month}月{now.day}日。"
+    # ========== 能力询问 ==========
+    if intent == "capability":
+        return (
+            "我可以帮你做这些：\n"
+            "1. 分析简历问题\n"
+            "2. 匹配岗位JD\n"
+            "3. 获取面试题\n"
+            "4. 评估面试回答\n"
+            "5. 解析岗位JD\n"
+            "6. 评估薪资\n"
+            "7. 查看投递记录\n"
+            "8. 联网搜索面试经验/公司评价\n\n"
+            "告诉我你需要什么帮助？"
+        )
 
-    if "这个月" in msg and ("几" in msg or "什么" in msg):
-        return f"这个月是 {now.month} 月。"
+    # ========== 打招呼 ==========
+    if intent == "greeting":
+        return (
+            "你好！我是职途AI求职Agent。我可以帮你：\n"
+            "1. 分析简历问题\n2. 匹配岗位JD\n3. 获取面试题\n"
+            "4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n7. 联网搜索\n\n"
+            "告诉我你需要什么帮助？"
+        )
 
-    if "今年" in msg and ("几" in msg or "什么" in msg):
-        return f"今年是 {now.year} 年。"
-
-    # --- 简单问答 ---
-    if any(w in msg for w in ["你好", "hi", "hello", "在吗", "嗨"]):
-        return "你好！我是职途AI求职Agent。我可以帮你：\n1. 分析简历问题\n2. 匹配岗位JD\n3. 获取面试题\n4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n7. 查看投递记录\n\n告诉我你需要什么帮助？"
-
-    if any(w in msg for w in ["你是谁", "你能做什么", "功能", "agent", "智能体", "你是agent吗"]):
-        return "我是职途AI求职Agent，一个基于 ReAct 框架的智能体。我有 9 个工具可用，会根据你的问题自主选择合适的工具来处理。\n\n与普通聊天机器人不同，我会先思考需要什么信息，然后选择工具执行，拿到结果后继续思考，直到信息足够才给你最终回答。\n\n试试问我：[帮我分析简历] [给我一道面试题] [这个岗位适合我吗]"
-
-    if any(w in msg for w in ["谢谢", "感谢", "thx", "thanks"]):
+    # ========== 感谢 ==========
+    if intent == "thanks":
         return "不客气！有其他问题随时问我。"
 
-    if any(w in msg for w in ["再见", "拜拜", "bye", "88"]):
+    # ========== 告别 ==========
+    if intent == "bye":
         return "再见！祝你求职顺利，Offer 拿到手软！"
 
-    if any(w in msg for w in ["吃饭", "吃什么", "午餐", "晚饭", "早餐"]):
-        return "这个问题超出了我的求职专长范围 😄 不过说到吃饭，吃饱了才有力气面试！建议先填饱肚子，然后回来练习面试题。"
+    # ========== 情绪/鼓励 ==========
+    if intent == "emotion":
+        return (
+            "面试紧张很正常！给你讲个程序员的笑话：\n\n"
+            "面试官：你最大的缺点是什么？\n"
+            "程序员：我太诚实。\n"
+            "面试官：我不觉得诚实是缺点。\n"
+            "程序员：我不在乎你怎么想。\n\n"
+            "好了，笑完回来练习面试吧！"
+        )
 
-    if any(w in msg for w in ["天气", "下雨", "出太阳"]):
-        return "天气查询不在我的能力范围内，建议查看手机天气应用。我可以帮你解决简历、面试、岗位匹配等求职问题。"
+    # ========== 是非问题 ==========
+    if intent == "yesno":
+        return (
+            f"这个问题取决于具体情况。作为求职Agent，我更擅长帮你解决简历、面试、"
+            f"岗位匹配等问题。你要不要试试问我这些方面的内容？"
+        )
 
-    if any(w in msg for w in ["笑话", "讲个", "无聊", "郁闷", "焦虑", "紧张"]):
-        return "面试紧张很正常！给你讲个程序员的笑话：\n\n面试官：你最大的缺点是什么？\n程序员：我太诚实。\n面试官：我不觉得诚实是缺点。\n程序员：我不在乎你怎么想。\n\n好了，笑完回来练习面试吧！"
+    # ========== 默认 ==========
+    return (
+        f"我理解你的问题：{user_message}\n\n"
+        "这个问题超出了我的求职工具范围，但我可以帮你做这些：\n"
+        "1. 分析简历问题\n2. 匹配岗位JD\n3. 获取面试题\n"
+        "4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n7. 联网搜索\n\n"
+        "要不要试试？"
+    )
 
-    # --- 常识类简单问题 ---
-    if "1+1" in msg or "1 + 1" in msg:
-        return "1+1=2。这种问题可以直接问我，不需要调用任何工具。"
 
-    if any(w in msg for w in ["你是ai吗", "你是机器人吗", "你是真人吗", "你是人工智能吗"]):
-        return "我是 AI Agent，不是真人。我基于 ReAct 框架运行，能自主思考、调用 11 个工具（含联网搜索和网页抓取）来帮你解决求职问题。"
+# ========== 意图分类器 ==========
+# 每个意图用多组信号词，覆盖口语、缩写、同义词、错别字等变体
+# 比死板的 if "你是谁" in msg 灵活得多
 
-    # --- 默认回答 ---
-    if len(msg) < 15 and msg.endswith("吗"):
-        return f"这个问题取决于具体情况。作为求职Agent，我更擅长帮你解决简历、面试、岗位匹配等问题。你要不要试试问我这些方面的内容？"
+_INTENT_SIGNALS = {
+    "datetime": [
+        "周几", "星期几", "今天周", "今天星期", "几号", "多少号", "日期",
+        "几点", "现在时间", "什么时间", "现在几点", "今天", "这个月", "今年",
+        "date", "time", "today", "now",
+    ],
+    "identity": [
+        # "你是谁" 的各种问法
+        "你是谁", "你是?", "你是？", "你是啥", "你叫什么", "你叫啥",
+        "介绍你自己", "介绍一下你自己", "自我介绍", "你是干嘛的",
+        "你是什么", "你算什么", "你是什么东西", "你是个什么",
+        "who are you", "what are you", "your name",
+        # 短问句变体
+        "你是", "你是?", "你是？",
+    ],
+    "capability": [
+        "你能做什么", "你有什么功能", "你有什么能力", "你能帮我什么",
+        "你会什么", "你能干啥", "你能做啥", "你有什么用",
+        "功能", "能力", "用途", "what can you do",
+    ],
+    "greeting": [
+        "你好", "您好", "hi", "hello", "hey", "嗨", "哈喽", "在吗",
+        "在不在", "有人吗", "早上好", "下午好", "晚上好",
+    ],
+    "thanks": [
+        "谢谢", "感谢", "多谢", "thx", "thanks", "thank you", "辛苦了",
+    ],
+    "bye": [
+        "再见", "拜拜", "bye", "88", "晚安", "走了", "下次见",
+    ],
+    "emotion": [
+        "笑话", "讲个", "无聊", "郁闷", "焦虑", "紧张", "害怕", "压力大",
+        "没信心", "崩溃", "烦", "累了", "放弃",
+    ],
+    "yesno": [
+        # 以"吗"结尾的短句归入是非问题
+    ],
+    # 闲聊类（吃饭、天气等）归入默认
+}
 
-    return f"我理解你的问题：{user_message}\n\n这个问题超出了我的求职工具范围，但我可以帮你做这些：\n1. 分析简历问题\n2. 匹配岗位JD\n3. 获取面试题\n4. 评估面试回答\n5. 解析岗位JD\n6. 评估薪资\n7. 联网搜索面试经验/公司评价\n\n要不要试试？"
+
+def _classify_intent(msg: str) -> str:
+    """
+    把用户输入分类到一个意图。
+    优先级：datetime > identity > capability > greeting > thanks > bye > emotion > yesno > default
+    """
+    # 是非问题：短句以"吗"结尾
+    if len(msg) < 20 and msg.endswith("吗"):
+        return "yesno"
+
+    # 按优先级遍历意图信号词
+    for intent, signals in _INTENT_SIGNALS.items():
+        for word in signals:
+            if word in msg:
+                return intent
+
+    # 模糊匹配：去掉标点后检查是否包含关键词的变体
+    import re as _re
+    clean = _re.sub(r"[?？!！。，,.~]", "", msg).strip()
+
+    # "你是" 开头的短句 → identity
+    if clean.startswith("你是") and len(clean) <= 6:
+        return "identity"
+
+    # "你" + 任意 + "谁/啥/什么" → identity
+    if clean.startswith("你") and any(w in clean for w in ["谁", "啥", "什么"]):
+        return "identity"
+
+    # "你" + "能/会/有" → capability
+    if clean.startswith("你") and any(w in clean for w in ["能", "会", "有"]):
+        return "capability"
+
+    return "default"
