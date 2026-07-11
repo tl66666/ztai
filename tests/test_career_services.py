@@ -362,6 +362,25 @@ class CareerServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "title"):
             self.service.create_action_item(1, {"title": "x" * 501})
 
+    def test_partial_salary_updates_validate_against_persisted_range(self):
+        opportunity = self.service.create_opportunity(
+            1,
+            {
+                "company": "Acme",
+                "job_title": "Engineer",
+                "salary_min": 20,
+                "salary_max": 30,
+            },
+        )
+
+        with self.assertRaisesRegex(ValueError, "salary_min"):
+            self.service.update_opportunity(1, opportunity["id"], {"salary_max": 10})
+        with self.assertRaisesRegex(ValueError, "salary_min"):
+            self.service.update_opportunity(1, opportunity["id"], {"salary_min": 40})
+
+        current = self.service.get_opportunity(1, opportunity["id"])
+        self.assertEqual((current["salary_min"], current["salary_max"]), (20, 30))
+
 
 class CareerApiTests(unittest.TestCase):
     def setUp(self):
@@ -429,6 +448,132 @@ class CareerApiTests(unittest.TestCase):
         self.assertEqual(missing.status_code, 404)
         self.assertFalse(missing.get_json()["success"])
         self.assertEqual(missing.get_json()["message"], "投递记录不存在")
+
+    def test_coach_rejects_cross_user_and_deleted_opportunities(self):
+        with connect(self.db_path) as conn:
+            other_id = conn.execute(
+                "INSERT INTO job_applications (user_id, company, job_title, status) VALUES (2, 'Private Co', 'Secret Role', '已投递')"
+            ).lastrowid
+        other = self.client.post(
+            f"/api/applications/{other_id}/coach", json={"user_id": 2}
+        )
+        self.assertEqual(other.status_code, 404)
+
+        created = self.client.post(
+            "/api/opportunities", json={"company": "Deleted Co", "job_title": "Engineer"}
+        ).get_json()["data"]
+        self.client.delete(f"/api/applications/{created['id']}")
+        deleted = self.client.post(f"/api/applications/{created['id']}/coach", json={})
+        self.assertEqual(deleted.status_code, 404)
+
+    def test_coach_ignores_client_user_for_resume_and_interview_context(self):
+        opportunity = self.client.post(
+            "/api/opportunities", json={"company": "Local Co", "job_title": "Engineer"}
+        ).get_json()["data"]
+        with connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO resumes (user_id, title, content) VALUES (2, 'Private Resume', 'private content')"
+            )
+            conn.execute(
+                "INSERT INTO interviews (user_id, job_title, score, feedback) VALUES (2, 'Private Interview', 99, 'private feedback')"
+            )
+
+        captured = {}
+
+        class FakeAIClient:
+            api_key = "test-key"
+
+            def chat(self, messages, **kwargs):
+                captured["messages"] = messages
+                return {"success": True, "content": "local advice"}
+
+        with patch.object(self.app_module, "get_ai_client", return_value=FakeAIClient()):
+            response = self.client.post(
+                f"/api/applications/{opportunity['id']}/coach", json={"user_id": 2}
+            )
+        serialized = json.dumps(response.get_json(), ensure_ascii=False)
+        ai_payload = json.dumps(captured["messages"], ensure_ascii=False)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Private Resume", serialized)
+        self.assertNotIn("Private Interview", serialized)
+        self.assertNotIn("Private Resume", ai_payload)
+        self.assertNotIn("Private Interview", ai_payload)
+
+    def test_deleted_opportunity_is_absent_from_dashboard_report_and_context(self):
+        opportunity = self.client.post(
+            "/api/opportunities", json={"company": "Deleted Co", "job_title": "Engineer"}
+        ).get_json()["data"]
+        self.client.delete(f"/api/applications/{opportunity['id']}")
+
+        dashboard = self.client.get("/api/dashboard/1").get_json()
+        report = self.client.post("/api/career/report/1").get_json()["report"]
+        context = self.app_module.build_agent_runtime_context(1)
+
+        self.assertEqual(dashboard["stats"]["applications"], 0)
+        self.assertNotIn("Deleted Co", json.dumps(dashboard, ensure_ascii=False))
+        self.assertNotIn("Deleted Co", report)
+        self.assertNotIn("Deleted Co", context)
+
+    def test_advance_follows_canonical_sequence_and_terminal_rules(self):
+        opportunity = self.client.post(
+            "/api/opportunities",
+            json={"company": "Pipeline", "job_title": "Engineer", "status": "意向"},
+        ).get_json()["data"]
+        expected = ["准备中", "已投递", "简历筛选", "笔试", "一面", "二面", "HR 面", "Offer", "已结束"]
+        observed = []
+        for expected_status in expected:
+            with self.subTest(expected_status=expected_status):
+                response = self.client.post(f"/api/applications/{opportunity['id']}/advance")
+                self.assertEqual(response.status_code, 200, response.get_json())
+                observed.append(response.get_json()["status"])
+        terminal = self.client.post(f"/api/applications/{opportunity['id']}/advance")
+
+        self.assertEqual(observed, expected)
+        self.assertEqual(terminal.status_code, 200)
+        self.assertEqual(terminal.get_json()["status"], "已结束")
+        events = self.client.get(
+            f"/api/opportunities/{opportunity['id']}/timeline"
+        ).get_json()["data"]
+        self.assertEqual([event["event_type"] for event in events].count("opportunity.updated"), 9)
+
+        rejected = self.client.post(
+            "/api/opportunities",
+            json={"company": "Rejected", "job_title": "Engineer", "status": "已拒绝"},
+        ).get_json()["data"]
+        self.assertEqual(
+            self.client.post(f"/api/applications/{rejected['id']}/advance").get_json()["status"],
+            "已结束",
+        )
+
+    def test_advance_rejects_cross_user_and_deleted_opportunities(self):
+        with connect(self.db_path) as conn:
+            other_id = conn.execute(
+                "INSERT INTO job_applications (user_id, company, job_title, status) VALUES (2, 'Private', 'Role', '意向')"
+            ).lastrowid
+        self.assertEqual(
+            self.client.post(f"/api/applications/{other_id}/advance").status_code, 404
+        )
+
+        opportunity = self.client.post(
+            "/api/opportunities", json={"company": "Deleted", "job_title": "Role"}
+        ).get_json()["data"]
+        self.client.delete(f"/api/applications/{opportunity['id']}")
+        self.assertEqual(
+            self.client.post(f"/api/applications/{opportunity['id']}/advance").status_code,
+            404,
+        )
+
+    def test_action_complete_rejects_non_object_json(self):
+        response = self.client.post(
+            "/api/action-items/1/complete",
+            data="[]",
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.content_type, "application/json")
+        self.assertFalse(response.get_json()["success"])
 
 
 if __name__ == "__main__":

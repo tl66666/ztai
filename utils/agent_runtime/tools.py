@@ -280,7 +280,12 @@ def _evaluate_salary(arguments: dict, context: ToolContext) -> ToolResult:
 def _list_applications(arguments: dict, context: ToolContext) -> ToolResult:
     with _connect(context.db_path) as connection:
         rows = connection.execute(
-            "SELECT id, company, job_title, status, city, updated_at FROM job_applications WHERE user_id = ? ORDER BY updated_at DESC LIMIT 20",
+            """
+            SELECT id, company, job_title, status, city, updated_at
+            FROM job_applications
+            WHERE user_id = ? AND deleted_at IS NULL
+            ORDER BY updated_at DESC LIMIT 20
+            """,
             (context.user_id,),
         ).fetchall()
     data = [dict(row) for row in rows]
@@ -294,7 +299,10 @@ def _dashboard(arguments: dict, context: ToolContext) -> ToolResult:
             "resumes": connection.execute("SELECT COUNT(*) FROM resumes WHERE user_id = ?", (context.user_id,)).fetchone()[0],
             "matches": connection.execute("SELECT COUNT(*) FROM job_matches WHERE user_id = ?", (context.user_id,)).fetchone()[0],
             "interviews": connection.execute("SELECT COUNT(*) FROM interviews WHERE user_id = ?", (context.user_id,)).fetchone()[0],
-            "applications": connection.execute("SELECT COUNT(*) FROM job_applications WHERE user_id = ?", (context.user_id,)).fetchone()[0],
+            "applications": connection.execute(
+                "SELECT COUNT(*) FROM job_applications WHERE user_id = ? AND deleted_at IS NULL",
+                (context.user_id,),
+            ).fetchone()[0],
         }
     text = "；".join(f"{key}={value}" for key, value in counts.items())
     return ToolResult(True, data=counts, display_text=text)

@@ -205,6 +205,7 @@ def init_db() -> None:
         )
         ensure_column(conn, "resumes", "analysis_result", "TEXT")
         ensure_column(conn, "resumes", "tailored_result", "TEXT")
+        ensure_column(conn, "job_applications", "deleted_at", "TEXT")
     migrate_database(DB_PATH)
     create_agent_tables(DB_PATH)
 
@@ -225,6 +226,15 @@ def career_error_response(exc: Exception):
     else:
         status = 400
     return jsonify({"success": False, "message": str(exc)}), status
+
+
+def json_object_body():
+    data = request.get_json(silent=True)
+    if data is None and not request.data:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("JSON body must be an object")
+    return data
 
 
 def allowed_file(filename: str) -> bool:
@@ -1777,7 +1787,10 @@ def career_report(user_id):
         resumes = conn.execute("SELECT title, content, updated_at FROM resumes WHERE user_id = ? ORDER BY updated_at DESC LIMIT 3", (user_id,)).fetchall()
         matches = conn.execute("SELECT job_title, match_score, created_at FROM job_matches WHERE user_id = ? ORDER BY created_at DESC LIMIT 5", (user_id,)).fetchall()
         interviews = conn.execute("SELECT job_title, score, feedback, created_at FROM interviews WHERE user_id = ? ORDER BY created_at DESC LIMIT 5", (user_id,)).fetchall()
-        apps = conn.execute("SELECT company, job_title, status, city, notes FROM job_applications WHERE user_id = ? ORDER BY updated_at DESC LIMIT 8", (user_id,)).fetchall()
+        apps = conn.execute(
+            "SELECT company, job_title, status, city, notes FROM job_applications WHERE user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 8",
+            (user_id,),
+        ).fetchall()
     report = build_career_report(resumes, matches, interviews, apps)
     if get_ai_client().api_key:
         result = get_ai_client().chat([
@@ -1830,7 +1843,7 @@ def build_agent_runtime_context(user_id: int = 1) -> str:
             (user_id,),
         ).fetchone()
         apps = conn.execute(
-            "SELECT company, job_title, status, city FROM job_applications WHERE user_id = ? ORDER BY updated_at DESC LIMIT 5",
+            "SELECT company, job_title, status, city FROM job_applications WHERE user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 5",
             (user_id,),
         ).fetchall()
         interviews = conn.execute(
@@ -1870,7 +1883,7 @@ def career_profile_api():
         if request.method == "GET":
             profile = service.get_profile(AGENT_USER_ID)
         else:
-            profile = service.upsert_profile(AGENT_USER_ID, request.get_json() or {})
+            profile = service.upsert_profile(AGENT_USER_ID, json_object_body())
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
     return jsonify({"success": True, "data": profile})
@@ -1887,7 +1900,7 @@ def opportunities_api():
                 "data": opportunities,
                 "canonical_statuses": APPLICATION_STATUSES,
             })
-        opportunity = service.create_opportunity(AGENT_USER_ID, request.get_json() or {})
+        opportunity = service.create_opportunity(AGENT_USER_ID, json_object_body())
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
     return jsonify({"success": True, "data": opportunity}), 201
@@ -1901,7 +1914,7 @@ def opportunity_api(opportunity_id):
             opportunity = service.get_opportunity(AGENT_USER_ID, opportunity_id)
         else:
             opportunity = service.update_opportunity(
-                AGENT_USER_ID, opportunity_id, request.get_json() or {}
+                AGENT_USER_ID, opportunity_id, json_object_body()
             )
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
@@ -1924,7 +1937,7 @@ def action_items_api():
         if request.method == "GET":
             actions = service.list_action_items(AGENT_USER_ID)
             return jsonify({"success": True, "data": actions})
-        action = service.create_action_item(AGENT_USER_ID, request.get_json() or {})
+        action = service.create_action_item(AGENT_USER_ID, json_object_body())
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
     return jsonify({"success": True, "data": action}), 201
@@ -1932,8 +1945,8 @@ def action_items_api():
 
 @app.route("/api/action-items/<int:action_id>/complete", methods=["POST"])
 def complete_action_item_api(action_id):
-    data = request.get_json() or {}
     try:
+        data = json_object_body()
         action = get_career_service().complete_action_item(
             AGENT_USER_ID, action_id, data.get("evidence", "")
         )
@@ -2009,20 +2022,19 @@ def delete_application(application_id):
 
 @app.route("/api/applications/<int:application_id>/coach", methods=["POST"])
 def coach_application(application_id):
-    data = request.get_json() or {}
-    user_id = int(data.get("user_id", 1))
+    try:
+        app_row = get_career_service().get_opportunity(AGENT_USER_ID, application_id)
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
     with get_db() as conn:
-        app_row = conn.execute("SELECT * FROM job_applications WHERE id = ?", (application_id,)).fetchone()
         resume_row = conn.execute(
             "SELECT title, content FROM resumes WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
-            (user_id,),
+            (AGENT_USER_ID,),
         ).fetchone()
         interview_row = conn.execute(
             "SELECT job_title, score, feedback FROM interviews WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
-            (user_id,),
+            (AGENT_USER_ID,),
         ).fetchone()
-    if not app_row:
-        return jsonify({"success": False, "message": "投递记录不存在"}), 404
 
     plan = build_application_followup_plan(app_row, resume_row, interview_row)
     ai_note = ""
@@ -2042,15 +2054,17 @@ def coach_application(application_id):
 
 @app.route("/api/applications/<int:application_id>/advance", methods=["POST"])
 def advance_application(application_id):
-    stages = ["已投递", "简历筛选", "笔试", "一面", "二面", "HR 面", "Offer", "已结束"]
+    stages = list(APPLICATION_STATUSES)
     service = get_career_service()
     try:
         opportunity = service.get_opportunity(AGENT_USER_ID, application_id)
         current = opportunity["status"]
-        try:
-            next_status = stages[min(stages.index(current) + 1, len(stages) - 1)]
-        except ValueError:
-            next_status = "简历筛选"
+        if current == "已结束":
+            next_status = current
+        elif current in {"Offer", "已拒绝"}:
+            next_status = "已结束"
+        else:
+            next_status = stages[stages.index(current) + 1]
         service.update_opportunity(AGENT_USER_ID, application_id, {"status": next_status})
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
@@ -2134,7 +2148,10 @@ def dashboard(user_id):
         resume_count = conn.execute("SELECT COUNT(*) FROM resumes WHERE user_id = ?", (user_id,)).fetchone()[0]
         interview_rows = conn.execute("SELECT score, created_at FROM interviews WHERE user_id = ? ORDER BY created_at", (user_id,)).fetchall()
         match_rows = conn.execute("SELECT match_score, created_at FROM job_matches WHERE user_id = ? ORDER BY created_at", (user_id,)).fetchall()
-        app_rows = conn.execute("SELECT status, company, job_title, updated_at FROM job_applications WHERE user_id = ? ORDER BY updated_at DESC", (user_id,)).fetchall()
+        app_rows = conn.execute(
+            "SELECT status, company, job_title, updated_at FROM job_applications WHERE user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC",
+            (user_id,),
+        ).fetchall()
         practice_count = conn.execute("SELECT COUNT(*) FROM practice_records WHERE user_id = ?", (user_id,)).fetchone()[0]
         audio_count = conn.execute("SELECT COUNT(*) FROM audio_records WHERE user_id = ?", (user_id,)).fetchone()[0]
     stats = {

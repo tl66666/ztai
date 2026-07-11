@@ -197,6 +197,11 @@ class CareerService:
             existing = self._owned_opportunity(conn, opportunity_id)
             if not existing:
                 raise LookupError("opportunity not found")
+            merged_salary_min = changes.get("salary_min", existing["salary_min"])
+            merged_salary_max = changes.get("salary_max", existing["salary_max"])
+            if merged_salary_min is not None and merged_salary_max is not None:
+                if merged_salary_min > merged_salary_max:
+                    raise ValueError("salary_min cannot exceed salary_max")
             if changes.get("resume_id") is not None and not self._owned_row(
                 conn, "resumes", changes["resume_id"]
             ):

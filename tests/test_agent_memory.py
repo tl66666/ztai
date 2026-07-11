@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import unittest
 
@@ -114,6 +115,34 @@ class AgentMemoryTests(unittest.TestCase):
         profile_text = "\n".join(context.profile_facts)
         self.assertIn("杭州", profile_text)
         self.assertNotIn("上海", profile_text)
+
+    def test_career_snapshot_excludes_soft_deleted_applications(self):
+        connection = sqlite3.connect(self.db_path)
+        with connection:
+            connection.execute(
+                """
+                CREATE TABLE job_applications (
+                    id INTEGER PRIMARY KEY, user_id INTEGER, company TEXT, deleted_at TEXT
+                )
+                """
+            )
+            connection.execute(
+                "CREATE TABLE resumes (id INTEGER PRIMARY KEY, user_id INTEGER)"
+            )
+            connection.execute(
+                "CREATE TABLE interviews (id INTEGER PRIMARY KEY, user_id INTEGER)"
+            )
+            connection.execute(
+                "INSERT INTO job_applications (user_id, company, deleted_at) VALUES (1, 'Deleted Co', CURRENT_TIMESTAMP)"
+            )
+        connection.close()
+        conversation = self.store.create_conversation(1, "Context")
+
+        context = ContextBuilder(self.store, self.db_path).build(
+            1, conversation.id, "applications"
+        )
+
+        self.assertRegex(context.career_snapshot, r"投递\s*0\s*条")
 
     def test_long_conversation_triggers_and_saves_rolling_summary(self):
         conversation = self.store.create_conversation(1, "摘要")

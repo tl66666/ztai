@@ -135,7 +135,11 @@ class ContextBuilder:
                     "SELECT COUNT(*) FROM resumes WHERE user_id = ?", (user_id,)
                 ).fetchone()[0]
                 application_count = connection.execute(
-                    "SELECT COUNT(*) FROM job_applications WHERE user_id = ?", (user_id,)
+                    """
+                    SELECT COUNT(*) FROM job_applications
+                    WHERE user_id = ? AND deleted_at IS NULL
+                    """,
+                    (user_id,),
                 ).fetchone()[0]
                 interview_count = connection.execute(
                     "SELECT COUNT(*) FROM interviews WHERE user_id = ?", (user_id,)
