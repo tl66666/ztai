@@ -321,10 +321,14 @@ class InterviewPersistenceTests(unittest.TestCase):
         self.assertEqual(repeated["status"], "completed")
         with connect(self.db_path) as conn:
             result_count = conn.execute("SELECT COUNT(*) FROM interviews").fetchone()[0]
+            source_session_id = conn.execute(
+                "SELECT source_session_id FROM interviews"
+            ).fetchone()[0]
             completion_events = conn.execute(
                 "SELECT COUNT(*) FROM domain_events WHERE event_type = 'interview.completed'"
             ).fetchone()[0]
         self.assertEqual(result_count, 1)
+        self.assertEqual(source_session_id, session_id)
         self.assertEqual(completion_events, 1)
 
     def test_open_list_excludes_completed_sessions(self):

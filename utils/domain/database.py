@@ -29,7 +29,7 @@ LEGACY_STATUS_MAP = {
     "拒绝": "已拒绝",
 }
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -80,10 +80,14 @@ def migrate_database(db_path: str | os.PathLike[str]) -> None:
                 return
 
             # The reserved lock prevents new writes while a separate reader snapshots WAL.
-            _backup_pre_migration_database(path)
+            if current_version == 0:
+                _backup_pre_migration_database(path)
             if current_version < 1:
                 _migrate_to_version_1(conn)
                 conn.execute("PRAGMA user_version = 1")
+            if current_version < 2:
+                _migrate_to_version_2(conn)
+                conn.execute("PRAGMA user_version = 2")
             conn.commit()
         except Exception:
             conn.rollback()
@@ -180,6 +184,38 @@ def _migrate_to_version_1(conn: sqlite3.Connection) -> None:
 
     _create_domain_tables(conn)
     _create_domain_indexes(conn)
+
+
+def _migrate_to_version_2(conn: sqlite3.Connection) -> None:
+    evidence_indexes = (
+        ("job_matches", "idx_job_matches_user_created"),
+        ("interviews", "idx_interviews_user_created"),
+        ("practice_records", "idx_practice_records_user_created"),
+        ("audio_records", "idx_audio_records_user_created"),
+    )
+    for table, index_name in evidence_indexes:
+        if _table_exists(conn, table):
+            ensure_column(conn, table, "created_at", "TEXT")
+        if table == "interviews" and _table_exists(conn, table):
+            ensure_column(conn, table, "source_session_id", "TEXT")
+        columns = _table_columns(conn, table)
+        if {"user_id", "created_at"}.issubset(columns):
+            conn.execute(
+                f'CREATE INDEX IF NOT EXISTS "{index_name}" '
+                f'ON "{table}"(user_id, created_at)'
+            )
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone() is not None
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    if not _table_exists(conn, table):
+        return set()
+    return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
 
 
 def _create_legacy_base_tables_if_missing(conn: sqlite3.Connection) -> None:

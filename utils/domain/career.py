@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -79,9 +80,28 @@ READINESS_WEIGHTS = {
     "pipeline": 15,
 }
 READINESS_RECENT_LIMIT = 5
-REAL_JD_MIN_LENGTH = 12
+MIN_MEANINGFUL_JD_LENGTH = 80
+JD_RESPONSIBILITY_MARKERS = ("岗位职责", "工作职责", "负责", "responsibilities", "duties")
+JD_REQUIREMENT_MARKERS = ("任职要求", "岗位要求", "要求", "熟悉", "技能", "requirements", "qualifications")
+MIN_JD_UNIQUE_CHARACTERS = 18
 DELIVERABLE_THRESHOLD = 70
 POLISH_THRESHOLD = 42
+
+
+def _normalize_evidence_text(value: Any) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def is_meaningful_jd_snapshot(value: Any) -> bool:
+    normalized = _normalize_evidence_text(value)
+    compact = "".join(normalized.split())
+    if len(normalized) < MIN_MEANINGFUL_JD_LENGTH:
+        return False
+    if len(set(compact)) < MIN_JD_UNIQUE_CHARACTERS:
+        return False
+    return any(marker in normalized for marker in JD_RESPONSIBILITY_MARKERS) and any(
+        marker in normalized for marker in JD_REQUIREMENT_MARKERS
+    )
 
 
 class CareerService:
@@ -148,7 +168,8 @@ class CareerService:
 
         interview_scores = self._valid_scores(
             self._unique_scored_rows(
-                [row for row in interviews if self._valid_score(row.get("score"))]
+                [row for row in interviews if self._valid_score(row.get("score"))],
+                "interview",
             )
         )
         low_interview = bool(interview_scores) and self._mean(interview_scores[:READINESS_RECENT_LIMIT]) < 40
@@ -196,17 +217,19 @@ class CareerService:
         columns = self._table_columns(conn, "resumes")
         status_filter = "AND (status IS NULL OR status IN ('active', 'main'))" if "status" in columns else ""
         order_column = "updated_at" if "updated_at" in columns else "created_at"
-        row = conn.execute(
-            f"SELECT * FROM resumes WHERE user_id = ? {status_filter} "
-            f"ORDER BY {order_column} DESC, id DESC LIMIT 1",
+        rows = conn.execute(
+            f"SELECT * FROM resumes WHERE user_id = ? {status_filter}",
             (self.local_user_id,),
-        ).fetchone()
-        return dict(row) if row else None
+        ).fetchall()
+        ordered = self._sort_recent_rows([dict(row) for row in rows], order_column)
+        return ordered[0] if ordered else None
 
     def _readiness_matches(self, conn: sqlite3.Connection) -> list[dict[str, Any]]:
         if not self._table_exists(conn, "job_matches"):
             return []
         columns = self._table_columns(conn, "job_matches")
+        if not self._table_exists(conn, "resumes"):
+            return []
         jd_expression = "m.jd_text"
         join = ""
         application_filter = ""
@@ -215,24 +238,33 @@ class CareerService:
             if "jd_text" in application_columns:
                 jd_expression = "COALESCE(m.jd_text, a.jd_text)"
                 deleted_filter = "AND a.deleted_at IS NULL" if "deleted_at" in application_columns else ""
-                join = f"LEFT JOIN job_applications a ON a.id = m.application_id {deleted_filter}"
-                if "deleted_at" in application_columns:
-                    application_filter = "AND (m.application_id IS NULL OR a.id IS NOT NULL)"
+                join = (
+                    "LEFT JOIN job_applications a ON a.id = m.application_id "
+                    "AND a.user_id = m.user_id AND a.user_id = ? "
+                    f"{deleted_filter}"
+                )
+                application_filter = "AND (m.application_id IS NULL OR a.id IS NOT NULL)"
         if "jd_text" not in columns:
             jd_expression = "a.jd_text" if join else "NULL"
         score_expression = "m.match_score" if "match_score" in columns else "NULL"
         analysis_expression = "m.analysis" if "analysis" in columns else "NULL"
         created_expression = "m.created_at" if "created_at" in columns else "NULL"
         rows = conn.execute(
-            f"""SELECT m.id, {score_expression} AS match_score,
+            f"""SELECT m.id, m.resume_id, m.job_title,
+                       {('m.application_id' if 'application_id' in columns else 'NULL')} AS application_id,
+                       {score_expression} AS match_score,
                        {analysis_expression} AS analysis, {jd_expression} AS jd_text,
                        {created_expression} AS created_at
-                FROM job_matches m {join}
+                FROM job_matches m
+                JOIN resumes r ON r.id = m.resume_id AND r.user_id = m.user_id
+                    AND r.user_id = ?
+                {join}
                 WHERE m.user_id = ? {application_filter}
-                ORDER BY {created_expression} DESC, m.id DESC LIMIT 20""",
-            (self.local_user_id,),
+                """,
+            ((self.local_user_id,) if join else ())
+            + (self.local_user_id, self.local_user_id),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return self._sort_recent_rows([dict(row) for row in rows])
 
     def _readiness_rows(
         self, conn: sqlite3.Connection, table: str, timestamp_column: str
@@ -243,12 +275,19 @@ class CareerService:
         if "score" not in columns:
             return []
         timestamp = timestamp_column if timestamp_column in columns else "NULL"
+        identity_fields = {
+            "interviews": ("resume_id", "job_title", "conversation", "feedback", "source_session_id"),
+            "practice_records": ("category", "question", "answer"),
+            "audio_records": ("transcript", "metrics", "audio_file"),
+        }.get(table, ())
+        selected = [field for field in identity_fields if field in columns]
+        selected_sql = "".join(f", {field}" for field in selected)
         rows = conn.execute(
-            f"SELECT id, score, {timestamp} AS created_at FROM {table} "
-            f"WHERE user_id = ? ORDER BY {timestamp} DESC, id DESC LIMIT 20",
+            f"SELECT id, score, {timestamp} AS created_at{selected_sql} FROM {table} "
+            "WHERE user_id = ?",
             (self.local_user_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return self._sort_recent_rows([dict(row) for row in rows])
 
     def _readiness_opportunities(self, conn: sqlite3.Connection) -> list[dict[str, Any]]:
         if not self._table_exists(conn, "job_applications"):
@@ -261,7 +300,7 @@ class CareerService:
             f"WHERE user_id = ? {deleted_filter} ORDER BY id DESC LIMIT 50",
             (self.local_user_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return self._sort_recent_rows([dict(row) for row in rows], "updated_at")
 
     def _score_resume_component(self, resume: dict[str, Any] | None) -> dict[str, Any]:
         if not resume:
@@ -282,8 +321,7 @@ class CareerService:
     def _score_alignment_component(self, matches: list[dict[str, Any]]) -> dict[str, Any]:
         valid = self._unique_scored_rows(
             [row for row in matches if self._has_real_jd(row) and self._valid_score(row.get("match_score"))],
-            score_field="match_score",
-            extra_field="jd_text",
+            "match",
         )
         if not valid:
             return self._component(0, [])
@@ -300,7 +338,8 @@ class CareerService:
 
     def _score_interview_component(self, interviews: list[dict[str, Any]]) -> dict[str, Any]:
         valid_rows = self._unique_scored_rows(
-            [row for row in interviews if self._valid_score(row.get("score"))]
+            [row for row in interviews if self._valid_score(row.get("score"))],
+            "interview",
         )
         if not valid_rows:
             return self._component(0, [])
@@ -322,10 +361,12 @@ class CareerService:
         self, practices: list[dict[str, Any]], audios: list[dict[str, Any]]
     ) -> dict[str, Any]:
         practice_rows = self._unique_scored_rows(
-            [row for row in practices if self._valid_score(row.get("score"))]
+            [row for row in practices if self._valid_score(row.get("score"))],
+            "practice",
         )[:READINESS_RECENT_LIMIT]
         audio_rows = self._unique_scored_rows(
-            [row for row in audios if self._valid_score(row.get("score"))]
+            [row for row in audios if self._valid_score(row.get("score"))],
+            "audio",
         )[:READINESS_RECENT_LIMIT]
         if not practice_rows and not audio_rows:
             return self._component(0, [])
@@ -425,24 +466,56 @@ class CareerService:
 
     @staticmethod
     def _unique_scored_rows(
-        rows: list[dict[str, Any]], score_field: str = "score", extra_field: str | None = None
+        rows: list[dict[str, Any]], evidence_type: str
     ) -> list[dict[str, Any]]:
         unique = []
         seen = set()
         for row in rows:
-            key = (
-                float(row[score_field]),
-                str(row.get("created_at") or ""),
-                str(row.get(extra_field) or "") if extra_field else "",
-            )
+            key = CareerService._evidence_fingerprint(row, evidence_type)
             if key not in seen:
                 seen.add(key)
                 unique.append(row)
         return unique
 
     @staticmethod
+    def _evidence_fingerprint(row: dict[str, Any], evidence_type: str) -> str:
+        if evidence_type == "match":
+            identity = (
+                row.get("resume_id"),
+                _normalize_evidence_text(row.get("job_title")),
+                f"application:{row['application_id']}"
+                if row.get("application_id") is not None
+                else hashlib.sha256(
+                    _normalize_evidence_text(row.get("jd_text")).encode("utf-8")
+                ).hexdigest(),
+            )
+        elif evidence_type == "interview":
+            if row.get("source_session_id"):
+                identity = ("session", str(row["source_session_id"]))
+            else:
+                identity = (
+                    row.get("resume_id"),
+                    _normalize_evidence_text(row.get("job_title")),
+                    _normalize_evidence_text(row.get("conversation")),
+                )
+        elif evidence_type == "practice":
+            identity = tuple(
+                _normalize_evidence_text(row.get(field))
+                for field in ("category", "question", "answer")
+            )
+        elif evidence_type == "audio":
+            identity = (
+                _normalize_evidence_text(row.get("transcript")),
+                _normalize_evidence_text(row.get("metrics")),
+                _normalize_evidence_text(row.get("audio_file")),
+            )
+        else:
+            raise ValueError("unknown evidence type")
+        return hashlib.sha256(repr(identity).encode("utf-8")).hexdigest()
+
+    @staticmethod
     def _has_real_jd(row: dict[str, Any]) -> bool:
-        return len(str(row.get("jd_text") or "").strip()) >= REAL_JD_MIN_LENGTH
+        return is_meaningful_jd_snapshot(row.get("jd_text"))
 
     @staticmethod
     def _mean(values: list[float]) -> float:
@@ -454,15 +527,36 @@ class CareerService:
 
     @staticmethod
     def _age_days(value: Any) -> int | None:
+        parsed = CareerService._timestamp_utc(value)
+        if parsed is None:
+            return None
+        return max(0, (datetime.now(timezone.utc) - parsed).days)
+
+    @staticmethod
+    def _timestamp_utc(value: Any) -> datetime | None:
         if not value:
             return None
         try:
             parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=timezone.utc)
-            return max(0, (datetime.now(timezone.utc) - parsed).days)
+            return parsed.astimezone(timezone.utc)
         except (TypeError, ValueError):
             return None
+
+    @classmethod
+    def _sort_recent_rows(
+        cls, rows: list[dict[str, Any]], timestamp_field: str = "created_at"
+    ) -> list[dict[str, Any]]:
+        minimum = datetime.min.replace(tzinfo=timezone.utc)
+        return sorted(
+            rows,
+            key=lambda row: (
+                cls._timestamp_utc(row.get(timestamp_field)) or minimum,
+                int(row.get("id") or 0),
+            ),
+            reverse=True,
+        )
 
     @classmethod
     def _recency_factor(cls, value: Any) -> float:

@@ -1239,22 +1239,77 @@ def tailor_resume(resume_id):
 
 @app.route("/api/job-match", methods=["POST"])
 def job_match():
-    data = request.get_json() or {}
-    resume_id = int(data.get("resume_id") or 0)
-    row = get_resume_or_404(resume_id)
-    if not row:
-        return jsonify({"success": False, "message": "请先选择简历"}), 404
-    job_title = data.get("job_title", "目标岗位")
-    jd = data.get("job_requirements") or data.get("jd") or ""
+    try:
+        data = json_object_body()
+        resume_id = int(data.get("resume_id") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "message": "resume_id must be a valid integer"}), 400
+    if resume_id <= 0:
+        return jsonify({"success": False, "message": "resume_id is required"}), 400
+
+    application_id = data.get("application_id")
+    if application_id not in (None, ""):
+        try:
+            application_id = int(application_id)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "message": "application_id must be a valid integer"}), 400
+        if application_id <= 0:
+            return jsonify({"success": False, "message": "application_id must be positive"}), 400
+    else:
+        application_id = None
+
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM resumes WHERE id = ?", (resume_id,)).fetchone()
+        if not row:
+            return jsonify({"success": False, "message": "resume not found"}), 404
+        if row["user_id"] != AGENT_USER_ID:
+            return agent_access_denied()
+        if application_id is not None:
+            application = conn.execute(
+                """SELECT id FROM job_applications
+                   WHERE id = ? AND user_id = ? AND deleted_at IS NULL""",
+                (application_id, AGENT_USER_ID),
+            ).fetchone()
+            if not application:
+                return jsonify({"success": False, "message": "opportunity not found"}), 404
+
+    job_title = str(data.get("job_title") or "目标岗位").strip()[:300]
+    jd = str(data.get("job_requirements") or data.get("jd") or "")
     score, matched, missing = score_resume_against_jd(row["content"], jd + " " + job_title)
     ai = get_ai_client().match_job(row["content"], job_title, jd)
-    analysis = ai["content"]
+    analysis = ai.get("content", "")
+    details = {
+        "matched": matched,
+        "missing": missing,
+        "provider": ai.get("provider") or "local",
+        "model": ai.get("model"),
+        "ai_used": bool(ai.get("success")),
+    }
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO job_matches (user_id, resume_id, job_title, match_score, analysis) VALUES (?, ?, ?, ?, ?)",
-            (row["user_id"], resume_id, job_title, score, analysis),
+            """INSERT INTO job_matches (
+                   user_id, resume_id, job_title, match_score, analysis,
+                   jd_text, details_json, application_id
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                AGENT_USER_ID,
+                resume_id,
+                job_title,
+                score,
+                analysis,
+                jd,
+                json.dumps(details, ensure_ascii=False),
+                application_id,
+            ),
         )
-    return jsonify({"success": True, "match_score": score, "matched_keywords": matched, "missing_keywords": missing, "analysis": analysis, "ai_used": ai["success"]})
+    return jsonify({
+        "success": True,
+        "match_score": score,
+        "matched_keywords": matched,
+        "missing_keywords": missing,
+        "analysis": analysis,
+        "ai_used": bool(ai.get("success")),
+    })
 
 
 @app.route("/api/interview/sessions", methods=["POST"])

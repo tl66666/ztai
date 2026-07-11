@@ -7,11 +7,22 @@ from unittest.mock import patch
 
 from utils.domain.career import (
     DELIVERABLE_THRESHOLD,
+    MIN_MEANINGFUL_JD_LENGTH,
     POLISH_THRESHOLD,
-    REAL_JD_MIN_LENGTH,
     CareerService,
+    is_meaningful_jd_snapshot,
 )
 from utils.domain.database import APPLICATION_STATUSES, connect, migrate_database
+
+
+def meaningful_jd(length=MIN_MEANINGFUL_JD_LENGTH):
+    text = (
+        "岗位职责：负责后端服务和数据接口设计开发。"
+        "任职要求：熟悉 Python、SQL、API 和自动化测试技能。"
+        "参与系统架构、性能优化、测试与上线维护，具备团队协作、问题分析与持续交付经验。"
+    )
+    text += "候选人需要能够根据业务目标持续改进服务质量和可靠性。" * 5
+    return text[:length]
 
 
 def create_readiness_database(db_path):
@@ -62,6 +73,7 @@ def create_readiness_database(db_path):
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 transcript TEXT NOT NULL,
+                audio_file TEXT,
                 score INTEGER,
                 metrics TEXT,
                 feedback TEXT,
@@ -119,7 +131,7 @@ class ReadinessTests(unittest.TestCase):
                 resume_id,
                 score,
                 json.dumps({"matched": ["Python", "SQL"]}),
-                "Backend engineer requiring Python, SQL, APIs and testing." if jd else None,
+                meaningful_jd() if jd else None,
             ),
         )
 
@@ -131,18 +143,18 @@ class ReadinessTests(unittest.TestCase):
                 """INSERT INTO job_matches
                    (user_id, resume_id, job_title, match_score, analysis, jd_text, created_at)
                    VALUES (1, ?, 'Backend Engineer', 92, '{}', ?, ?)""",
-                (resume_id, "J" * REAL_JD_MIN_LENGTH, timestamp),
+                (resume_id, meaningful_jd(), timestamp),
             )
             conn.execute(
                 "INSERT INTO interviews (user_id, job_title, score, created_at) VALUES (1, 'Role', 88, ?)",
                 (timestamp,),
             )
             conn.execute(
-                "INSERT INTO practice_records (user_id, question, score, created_at) VALUES (1, 'Q', 86, ?)",
+                "INSERT INTO practice_records (user_id, category, question, answer, score, created_at) VALUES (1, 'python', 'Q', 'same answer', 86, ?)",
                 (timestamp,),
             )
             conn.execute(
-                "INSERT INTO audio_records (user_id, transcript, score, created_at) VALUES (1, 'answer', 90, ?)",
+                "INSERT INTO audio_records (user_id, transcript, metrics, score, created_at) VALUES (1, 'answer', '{}', 90, ?)",
                 (timestamp,),
             )
             conn.execute(
@@ -171,7 +183,7 @@ class ReadinessTests(unittest.TestCase):
             """INSERT INTO job_matches
                (user_id, resume_id, job_title, match_score, analysis, jd_text)
                VALUES (1, 999, 'Role', 100, '{}', ?)""",
-            ("J" * REAL_JD_MIN_LENGTH,),
+            (meaningful_jd(),),
         )
         self.insert("INSERT INTO interviews (user_id, job_title, score) VALUES (1, 'Role', 100)")
         self.insert("INSERT INTO practice_records (user_id, question, score) VALUES (1, 'Q', 100)")
@@ -290,16 +302,17 @@ class ReadinessTests(unittest.TestCase):
             """INSERT INTO job_matches
                (user_id, resume_id, job_title, match_score, analysis, jd_text, created_at)
                VALUES (1, ?, 'Backend Engineer', 70, '{}', ?, '2026-06-30 00:00:00')""",
-            (resume_id, "J" * REAL_JD_MIN_LENGTH),
+            (resume_id, meaningful_jd()),
         )
         before = self.service.calculate_readiness(1)
 
-        self.insert(
-            """INSERT INTO job_matches
-               (user_id, resume_id, job_title, match_score, analysis, jd_text, created_at)
-               VALUES (1, ?, 'Backend Engineer', 92, '{}', ?, ?)""",
-            (resume_id, "J" * REAL_JD_MIN_LENGTH, timestamp),
-        )
+        for day in range(2, 7):
+            self.insert(
+                """INSERT INTO job_matches
+                   (user_id, resume_id, job_title, match_score, analysis, jd_text, created_at)
+                   VALUES (1, ?, 'Backend Engineer', 92, '{}', ?, ?)""",
+                (resume_id, meaningful_jd(), f"2026-07-{day:02d} 00:00:00"),
+            )
         after = self.service.calculate_readiness(1)
 
         self.assertEqual(after["components"]["alignment"]["score"], before["components"]["alignment"]["score"])
@@ -312,10 +325,11 @@ class ReadinessTests(unittest.TestCase):
         )
         before = self.service.calculate_readiness(1)
 
-        self.insert(
-            "INSERT INTO interviews (user_id, job_title, score, created_at) VALUES (1, 'Role', 88, ?)",
-            (timestamp,),
-        )
+        for day in range(2, 7):
+            self.insert(
+                "INSERT INTO interviews (user_id, job_title, score, created_at) VALUES (1, 'Role', 88, ?)",
+                (f"2026-07-{day:02d} 00:00:00",),
+            )
         after = self.service.calculate_readiness(1)
 
         self.assertEqual(after["components"]["interview"]["score"], before["components"]["interview"]["score"])
@@ -331,14 +345,16 @@ class ReadinessTests(unittest.TestCase):
         )
         before = self.service.calculate_readiness(1)
 
-        self.insert(
-            "INSERT INTO practice_records (user_id, question, score, created_at) VALUES (1, 'Q', 86, ?)",
-            (timestamp,),
-        )
-        self.insert(
-            "INSERT INTO audio_records (user_id, transcript, score, created_at) VALUES (1, 'answer', 90, ?)",
-            (timestamp,),
-        )
+        for day in range(2, 7):
+            created_at = f"2026-07-{day:02d} 00:00:00"
+            self.insert(
+                "INSERT INTO practice_records (user_id, category, question, answer, score, created_at) VALUES (1, 'python', 'Q', 'same answer', 86, ?)",
+                (created_at,),
+            )
+            self.insert(
+                "INSERT INTO audio_records (user_id, transcript, metrics, score, created_at) VALUES (1, 'answer', '{}', 90, ?)",
+                (created_at,),
+            )
         after = self.service.calculate_readiness(1)
 
         self.assertEqual(after["components"]["practice"]["score"], before["components"]["practice"]["score"])
@@ -367,8 +383,9 @@ class ReadinessTests(unittest.TestCase):
         self.assertNotEqual(below["label"], "可投递")
 
     def test_real_jd_length_boundary_is_exact(self):
-        self.assertFalse(CareerService._has_real_jd({"jd_text": "J" * (REAL_JD_MIN_LENGTH - 1)}))
-        self.assertTrue(CareerService._has_real_jd({"jd_text": "J" * REAL_JD_MIN_LENGTH}))
+        self.assertFalse(is_meaningful_jd_snapshot(meaningful_jd(MIN_MEANINGFUL_JD_LENGTH - 1)))
+        self.assertTrue(is_meaningful_jd_snapshot(meaningful_jd(MIN_MEANINGFUL_JD_LENGTH)))
+        self.assertFalse(is_meaningful_jd_snapshot("岗位职责任职要求技能" + "J" * 200))
 
     def test_recency_cutoffs_are_exact(self):
         now = datetime.now(timezone.utc)
@@ -398,19 +415,84 @@ class ReadinessTests(unittest.TestCase):
             """INSERT INTO job_applications
                (user_id, company, job_title, status, jd_text, deleted_at)
                VALUES (1, 'Deleted', 'Role', ?, ?, CURRENT_TIMESTAMP)""",
-            (APPLICATION_STATUSES[3], "J" * REAL_JD_MIN_LENGTH),
+            (APPLICATION_STATUSES[3], meaningful_jd()),
         )
         self.insert(
             """INSERT INTO job_matches
                (user_id, resume_id, job_title, match_score, analysis, jd_text, application_id)
                VALUES (1, ?, 'Role', 100, '{}', ?, ?)""",
-            (resume_id, "J" * REAL_JD_MIN_LENGTH, application_id),
+            (resume_id, meaningful_jd(), application_id),
         )
 
         result = self.service.calculate_readiness(1)
 
         self.assertEqual(result["components"]["alignment"]["score"], 0)
         self.assertIn("no_real_jd_match", result["caps"])
+
+    def test_cross_user_application_cannot_supply_match_jd(self):
+        resume_id = self.add_resume()
+        application_id = self.insert(
+            """INSERT INTO job_applications
+               (user_id, company, job_title, status, jd_text)
+               VALUES (2, 'Private', 'Role', ?, ?)""",
+            (APPLICATION_STATUSES[3], meaningful_jd()),
+        )
+        self.insert(
+            """INSERT INTO job_matches
+               (user_id, resume_id, job_title, match_score, analysis, application_id)
+               VALUES (1, ?, 'Role', 100, '{}', ?)""",
+            (resume_id, application_id),
+        )
+
+        result = self.service.calculate_readiness(1)
+
+        self.assertEqual(result["components"]["alignment"]["score"], 0)
+        self.assertIn("no_real_jd_match", result["caps"])
+
+    def test_direct_match_requires_an_owned_resume(self):
+        other_resume = self.insert(
+            "INSERT INTO resumes (user_id, title, content) VALUES (2, 'Private', 'secret')"
+        )
+        self.insert(
+            """INSERT INTO job_matches
+               (user_id, resume_id, job_title, match_score, analysis, jd_text)
+               VALUES (1, ?, 'Role', 100, '{}', ?)""",
+            (other_resume, meaningful_jd()),
+        )
+
+        result = self.service.calculate_readiness(1)
+
+        self.assertEqual(result["components"]["alignment"]["score"], 0)
+        self.assertIn("no_real_jd_match", result["caps"])
+
+    def test_duplicate_low_interview_identity_does_not_escape_blocker(self):
+        self.seed_complete_evidence()
+        with connect(self.db_path) as conn:
+            conn.execute("DELETE FROM interviews")
+            for day in range(1, 7):
+                conn.execute(
+                    """INSERT INTO interviews
+                       (user_id, job_title, conversation, source_session_id, score, created_at)
+                       VALUES (1, 'Role', '[{\"answer\":\"same\"}]', 'session-low', 39, ?)""",
+                    (f"2026-07-{day:02d} 00:00:00",),
+                )
+
+        result = self.service.calculate_readiness(1)
+
+        self.assertEqual(result["components"]["interview"]["score"], 39)
+        self.assertTrue(any("40" in blocker for blocker in result["blockers"]))
+        self.assertNotEqual(result["label"], "可投递")
+
+    def test_mixed_offset_timestamps_sort_by_utc_instant(self):
+        rows = [
+            {"id": 1, "created_at": "2026-07-01T10:00:00+08:00"},
+            {"id": 2, "created_at": "2026-07-01T03:00:00+00:00"},
+            {"id": 3, "created_at": "2026-07-01 01:00:00"},
+        ]
+
+        ordered = CareerService._sort_recent_rows(rows)
+
+        self.assertEqual([row["id"] for row in ordered], [2, 1, 3])
 
 
 class DashboardReadinessTests(unittest.TestCase):
@@ -449,6 +531,60 @@ class DashboardReadinessTests(unittest.TestCase):
         response = self.client.get("/api/dashboard/2")
 
         self.assertEqual(response.status_code, 403)
+
+    def test_job_match_persists_evidence_and_clears_readiness_cap(self):
+        with connect(self.db_path) as conn:
+            resume_id = conn.execute(
+                """INSERT INTO resumes (user_id, title, content, analysis_result)
+                   VALUES (1, 'Main', 'Python SQL API testing backend services', '{\"score\": 90}')"""
+            ).lastrowid
+            application_id = conn.execute(
+                """INSERT INTO job_applications
+                   (user_id, company, job_title, status, jd_text)
+                   VALUES (1, 'Acme', 'Backend Engineer', ?, ?)""",
+                (APPLICATION_STATUSES[1], meaningful_jd()),
+            ).lastrowid
+
+        response = self.client.post(
+            "/api/job-match",
+            json={
+                "resume_id": resume_id,
+                "application_id": application_id,
+                "job_title": "Backend Engineer",
+                "jd": meaningful_jd(),
+            },
+        )
+        readiness = CareerService(self.db_path).calculate_readiness(1)
+        with connect(self.db_path) as conn:
+            row = conn.execute("SELECT * FROM job_matches ORDER BY id DESC LIMIT 1").fetchone()
+            details = json.loads(row["details_json"])
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(row["user_id"], 1)
+        self.assertEqual(row["resume_id"], resume_id)
+        self.assertEqual(row["application_id"], application_id)
+        self.assertEqual(row["jd_text"], meaningful_jd())
+        self.assertIn("matched", details)
+        self.assertIn("missing", details)
+        self.assertIn("provider", details)
+        self.assertNotIn("no_real_jd_match", readiness["caps"])
+        self.assertGreater(readiness["components"]["alignment"]["score"], 0)
+
+    def test_job_match_rejects_invalid_and_cross_user_resume(self):
+        with connect(self.db_path) as conn:
+            other_resume = conn.execute(
+                "INSERT INTO resumes (user_id, title, content) VALUES (2, 'Private', 'secret')"
+            ).lastrowid
+
+        invalid = self.client.post(
+            "/api/job-match", json={"resume_id": "not-an-id", "jd": meaningful_jd()}
+        )
+        cross_user = self.client.post(
+            "/api/job-match", json={"resume_id": other_resume, "jd": meaningful_jd()}
+        )
+
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(cross_user.status_code, 403)
 
 
 if __name__ == "__main__":

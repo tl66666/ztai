@@ -135,7 +135,7 @@ class DomainMigrationTests(unittest.TestCase):
                     for table in REQUIRED_COLUMNS
                 }
 
-            self.assertEqual(version, 1)
+            self.assertEqual(version, 2)
             self.assertEqual(status, "一面")
             self.assertTrue(REQUIRED_TABLES.issubset(tables))
             for table, required in REQUIRED_COLUMNS.items():
@@ -229,6 +229,57 @@ class DomainMigrationTests(unittest.TestCase):
 
             with connect(db_path) as conn:
                 self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 0)
+
+    def test_version_one_migrates_to_evidence_indexes_idempotently(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "version-one.db")
+            with connect(db_path) as conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE job_matches (
+                        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
+                        resume_id INTEGER NOT NULL, job_title TEXT NOT NULL,
+                        created_at TEXT
+                    );
+                    CREATE TABLE interviews (
+                        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
+                        job_title TEXT NOT NULL, created_at TEXT
+                    );
+                    CREATE TABLE practice_records (
+                        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT
+                    );
+                    CREATE TABLE audio_records (
+                        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT
+                    );
+                    PRAGMA user_version = 1;
+                    """
+                )
+
+            migrate_database(db_path)
+            migrate_database(db_path)
+
+            with connect(db_path) as conn:
+                version = conn.execute("PRAGMA user_version").fetchone()[0]
+                interview_columns = {
+                    row[1] for row in conn.execute('PRAGMA table_info("interviews")')
+                }
+                indexes = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'index'"
+                    )
+                }
+
+            self.assertEqual(version, 2)
+            self.assertIn("source_session_id", interview_columns)
+            self.assertTrue(
+                {
+                    "idx_job_matches_user_created",
+                    "idx_interviews_user_created",
+                    "idx_practice_records_user_created",
+                    "idx_audio_records_user_created",
+                }.issubset(indexes)
+            )
 
 
 if __name__ == "__main__":

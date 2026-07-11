@@ -307,8 +307,9 @@ class InterviewService:
                 conn.execute(
                     """
                     INSERT INTO interviews (
-                        user_id, resume_id, job_title, conversation, score, feedback
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        user_id, resume_id, job_title, conversation, score, feedback,
+                        source_session_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         self.local_user_id,
@@ -317,6 +318,7 @@ class InterviewService:
                         self._dump(state["conversation"]),
                         score,
                         self._dump(feedback),
+                        str(session_id),
                     ),
                 )
                 self._write_event(
