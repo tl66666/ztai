@@ -10,6 +10,7 @@ htmlcov/
 .venv/
 venv/
 env/
+.worktrees/
 
 # Local runtime data
 *.db
