@@ -16,6 +16,7 @@ from flask_cors import CORS
 
 from utils.ai_client import extract_keywords, get_ai_client, set_api_key
 from utils.agent_runtime.memory import create_agent_tables
+from utils.domain import APPLICATION_STATUSES, CareerService
 from utils.domain.database import ensure_column, migrate_database
 
 
@@ -210,6 +211,20 @@ def init_db() -> None:
 
 def row_to_dict(row: sqlite3.Row | None) -> dict | None:
     return dict(row) if row else None
+
+
+def get_career_service() -> CareerService:
+    return CareerService(DB_PATH, local_user_id=AGENT_USER_ID)
+
+
+def career_error_response(exc: Exception):
+    if isinstance(exc, PermissionError):
+        status = 403
+    elif isinstance(exc, LookupError):
+        status = 404
+    else:
+        status = 400
+    return jsonify({"success": False, "message": str(exc)}), status
 
 
 def allowed_file(filename: str) -> bool:
@@ -1848,63 +1863,136 @@ def questions():
     return jsonify({"success": True, "data": data, "categories": list(bank.keys())})
 
 
+@app.route("/api/profile", methods=["GET", "PUT"])
+def career_profile_api():
+    service = get_career_service()
+    try:
+        if request.method == "GET":
+            profile = service.get_profile(AGENT_USER_ID)
+        else:
+            profile = service.upsert_profile(AGENT_USER_ID, request.get_json() or {})
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify({"success": True, "data": profile})
+
+
+@app.route("/api/opportunities", methods=["GET", "POST"])
+def opportunities_api():
+    service = get_career_service()
+    try:
+        if request.method == "GET":
+            opportunities = service.list_opportunities(AGENT_USER_ID)
+            return jsonify({
+                "success": True,
+                "data": opportunities,
+                "canonical_statuses": APPLICATION_STATUSES,
+            })
+        opportunity = service.create_opportunity(AGENT_USER_ID, request.get_json() or {})
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify({"success": True, "data": opportunity}), 201
+
+
+@app.route("/api/opportunities/<int:opportunity_id>", methods=["GET", "PUT"])
+def opportunity_api(opportunity_id):
+    service = get_career_service()
+    try:
+        if request.method == "GET":
+            opportunity = service.get_opportunity(AGENT_USER_ID, opportunity_id)
+        else:
+            opportunity = service.update_opportunity(
+                AGENT_USER_ID, opportunity_id, request.get_json() or {}
+            )
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify({"success": True, "data": opportunity})
+
+
+@app.route("/api/opportunities/<int:opportunity_id>/timeline")
+def opportunity_timeline_api(opportunity_id):
+    try:
+        events = get_career_service().timeline(AGENT_USER_ID, opportunity_id)
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify({"success": True, "data": events})
+
+
+@app.route("/api/action-items", methods=["GET", "POST"])
+def action_items_api():
+    service = get_career_service()
+    try:
+        if request.method == "GET":
+            actions = service.list_action_items(AGENT_USER_ID)
+            return jsonify({"success": True, "data": actions})
+        action = service.create_action_item(AGENT_USER_ID, request.get_json() or {})
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify({"success": True, "data": action}), 201
+
+
+@app.route("/api/action-items/<int:action_id>/complete", methods=["POST"])
+def complete_action_item_api(action_id):
+    data = request.get_json() or {}
+    try:
+        action = get_career_service().complete_action_item(
+            AGENT_USER_ID, action_id, data.get("evidence", "")
+        )
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify({"success": True, "data": action})
+
+
 @app.route("/api/applications", methods=["POST"])
 def create_application():
     data = request.get_json() or {}
-    with get_db() as conn:
-        cursor = conn.execute(
-            "INSERT INTO job_applications (user_id, company, job_title, status, city, salary_min, salary_max, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                data.get("user_id", 1),
-                data.get("company", "未命名公司"),
-                data.get("job_title", "目标岗位"),
-                data.get("status", "已投递"),
-                data.get("city", ""),
-                data.get("salary_min"),
-                data.get("salary_max"),
-                data.get("notes", ""),
-            ),
-        )
-    return jsonify({"success": True, "application_id": cursor.lastrowid})
+    values = {
+        "company": data.get("company", "未命名公司"),
+        "job_title": data.get("job_title", "目标岗位"),
+        "status": data.get("status", "已投递"),
+        "city": data.get("city", ""),
+        "salary_min": data.get("salary_min"),
+        "salary_max": data.get("salary_max"),
+        "notes": data.get("notes", ""),
+    }
+    try:
+        opportunity = get_career_service().create_opportunity(AGENT_USER_ID, values)
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify({"success": True, "application_id": opportunity["id"]})
 
 
 @app.route("/api/applications/<int:user_id>")
 def list_applications(user_id):
-    with get_db() as conn:
-        rows = conn.execute("SELECT * FROM job_applications WHERE user_id = ? ORDER BY updated_at DESC", (user_id,)).fetchall()
-    return jsonify({"success": True, "data": [dict(row) for row in rows]})
+    try:
+        rows = get_career_service().list_opportunities(user_id)
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify({"success": True, "data": rows, "canonical_statuses": APPLICATION_STATUSES})
 
 
 @app.route("/api/applications/detail/<int:application_id>")
 def application_detail(application_id):
-    with get_db() as conn:
-        row = conn.execute("SELECT * FROM job_applications WHERE id = ?", (application_id,)).fetchone()
-    if not row:
-        return jsonify({"success": False, "message": "投递记录不存在"}), 404
-    return jsonify({"success": True, "data": dict(row)})
+    try:
+        row = get_career_service().get_opportunity(AGENT_USER_ID, application_id)
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify({"success": True, "data": row})
 
 
 @app.route("/api/applications/<int:application_id>", methods=["PUT"])
 def update_application(application_id):
     data = request.get_json() or {}
-    with get_db() as conn:
-        cursor = conn.execute(
-            """
-            UPDATE job_applications
-            SET company = ?, job_title = ?, status = ?, city = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (
-                data.get("company", "未命名公司"),
-                data.get("job_title", "目标岗位"),
-                data.get("status", "已投递"),
-                data.get("city", ""),
-                data.get("notes", ""),
-                application_id,
-            ),
-        )
-    if cursor.rowcount == 0:
-        return jsonify({"success": False, "message": "投递记录不存在"}), 404
+    changes = {
+        "company": data.get("company", "未命名公司"),
+        "job_title": data.get("job_title", "目标岗位"),
+        "status": data.get("status", "已投递"),
+        "city": data.get("city", ""),
+        "notes": data.get("notes", ""),
+    }
+    try:
+        get_career_service().update_opportunity(AGENT_USER_ID, application_id, changes)
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
     return jsonify({"success": True, "message": "投递记录已更新"})
 
 
@@ -1953,19 +2041,17 @@ def coach_application(application_id):
 @app.route("/api/applications/<int:application_id>/advance", methods=["POST"])
 def advance_application(application_id):
     stages = ["已投递", "简历筛选", "笔试", "一面", "二面", "HR 面", "Offer", "已拒绝"]
-    with get_db() as conn:
-        row = conn.execute("SELECT * FROM job_applications WHERE id = ?", (application_id,)).fetchone()
-        if not row:
-            return jsonify({"success": False, "message": "投递记录不存在"}), 404
-        current = row["status"]
+    service = get_career_service()
+    try:
+        opportunity = service.get_opportunity(AGENT_USER_ID, application_id)
+        current = opportunity["status"]
         try:
             next_status = stages[min(stages.index(current) + 1, len(stages) - 1)]
         except ValueError:
             next_status = "简历筛选"
-        conn.execute(
-            "UPDATE job_applications SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (next_status, application_id),
-        )
+        service.update_opportunity(AGENT_USER_ID, application_id, {"status": next_status})
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
     return jsonify({"success": True, "status": next_status})
 
 

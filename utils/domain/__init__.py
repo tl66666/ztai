@@ -7,9 +7,11 @@ from .database import (
     ensure_column,
     migrate_database,
 )
+from .career import CareerService
 
 __all__ = [
     "APPLICATION_STATUSES",
+    "CareerService",
     "LEGACY_STATUS_MAP",
     "connect",
     "ensure_column",
