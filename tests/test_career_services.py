@@ -59,6 +59,12 @@ class CareerServiceTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def assert_event_failure_rolls_back(self, operation, assert_unchanged):
+        with patch.object(self.service, "_write_event", side_effect=RuntimeError("event failed")):
+            with self.assertRaisesRegex(RuntimeError, "event failed"):
+                operation()
+        assert_unchanged()
+
     def test_profile_upsert_round_trips_canonical_fields(self):
         values = {
             "career_direction": "software",
@@ -205,6 +211,63 @@ class CareerServiceTests(unittest.TestCase):
 
         self.assertEqual(self.service.get_opportunity(1, opportunity["id"])["status"], "已投递")
         self.assertEqual(self.service.list_action_items(1)[0]["status"], "pending")
+
+    def test_event_failure_rolls_back_profile_upsert(self):
+        original = self.service.upsert_profile(1, {"target_role": "Engineer"})
+
+        self.assert_event_failure_rolls_back(
+            lambda: self.service.upsert_profile(
+                1, {"target_role": "Manager", "cities": ["Shanghai"]}
+            ),
+            lambda: self.assertEqual(self.service.get_profile(1), original),
+        )
+
+    def test_event_failure_rolls_back_resume_version_creation(self):
+        with connect(self.db_path) as conn:
+            source_id = conn.execute(
+                "INSERT INTO resumes (user_id, title, content) VALUES (1, 'Base', 'original')"
+            ).lastrowid
+
+        def assert_only_source_remains():
+            with connect(self.db_path) as conn:
+                rows = conn.execute(
+                    "SELECT id, parent_resume_id, content FROM resumes WHERE user_id = 1"
+                ).fetchall()
+            self.assertEqual([tuple(row) for row in rows], [(source_id, None, "original")])
+
+        self.assert_event_failure_rolls_back(
+            lambda: self.service.create_resume_version(
+                1, source_id, "tailored", {"version_label": "v2"}
+            ),
+            assert_only_source_remains,
+        )
+
+    def test_event_failure_rolls_back_action_item_creation(self):
+        opportunity = self.service.create_opportunity(
+            1, {"company": "Acme", "job_title": "Engineer"}
+        )
+
+        self.assert_event_failure_rolls_back(
+            lambda: self.service.create_action_item(
+                1, {"opportunity_id": opportunity["id"], "title": "Follow up"}
+            ),
+            lambda: self.assertEqual(self.service.list_action_items(1), []),
+        )
+
+    def test_event_failure_rolls_back_soft_delete(self):
+        opportunity = self.service.create_opportunity(
+            1, {"company": "Acme", "job_title": "Engineer"}
+        )
+
+        def assert_opportunity_remains_active():
+            current = self.service.get_opportunity(1, opportunity["id"])
+            self.assertIsNone(current["deleted_at"])
+            self.assertEqual(len(self.service.list_opportunities(1)), 1)
+
+        self.assert_event_failure_rolls_back(
+            lambda: self.service.delete_opportunity(1, opportunity["id"]),
+            assert_opportunity_remains_active,
+        )
 
     def test_unknown_legacy_status_remains_visible_for_review(self):
         with connect(self.db_path) as conn:
