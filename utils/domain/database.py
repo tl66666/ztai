@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
-import shutil
 import sqlite3
 import tempfile
 
@@ -67,17 +66,21 @@ def ensure_column(
 
 def migrate_database(db_path: str | os.PathLike[str]) -> None:
     path = os.fspath(db_path)
-    with connect(path) as conn:
-        current_version = conn.execute("PRAGMA user_version").fetchone()[0]
-
-    if current_version >= SCHEMA_VERSION:
-        return
-
-    _backup_pre_migration_database(path)
+    if _is_in_memory_database(path):
+        raise ValueError(
+            "migrate_database requires a persistent path, not an in-memory database"
+        )
 
     with connect(path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            current_version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if current_version >= SCHEMA_VERSION:
+                conn.rollback()
+                return
+
+            # The reserved lock prevents new writes while a separate reader snapshots WAL.
+            _backup_pre_migration_database(path)
             if current_version < 1:
                 _migrate_to_version_1(conn)
                 conn.execute("PRAGMA user_version = 1")
@@ -94,12 +97,32 @@ def _backup_pre_migration_database(db_path: str) -> None:
         return
 
     backup_path = f"{db_path}.backup-v0"
-    if not os.path.exists(backup_path):
-        shutil.copy2(db_path, backup_path)
+    if os.path.exists(backup_path):
+        return
+
+    backup_dir = os.path.dirname(os.path.abspath(backup_path))
+    file_descriptor, temporary_path = tempfile.mkstemp(
+        dir=backup_dir,
+        prefix=f".{os.path.basename(backup_path)}-",
+        suffix=".tmp",
+    )
+    os.close(file_descriptor)
+    try:
+        with connect(db_path) as source, connect(temporary_path) as destination:
+            source.backup(destination)
+        os.replace(temporary_path, backup_path)
+    except Exception:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
+        raise
+
+
+def _is_in_memory_database(db_path: str) -> bool:
+    return db_path == ":memory:" or db_path.startswith("file::memory:")
 
 
 def _is_obvious_temporary_database(db_path: str) -> bool:
-    if db_path == ":memory:" or db_path.startswith("file::memory:"):
+    if _is_in_memory_database(db_path):
         return True
 
     resolved_path = Path(db_path).resolve()

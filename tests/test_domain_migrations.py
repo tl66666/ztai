@@ -169,6 +169,54 @@ class DomainMigrationTests(unittest.TestCase):
                 if os.path.isdir(persistent_dir):
                     os.rmdir(persistent_dir)
 
+    def test_backup_includes_committed_wal_state_while_connection_is_open(self):
+        persistent_dir = os.path.join(
+            os.getcwd(), f".migration-wal-test-{uuid.uuid4().hex}"
+        )
+        os.makedirs(persistent_dir)
+        db_path = os.path.join(persistent_dir, "legacy.db")
+        backup_path = f"{db_path}.backup-v0"
+        writer = sqlite3.connect(db_path)
+        try:
+            writer.execute("PRAGMA journal_mode = WAL")
+            writer.execute("PRAGMA wal_autocheckpoint = 0")
+            writer.executescript(
+                """
+                CREATE TABLE job_applications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    company TEXT NOT NULL,
+                    job_title TEXT NOT NULL,
+                    status TEXT
+                );
+                INSERT INTO job_applications (
+                    user_id, company, job_title, status
+                ) VALUES (1, 'WAL 公司', '后端工程师', '面试中');
+                """
+            )
+            writer.commit()
+
+            migrate_database(db_path)
+
+            with connect(backup_path) as backup:
+                row = backup.execute(
+                    "SELECT company, status FROM job_applications WHERE id = 1"
+                ).fetchone()
+                self.assertEqual(tuple(row), ("WAL 公司", "面试中"))
+                version = backup.execute("PRAGMA user_version").fetchone()[0]
+                self.assertEqual(version, 0)
+        finally:
+            writer.close()
+            for suffix in ("-shm", "-wal", ".backup-v0", ""):
+                path = f"{db_path}{suffix}"
+                if os.path.exists(path):
+                    os.remove(path)
+            os.rmdir(persistent_dir)
+
+    def test_in_memory_database_requires_a_persistent_path(self):
+        with self.assertRaisesRegex(ValueError, "persistent path"):
+            migrate_database(":memory:")
+
     def test_failed_migration_does_not_advance_user_version(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = os.path.join(temp_dir, "broken-test.db")
