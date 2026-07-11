@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 
+from utils.agent_runtime.context import ContextBuilder, extract_explicit_facts
 from utils.agent_runtime.memory import MemoryStore, create_agent_tables
 
 
@@ -77,6 +78,47 @@ class AgentMemoryTests(unittest.TestCase):
             {memory["status"] for memory in all_memories},
             {"confirmed", "superseded"},
         )
+
+    def test_explicit_profile_facts_are_extracted_without_guessing(self):
+        facts = extract_explicit_facts("我想去杭州，目标岗位是 Python 测试工程师，期望薪资 12k-15k")
+
+        self.assertEqual(facts["target_city"], "杭州")
+        self.assertEqual(facts["target_role"], "Python 测试工程师")
+        self.assertEqual(facts["salary_expectation"], "12k-15k")
+
+    def test_context_uses_recent_messages_and_active_confirmed_memories(self):
+        conversation = self.store.create_conversation(1, "上下文")
+        for index in range(15):
+            self.store.add_message(conversation.id, 1, "user", f"消息{index}")
+        self.store.upsert_memory(
+            1, "semantic", "preference", "target_city", "杭州", 0.95, "confirmed"
+        )
+        self.store.upsert_memory(
+            1, "semantic", "preference", "old_city", "上海", 0.5, "superseded"
+        )
+
+        context = ContextBuilder(self.store, self.db_path).build(
+            1, conversation.id, "继续准备杭州岗位"
+        )
+
+        self.assertEqual(len(context.recent_messages), 12)
+        self.assertEqual(context.recent_messages[0]["content"], "消息3")
+        profile_text = "\n".join(context.profile_facts)
+        self.assertIn("杭州", profile_text)
+        self.assertNotIn("上海", profile_text)
+
+    def test_long_conversation_triggers_and_saves_rolling_summary(self):
+        conversation = self.store.create_conversation(1, "摘要")
+        for index in range(18):
+            self.store.add_message(conversation.id, 1, "user", f"第{index}条消息")
+        builder = ContextBuilder(self.store, self.db_path)
+
+        self.assertTrue(builder.needs_summary(conversation.id, 1))
+        summary = builder.summarize(conversation.id, 1)
+
+        restored = self.store.get_conversation(conversation.id, 1)
+        self.assertIn("当前目标", summary)
+        self.assertEqual(restored.summary, summary)
 
 
 if __name__ == "__main__":

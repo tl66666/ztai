@@ -237,6 +237,32 @@ class MemoryStore:
             )
         return True
 
+    def message_count(self, conversation_id: str, user_id: int) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM agent_messages WHERE conversation_id = ? AND user_id = ?",
+                (conversation_id, user_id),
+            ).fetchone()
+        return int(row["count"] if row else 0)
+
+    def save_summary(
+        self,
+        conversation_id: str,
+        user_id: int,
+        summary: str,
+        until_message_id: int | None,
+    ) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE agent_conversations
+                SET summary = ?, summary_until_message_id = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (summary, until_message_id, _now(), conversation_id, user_id),
+            )
+        return cursor.rowcount > 0
+
     def upsert_memory(
         self,
         user_id: int,
