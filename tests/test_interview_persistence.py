@@ -2,9 +2,13 @@ import json
 import importlib
 import os
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
 from utils.domain.database import connect, migrate_database
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 
 
 def create_database(db_path):
@@ -123,6 +127,117 @@ class InterviewPersistenceTests(unittest.TestCase):
         self.assertEqual(state["jd"], "Build APIs")
         self.assertEqual(state["career_profile"], "tech")
         self.assertEqual(state["stage_index"], 0)
+        self.assertIsInstance(started["session_id"], str)
+        self.assertIsInstance(resumed["session_id"], str)
+
+    def test_concurrent_duplicate_submission_advances_once(self):
+        session_id = self.start()["session_id"]
+        barrier = threading.Barrier(2)
+
+        def submit():
+            barrier.wait()
+            return self.make_service().answer(
+                1,
+                session_id,
+                "The same answer",
+                submission_id="submission-concurrent-1",
+                expected_stage_index=0,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda _index: submit(), range(2)))
+
+        self.assertEqual([response["progress"] for response in responses], [2, 2])
+        self.assertEqual(sum(bool(response.get("idempotent")) for response in responses), 1)
+        with connect(self.db_path) as conn:
+            state = json.loads(
+                conn.execute(
+                    "SELECT conversation_json FROM interview_sessions WHERE id = ?", (session_id,)
+                ).fetchone()[0]
+            )
+            answered_events = conn.execute(
+                """
+                SELECT COUNT(*) FROM domain_events
+                WHERE aggregate_id = ? AND event_type = 'interview.answered'
+                """,
+                (session_id,),
+            ).fetchone()[0]
+        candidates = [item for item in state["conversation"] if item["role"] == "candidate"]
+        self.assertEqual(state["stage_index"], 1)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(answered_events, 1)
+
+    def test_stale_expected_stage_conflicts_without_advancing(self):
+        from utils.domain.interviews import InterviewConflictError
+
+        session_id = self.start()["session_id"]
+        self.service.answer(
+            1,
+            session_id,
+            "First answer",
+            submission_id="submission-first",
+            expected_stage_index=0,
+        )
+
+        with self.assertRaises(InterviewConflictError):
+            self.service.answer(
+                1,
+                session_id,
+                "Stale second answer",
+                submission_id="submission-stale",
+                expected_stage_index=0,
+            )
+
+        self.assertEqual(self.service.get(1, session_id)["progress"], 2)
+
+    def test_open_list_isolates_corrupt_session_state(self):
+        healthy_id = self.start()["session_id"]
+        with connect(self.db_path) as conn:
+            malformed_id = conn.execute(
+                """
+                INSERT INTO interview_sessions (
+                    user_id, job_title, status, current_stage, conversation_json
+                ) VALUES (1, 'Malformed', 'active', 'opening', '{')
+                """
+            ).lastrowid
+            non_object_id = conn.execute(
+                """
+                INSERT INTO interview_sessions (
+                    user_id, job_title, status, current_stage, conversation_json
+                ) VALUES (1, 'Non-object', 'active', 'opening', '[]')
+                """
+            ).lastrowid
+            invalid_stage_id = conn.execute(
+                """
+                INSERT INTO interview_sessions (
+                    user_id, job_title, status, current_stage, conversation_json
+                ) VALUES (1, 'Invalid stage', 'active', 'opening', ?)
+                """,
+                (
+                    json.dumps(
+                        {
+                            "version": 1,
+                            "stage_index": 99,
+                            "conversation": [],
+                            "current_question": "Invalid",
+                        }
+                    ),
+                ),
+            ).lastrowid
+
+        sessions = self.make_service().list_open(1)
+
+        healthy = [item for item in sessions if item.get("status") == "active"]
+        recovery = [item for item in sessions if item.get("status") == "recovery_error"]
+        self.assertEqual([item["session_id"] for item in healthy], [healthy_id])
+        self.assertEqual(
+            {item["session_id"] for item in recovery},
+            {str(malformed_id), str(non_object_id), str(invalid_stage_id)},
+        )
+        self.assertTrue(all(item["recovery_error"] == "invalid interview session state" for item in recovery))
+        corrupt = self.make_service().get(1, malformed_id)
+        self.assertEqual(corrupt["status"], "recovery_error")
+        self.assertEqual(corrupt["session_id"], str(malformed_id))
 
     def test_answer_is_persisted_and_resumable(self):
         session_id = self.start()["session_id"]
@@ -290,6 +405,67 @@ class InterviewApiPersistenceTests(unittest.TestCase):
                 "SELECT user_id FROM interview_sessions WHERE id = ?", (started["session_id"],)
             ).fetchone()[0]
         self.assertEqual(owner, 1)
+        self.assertIsInstance(started["session_id"], str)
+
+    def test_duplicate_api_submission_advances_once_and_stale_submission_conflicts(self):
+        session_id = self.start().get_json()["session_id"]
+        body = {
+            "answer": "I tested the same API response.",
+            "submission_id": "api-submission-1",
+            "expected_stage_index": 0,
+        }
+
+        first = self.client.post(f"/api/interview/sessions/{session_id}/answer", json=body)
+        duplicate = self.client.post(f"/api/interview/sessions/{session_id}/answer", json=body)
+        conflict = self.client.post(
+            f"/api/interview/sessions/{session_id}/answer",
+            json={
+                "answer": "A stale different answer",
+                "submission_id": "api-submission-2",
+                "expected_stage_index": 0,
+            },
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertTrue(duplicate.get_json()["idempotent"])
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(conflict.get_json()["code"], "interview_stage_conflict")
+        with connect(self.db_path) as conn:
+            state = json.loads(
+                conn.execute(
+                    "SELECT conversation_json FROM interview_sessions WHERE id = ?", (session_id,)
+                ).fetchone()[0]
+            )
+            answered_events = conn.execute(
+                "SELECT COUNT(*) FROM domain_events WHERE event_type = 'interview.answered'"
+            ).fetchone()[0]
+        self.assertEqual(state["stage_index"], 1)
+        self.assertEqual(
+            len([item for item in state["conversation"] if item["role"] == "candidate"]), 1
+        )
+        self.assertEqual(answered_events, 1)
+
+    def test_open_api_returns_healthy_and_recovery_items_for_corrupt_rows(self):
+        healthy_id = self.start().get_json()["session_id"]
+        with connect(self.db_path) as conn:
+            corrupt_id = conn.execute(
+                """
+                INSERT INTO interview_sessions (
+                    user_id, job_title, status, current_stage, conversation_json
+                ) VALUES (1, 'Corrupt', 'active', 'opening', 'null')
+                """
+            ).lastrowid
+
+        response = self.client.get("/api/interview/sessions/open")
+
+        self.assertEqual(response.status_code, 200)
+        items = response.get_json()["data"]
+        self.assertIn(healthy_id, [item["session_id"] for item in items])
+        self.assertIn(
+            {"session_id": str(corrupt_id), "status": "recovery_error", "recovery_error": "invalid interview session state"},
+            items,
+        )
 
     def test_non_object_json_and_empty_answers_return_stable_400(self):
         start_response = self.client.post("/api/interview/sessions", json=[])
@@ -308,6 +484,29 @@ class InterviewApiPersistenceTests(unittest.TestCase):
         self.assertEqual(empty_answer.status_code, 400)
         self.assertEqual(empty_answer.get_json()["message"], "answer is required")
 
+    def test_submission_metadata_must_be_a_valid_complete_pair(self):
+        invalid_bodies = [
+            {"answer": "Answer", "submission_id": "", "expected_stage_index": 0},
+            {"answer": "Answer", "submission_id": "submission-only"},
+            {"answer": "Answer", "expected_stage_index": 0},
+            {
+                "answer": "Answer",
+                "submission_id": "submission-string-stage",
+                "expected_stage_index": "0",
+            },
+        ]
+
+        for body in invalid_bodies:
+            with self.subTest(body=body):
+                session_id = self.start().get_json()["session_id"]
+                response = self.client.post(
+                    f"/api/interview/sessions/{session_id}/answer", json=body
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(
+                    self.app_module.get_interview_service().get(1, session_id)["progress"], 1
+                )
+
     def test_missing_and_cross_user_sessions_return_404_and_403(self):
         missing = self.client.post(
             "/api/interview/sessions/99999/answer", json={"answer": "Answer"}
@@ -325,6 +524,22 @@ class InterviewApiPersistenceTests(unittest.TestCase):
 
         self.assertEqual(missing.status_code, 404)
         self.assertEqual(cross_user.status_code, 403)
+
+
+class InterviewFrontendSubmissionTests(unittest.TestCase):
+    def test_frontend_sends_one_reusable_submission_identity_and_stage_precondition(self):
+        with open(
+            os.path.join(PROJECT_ROOT, "static", "js", "app.js"), encoding="utf-8"
+        ) as file:
+            script = file.read()
+
+        self.assertIn("interviewStageIndex", script)
+        self.assertIn("pendingInterviewSubmission", script)
+        self.assertIn("interviewSubmitting", script)
+        self.assertIn("crypto.randomUUID", script)
+        self.assertIn("submission_id: pending.submissionId", script)
+        self.assertIn("expected_stage_index: pending.expectedStageIndex", script)
+        self.assertIn("if (state.interviewSubmitting) return", script)
 
 
 if __name__ == "__main__":

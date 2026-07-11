@@ -16,7 +16,12 @@ from flask_cors import CORS
 
 from utils.ai_client import extract_keywords, get_ai_client, set_api_key
 from utils.agent_runtime.memory import create_agent_tables
-from utils.domain import APPLICATION_STATUSES, CareerService, InterviewService
+from utils.domain import (
+    APPLICATION_STATUSES,
+    CareerService,
+    InterviewConflictError,
+    InterviewService,
+)
 from utils.domain.database import ensure_column, migrate_database
 
 
@@ -245,6 +250,12 @@ def get_interview_service() -> InterviewService:
 
 
 def career_error_response(exc: Exception):
+    if isinstance(exc, InterviewConflictError):
+        return jsonify({
+            "success": False,
+            "message": str(exc),
+            "code": "interview_stage_conflict",
+        }), 409
     if isinstance(exc, PermissionError):
         status = 403
     elif isinstance(exc, LookupError):
@@ -1259,7 +1270,7 @@ def start_interview_session():
             data.get("career_profile") or data.get("profile"),
             data.get("application_id"),
         )
-    except (PermissionError, LookupError, ValueError) as exc:
+    except (InterviewConflictError, PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
     return jsonify(session)
 
@@ -1282,8 +1293,10 @@ def answer_interview_session(session_id):
             session_id,
             data.get("answer"),
             data.get("duration_seconds"),
+            submission_id=data.get("submission_id"),
+            expected_stage_index=data.get("expected_stage_index"),
         )
-    except (PermissionError, LookupError, ValueError) as exc:
+    except (InterviewConflictError, PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
     return jsonify(result)
 

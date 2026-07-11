@@ -17,6 +17,10 @@ ProfileResolver = Callable[[str], dict[str, str]]
 ProfileSelector = Callable[[str | None, str, str], str]
 
 
+class InterviewConflictError(Exception):
+    """A different submission was based on an out-of-date interview stage."""
+
+
 def _default_stages(session: dict[str, Any]) -> list[tuple[str, str]]:
     job_title = session["job_title"]
     return [
@@ -132,6 +136,7 @@ class InterviewService:
                 ],
                 "current_question": question,
                 "last_feedback": None,
+                "processed_submissions": {},
             }
             cursor = conn.execute(
                 """
@@ -171,7 +176,10 @@ class InterviewService:
         if not row:
             return None
         self._require_row_owner(row)
-        return self._response(row, self._load_state(row))
+        try:
+            return self._response(row, self._load_state(row))
+        except ValueError:
+            return self._recovery_response(row)
 
     def answer(
         self,
@@ -179,11 +187,29 @@ class InterviewService:
         session_id: int,
         answer: str,
         duration_seconds: float | None = None,
+        *,
+        submission_id: str | None = None,
+        expected_stage_index: int | None = None,
     ) -> dict[str, Any]:
+        """Save one answer.
+
+        Legacy callers may omit submission metadata and retain the original at-most-once
+        request behavior. Product API callers provide both fields for retry safety.
+        """
         self._require_local_user(user_id)
         session_id = self._required_id(session_id, "session_id")
         answer = self._text(answer, "answer", 200_000, required=True)
         duration_seconds = self._duration(duration_seconds)
+        has_submission_id = submission_id is not None
+        has_expected_stage = expected_stage_index is not None
+        if has_submission_id != has_expected_stage:
+            raise ValueError(
+                "submission_id and expected_stage_index must be provided together"
+            )
+        submission_id = self._text(
+            submission_id, "submission_id", 128, required=has_submission_id
+        )
+        expected_stage_index = self._expected_stage_index(expected_stage_index)
 
         with connect(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -194,6 +220,19 @@ class InterviewService:
                 raise LookupError("interview session not found")
             self._require_row_owner(row)
             state = self._load_state(row)
+            processed_submissions = state.setdefault("processed_submissions", {})
+            if submission_id and submission_id in processed_submissions:
+                response = dict(processed_submissions[submission_id])
+                response["idempotent"] = True
+                return response
+            current_stage_index = state["stage_index"]
+            if (
+                expected_stage_index is not None
+                and expected_stage_index != current_stage_index
+            ):
+                raise InterviewConflictError(
+                    "interview session stage changed; refresh before retrying"
+                )
             if row["status"] == "completed":
                 response = self._response(row, state)
                 response["idempotent"] = True
@@ -202,7 +241,7 @@ class InterviewService:
             stages = self.stages_builder(self._session_context(row, state))
             if not isinstance(stages, list) or len(stages) != 5:
                 raise ValueError("interview flow must contain five post-opening stages")
-            stage_index = int(state.get("stage_index", 0)) + 1
+            stage_index = current_stage_index + 1
             stage, question = stages[min(stage_index - 1, len(stages) - 1)]
             candidate, feedback, skipped = self.answer_evaluator(
                 self._session_context(row, state), answer, duration_seconds, stage
@@ -261,6 +300,7 @@ class InterviewService:
                     "stage_index": stage_index,
                     "skipped": bool(skipped),
                     "has_duration": duration_seconds is not None,
+                    "submission_id": submission_id,
                 },
             )
             if completed:
@@ -288,7 +328,18 @@ class InterviewService:
             row = conn.execute(
                 "SELECT * FROM interview_sessions WHERE id = ?", (session_id,)
             ).fetchone()
-        return self._response(row, state)
+            response = self._response(row, state)
+            if submission_id:
+                processed_submissions[submission_id] = response
+                conn.execute(
+                    """
+                    UPDATE interview_sessions
+                    SET conversation_json = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (self._dump(state), session_id, self.local_user_id),
+                )
+        return response
 
     def list_open(self, user_id: int) -> list[dict[str, Any]]:
         self._require_local_user(user_id)
@@ -301,7 +352,13 @@ class InterviewService:
                 """,
                 (self.local_user_id,),
             ).fetchall()
-        return [self._response(row, self._load_state(row)) for row in rows]
+        sessions = []
+        for row in rows:
+            try:
+                sessions.append(self._response(row, self._load_state(row)))
+            except ValueError:
+                sessions.append(self._recovery_response(row))
+        return sessions
 
     def _response(self, row: sqlite3.Row, state: dict[str, Any]) -> dict[str, Any]:
         conversation = state.get("conversation")
@@ -315,7 +372,7 @@ class InterviewService:
                     break
         result = {
             "success": True,
-            "session_id": row["id"],
+            "session_id": str(row["id"]),
             "stage": row["current_stage"],
             "question": question,
             "profile": state.get("profile") or {},
@@ -330,6 +387,14 @@ class InterviewService:
         if state.get("last_feedback") is not None:
             result["feedback"] = state["last_feedback"]
         return result
+
+    @staticmethod
+    def _recovery_response(row: sqlite3.Row) -> dict[str, str]:
+        return {
+            "session_id": str(row["id"]),
+            "status": "recovery_error",
+            "recovery_error": "invalid interview session state",
+        }
 
     def _session_context(self, row: sqlite3.Row, state: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -358,6 +423,27 @@ class InterviewService:
         except (TypeError, json.JSONDecodeError) as exc:
             raise ValueError("invalid interview session state") from exc
         if not isinstance(state, dict) or not isinstance(state.get("conversation"), list):
+            raise ValueError("invalid interview session state")
+        version = state.get("version")
+        stage_index = state.get("stage_index")
+        if version != 1 or isinstance(stage_index, bool) or not isinstance(stage_index, int):
+            raise ValueError("invalid interview session state")
+        if not 0 <= stage_index <= 5:
+            raise ValueError("invalid interview session state")
+        processed = state.setdefault("processed_submissions", {})
+        if not isinstance(processed, dict) or not all(
+            isinstance(key, str) and isinstance(value, dict)
+            for key, value in processed.items()
+        ):
+            raise ValueError("invalid interview session state")
+        try:
+            stages = self.stages_builder(self._session_context(row, state))
+            expected_stage = "opening" if stage_index == 0 else stages[stage_index - 1][0]
+        except (IndexError, KeyError, TypeError, ValueError) as exc:
+            raise ValueError("invalid interview session state") from exc
+        if len(stages) != 5 or row["current_stage"] != expected_stage:
+            raise ValueError("invalid interview session state")
+        if (row["status"] == "completed") != (stage_index == 5):
             raise ValueError("invalid interview session state")
         return state
 
@@ -444,5 +530,15 @@ class InterviewService:
             raise ValueError("duration_seconds must not be negative")
         return result
 
+    @staticmethod
+    def _expected_stage_index(value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("expected_stage_index must be an integer")
+        if not 0 <= value <= 5:
+            raise ValueError("expected_stage_index must be between 0 and 5")
+        return value
 
-__all__ = ["InterviewService"]
+
+__all__ = ["InterviewConflictError", "InterviewService"]

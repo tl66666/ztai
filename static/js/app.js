@@ -8,6 +8,9 @@ const state = {
   careerProfiles: [],
   careerProfile: localStorage.getItem("jobhunter_career_profile") || "tech",
   activeInterview: null,
+  interviewStageIndex: 0,
+  pendingInterviewSubmission: null,
+  interviewSubmitting: false,
   skillChart: null,
   recognition: null,
   recognizing: false,
@@ -965,12 +968,15 @@ async function startInterview() {
   });
   if (!data.success) return toast(data.message || "面试创建失败");
   state.activeInterview = data.session_id;
+  state.pendingInterviewSubmission = null;
+  state.interviewSubmitting = false;
   updateInterviewQuestion(data);
   $("interviewFeedback").classList.add("hidden");
   openInterviewRoom(data);
 }
 
 function updateInterviewQuestion(data) {
+  state.interviewStageIndex = Math.max(0, Number(data.progress || 1) - 1);
   $("currentQuestion").textContent = data.question;
   $("interviewStageLabel").textContent = stageName(data.stage);
   const progress = Math.min(100, (data.progress / data.total) * 100);
@@ -1003,16 +1009,44 @@ function stageName(stage) {
 
 async function sendInterviewAnswer() {
   if (!state.activeInterview) return toast("请先开始模拟面试");
+  if (state.interviewSubmitting) return;
   const answer = $("answerInput").value.trim();
   if (!answer) return toast("请先输入回答");
-  const data = await api(`/interview/sessions/${state.activeInterview}/answer`, { method: "POST", body: { answer } });
-  if (!data.success) return toast(data.message || "提交失败");
-  updateInterviewQuestion(data);
-  $("answerInput").value = "";
-  renderFeedback(data.feedback);
-  if (data.stage === "finished") {
-    loadDashboard();
-    loadTrainingRecords();
+  let pending = state.pendingInterviewSubmission;
+  if (!pending || pending.answer !== answer || pending.expectedStageIndex !== state.interviewStageIndex) {
+    const submissionId = globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `interview-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    pending = {
+      answer,
+      submissionId,
+      expectedStageIndex: state.interviewStageIndex,
+    };
+    state.pendingInterviewSubmission = pending;
+  }
+  state.interviewSubmitting = true;
+  try {
+    const data = await api(`/interview/sessions/${state.activeInterview}/answer`, {
+      method: "POST",
+      body: {
+        answer: pending.answer,
+        submission_id: pending.submissionId,
+        expected_stage_index: pending.expectedStageIndex,
+      },
+    });
+    state.pendingInterviewSubmission = null;
+    if (!data.success) return toast(data.message || "提交失败");
+    updateInterviewQuestion(data);
+    $("answerInput").value = "";
+    renderFeedback(data.feedback);
+    if (data.stage === "finished") {
+      loadDashboard();
+      loadTrainingRecords();
+    }
+  } catch (error) {
+    toast("提交失败，请重试");
+  } finally {
+    state.interviewSubmitting = false;
   }
 }
 
