@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 import re
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import requests
 
@@ -154,14 +154,20 @@ class MultiModelAIClient:
         temperature: float = 0.6,
         max_tokens: int = 2200,
         timeout: int = 45,
+        tools: Optional[List[dict]] = None,
+        tool_choice: Optional[Any] = None,
+        response_format: Optional[dict] = None,
     ) -> dict:
         if not self.api_key:
+            content = self._local_response(messages)
             return {
                 "success": False,
                 "provider": "local",
                 "model": "local-career-agent",
+                "error_code": "missing_api_key",
                 "message": "未配置 API Key，已使用本地智能规则兜底。",
-                "content": self._local_response(messages),
+                "assistant_message": {"role": "assistant", "content": content},
+                "content": content,
             }
 
         payload = {
@@ -170,6 +176,12 @@ class MultiModelAIClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if tools is not None:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if response_format is not None:
+            payload["response_format"] = response_format
 
         try:
             response = requests.post(
@@ -183,27 +195,56 @@ class MultiModelAIClient:
             )
             if response.status_code == 200:
                 data = response.json()
+                message = data["choices"][0]["message"]
                 return {
                     "success": True,
                     "provider": self.provider.id,
                     "model": self.selected_model,
-                    "content": data["choices"][0]["message"]["content"],
+                    "message": message,
+                    "assistant_message": message,
+                    "content": message.get("content") or "",
                     "usage": data.get("usage", {}),
                 }
+            error_code = {
+                401: "authentication_error",
+                403: "authentication_error",
+                408: "timeout",
+                429: "rate_limited",
+            }.get(response.status_code, "http_error")
             return {
                 "success": False,
                 "provider": self.provider.id,
                 "model": self.selected_model,
+                "error_code": error_code,
                 "message": f"HTTP {response.status_code}: {response.text[:240]}",
-                "content": self._local_response(messages),
+                "content": "",
             }
-        except Exception as exc:
+        except requests.Timeout as exc:
             return {
                 "success": False,
                 "provider": self.provider.id,
                 "model": self.selected_model,
+                "error_code": "timeout",
                 "message": str(exc),
-                "content": self._local_response(messages),
+                "content": "",
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            return {
+                "success": False,
+                "provider": self.provider.id,
+                "model": self.selected_model,
+                "error_code": "invalid_response",
+                "message": str(exc),
+                "content": "",
+            }
+        except requests.RequestException as exc:
+            return {
+                "success": False,
+                "provider": self.provider.id,
+                "model": self.selected_model,
+                "error_code": "network_error",
+                "message": str(exc),
+                "content": "",
             }
 
     def analyze_resume(self, resume_content: str, job_title: str = "") -> dict:
