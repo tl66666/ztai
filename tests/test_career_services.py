@@ -575,6 +575,23 @@ class CareerApiTests(unittest.TestCase):
         self.assertEqual(response.content_type, "application/json")
         self.assertFalse(response.get_json()["success"])
 
+    def test_legacy_application_writes_reject_invalid_json_shapes(self):
+        application_id = self.client.post(
+            "/api/applications", json={"company": "Acme", "job_title": "Engineer"}
+        ).get_json()["application_id"]
+        cases = (('"text"', "string"), ("[]", "array"), ("null", "null"), ("{", "malformed"))
+
+        for body, label in cases:
+            for method, path in (
+                (self.client.post, "/api/applications"),
+                (self.client.put, f"/api/applications/{application_id}"),
+            ):
+                with self.subTest(label=label, path=path):
+                    response = method(path, data=body, content_type="application/json")
+                    self.assertEqual(response.status_code, 400)
+                    self.assertEqual(response.content_type, "application/json")
+                    self.assertFalse(response.get_json()["success"])
+
 
 if __name__ == "__main__":
     unittest.main()

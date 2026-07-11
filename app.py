@@ -1957,17 +1957,17 @@ def complete_action_item_api(action_id):
 
 @app.route("/api/applications", methods=["POST"])
 def create_application():
-    data = request.get_json() or {}
-    values = {
-        "company": data.get("company", "未命名公司"),
-        "job_title": data.get("job_title", "目标岗位"),
-        "status": data.get("status", "已投递"),
-        "city": data.get("city", ""),
-        "salary_min": data.get("salary_min"),
-        "salary_max": data.get("salary_max"),
-        "notes": data.get("notes", ""),
-    }
     try:
+        data = json_object_body()
+        values = {
+            "company": data.get("company", "未命名公司"),
+            "job_title": data.get("job_title", "目标岗位"),
+            "status": data.get("status", "已投递"),
+            "city": data.get("city", ""),
+            "salary_min": data.get("salary_min"),
+            "salary_max": data.get("salary_max"),
+            "notes": data.get("notes", ""),
+        }
         opportunity = get_career_service().create_opportunity(AGENT_USER_ID, values)
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
@@ -1994,15 +1994,15 @@ def application_detail(application_id):
 
 @app.route("/api/applications/<int:application_id>", methods=["PUT"])
 def update_application(application_id):
-    data = request.get_json() or {}
-    changes = {
-        "company": data.get("company", "未命名公司"),
-        "job_title": data.get("job_title", "目标岗位"),
-        "status": data.get("status", "已投递"),
-        "city": data.get("city", ""),
-        "notes": data.get("notes", ""),
-    }
     try:
+        data = json_object_body()
+        changes = {
+            "company": data.get("company", "未命名公司"),
+            "job_title": data.get("job_title", "目标岗位"),
+            "status": data.get("status", "已投递"),
+            "city": data.get("city", ""),
+            "notes": data.get("notes", ""),
+        }
         get_career_service().update_opportunity(AGENT_USER_ID, application_id, changes)
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
