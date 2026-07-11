@@ -1284,6 +1284,28 @@ def list_open_interview_sessions():
     return jsonify({"success": True, "data": sessions})
 
 
+@app.route("/api/interview/sessions/<session_id>", methods=["GET"])
+def get_interview_session(session_id):
+    try:
+        session = get_interview_service().get(AGENT_USER_ID, session_id)
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    if session is None:
+        return jsonify({
+            "success": False,
+            "message": "interview session not found",
+            "code": "interview_session_not_found",
+        }), 404
+    if session.get("status") == "recovery_error":
+        return jsonify({
+            **session,
+            "success": False,
+            "message": session["recovery_error"],
+            "code": "interview_session_recovery_error",
+        }), 409
+    return jsonify(session)
+
+
 @app.route("/api/interview/sessions/<session_id>/answer", methods=["POST"])
 def answer_interview_session(session_id):
     try:

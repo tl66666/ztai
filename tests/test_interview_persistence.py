@@ -239,6 +239,54 @@ class InterviewPersistenceTests(unittest.TestCase):
         self.assertEqual(corrupt["status"], "recovery_error")
         self.assertEqual(corrupt["session_id"], str(malformed_id))
 
+    def test_poisoned_cached_submission_quarantines_session_and_cannot_replay(self):
+        session_id = self.start()["session_id"]
+        self.service.answer(
+            1,
+            session_id,
+            "Original answer",
+            submission_id="valid-submission",
+            expected_stage_index=0,
+        )
+        with connect(self.db_path) as conn:
+            state = json.loads(
+                conn.execute(
+                    "SELECT conversation_json FROM interview_sessions WHERE id = ?", (session_id,)
+                ).fetchone()[0]
+            )
+            state["processed_submissions"] = {"poisoned-submission": {}}
+            conn.execute(
+                "UPDATE interview_sessions SET conversation_json = ? WHERE id = ?",
+                (json.dumps(state), session_id),
+            )
+
+        recovered = self.make_service().get(1, session_id)
+        listed = self.make_service().list_open(1)
+        with self.assertRaisesRegex(ValueError, "invalid interview session state"):
+            self.make_service().answer(
+                1,
+                session_id,
+                "Poisoned retry",
+                submission_id="poisoned-submission",
+                expected_stage_index=1,
+            )
+
+        self.assertEqual(recovered["status"], "recovery_error")
+        self.assertEqual(listed[0]["status"], "recovery_error")
+        with connect(self.db_path) as conn:
+            persisted = json.loads(
+                conn.execute(
+                    "SELECT conversation_json FROM interview_sessions WHERE id = ?", (session_id,)
+                ).fetchone()[0]
+            )
+            answered_events = conn.execute(
+                "SELECT COUNT(*) FROM domain_events WHERE event_type = 'interview.answered'"
+            ).fetchone()[0]
+        self.assertEqual(
+            len([item for item in persisted["conversation"] if item["role"] == "candidate"]), 1
+        )
+        self.assertEqual(answered_events, 1)
+
     def test_answer_is_persisted_and_resumable(self):
         session_id = self.start()["session_id"]
 
@@ -467,6 +515,27 @@ class InterviewApiPersistenceTests(unittest.TestCase):
             items,
         )
 
+    def test_get_session_returns_current_state_and_stable_missing_corrupt_errors(self):
+        session_id = self.start().get_json()["session_id"]
+        healthy = self.client.get(f"/api/interview/sessions/{session_id}")
+        missing = self.client.get("/api/interview/sessions/99999")
+        with connect(self.db_path) as conn:
+            corrupt_id = conn.execute(
+                """
+                INSERT INTO interview_sessions (
+                    user_id, job_title, status, current_stage, conversation_json
+                ) VALUES (1, 'Corrupt', 'active', 'opening', '{}')
+                """
+            ).lastrowid
+        corrupt = self.client.get(f"/api/interview/sessions/{corrupt_id}")
+
+        self.assertEqual(healthy.status_code, 200)
+        self.assertEqual(healthy.get_json()["session_id"], session_id)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.get_json()["code"], "interview_session_not_found")
+        self.assertEqual(corrupt.status_code, 409)
+        self.assertEqual(corrupt.get_json()["code"], "interview_session_recovery_error")
+
     def test_non_object_json_and_empty_answers_return_stable_400(self):
         start_response = self.client.post("/api/interview/sessions", json=[])
         session_id = self.start().get_json()["session_id"]
@@ -507,6 +576,14 @@ class InterviewApiPersistenceTests(unittest.TestCase):
                     self.app_module.get_interview_service().get(1, session_id)["progress"], 1
                 )
 
+        legacy_session_id = self.start().get_json()["session_id"]
+        legacy = self.client.post(
+            f"/api/interview/sessions/{legacy_session_id}/answer",
+            json={"answer": "Legacy caller omits both metadata fields"},
+        )
+        self.assertEqual(legacy.status_code, 200)
+        self.assertEqual(legacy.get_json()["progress"], 2)
+
     def test_missing_and_cross_user_sessions_return_404_and_403(self):
         missing = self.client.post(
             "/api/interview/sessions/99999/answer", json={"answer": "Answer"}
@@ -540,6 +617,12 @@ class InterviewFrontendSubmissionTests(unittest.TestCase):
         self.assertIn("submission_id: pending.submissionId", script)
         self.assertIn("expected_stage_index: pending.expectedStageIndex", script)
         self.assertIn("if (state.interviewSubmitting) return", script)
+        self.assertIn("http_status: response.status", script)
+        with open(
+            os.path.join(PROJECT_ROOT, "static", "index.html"), encoding="utf-8"
+        ) as file:
+            html = file.read()
+        self.assertIn('<script src="js/interview_submission.js"></script>', html)
 
 
 if __name__ == "__main__":

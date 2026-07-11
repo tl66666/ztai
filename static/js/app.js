@@ -11,6 +11,7 @@ const state = {
   interviewStageIndex: 0,
   pendingInterviewSubmission: null,
   interviewSubmitting: false,
+  currentInterviewSession: null,
   skillChart: null,
   recognition: null,
   recognizing: false,
@@ -223,8 +224,13 @@ async function api(path, options = {}) {
   }
   const response = await fetch(`${API}${path}`, init);
   const type = response.headers.get("content-type") || "";
-  if (type.includes("application/json")) return response.json();
-  return { success: response.ok, content: await response.text() };
+  if (type.includes("application/json")) {
+    const payload = await response.json();
+    if (response.ok || !payload || typeof payload !== "object") return payload;
+    return { ...payload, http_status: response.status };
+  }
+  const payload = { success: response.ok, content: await response.text() };
+  return response.ok ? payload : { ...payload, http_status: response.status };
 }
 
 async function loadCareerProfiles() {
@@ -977,6 +983,7 @@ async function startInterview() {
 
 function updateInterviewQuestion(data) {
   state.interviewStageIndex = Math.max(0, Number(data.progress || 1) - 1);
+  state.currentInterviewSession = data;
   $("currentQuestion").textContent = data.question;
   $("interviewStageLabel").textContent = stageName(data.stage);
   const progress = Math.min(100, (data.progress / data.total) * 100);
@@ -1012,30 +1019,24 @@ async function sendInterviewAnswer() {
   if (state.interviewSubmitting) return;
   const answer = $("answerInput").value.trim();
   if (!answer) return toast("请先输入回答");
-  let pending = state.pendingInterviewSubmission;
-  if (!pending || pending.answer !== answer || pending.expectedStageIndex !== state.interviewStageIndex) {
-    const submissionId = globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
-      ? globalThis.crypto.randomUUID()
-      : `interview-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    pending = {
-      answer,
-      submissionId,
-      expectedStageIndex: state.interviewStageIndex,
-    };
-    state.pendingInterviewSubmission = pending;
-  }
-  state.interviewSubmitting = true;
-  try {
-    const data = await api(`/interview/sessions/${state.activeInterview}/answer`, {
+  const result = await InterviewSubmission.submitInterviewAnswer(state, answer, {
+    createId: () => (
+      globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
+        ? globalThis.crypto.randomUUID()
+        : `interview-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    ),
+    send: (pending) => api(`/interview/sessions/${state.activeInterview}/answer`, {
       method: "POST",
       body: {
         answer: pending.answer,
         submission_id: pending.submissionId,
         expected_stage_index: pending.expectedStageIndex,
       },
-    });
-    state.pendingInterviewSubmission = null;
-    if (!data.success) return toast(data.message || "提交失败");
+    }),
+    reload: () => api(`/interview/sessions/${state.activeInterview}`),
+  });
+  if (result.kind === "success") {
+    const data = result.session;
     updateInterviewQuestion(data);
     $("answerInput").value = "";
     renderFeedback(data.feedback);
@@ -1043,11 +1044,15 @@ async function sendInterviewAnswer() {
       loadDashboard();
       loadTrainingRecords();
     }
-  } catch (error) {
-    toast("提交失败，请重试");
-  } finally {
-    state.interviewSubmitting = false;
+    return;
   }
+  if (result.kind === "conflict_recovered") {
+    updateInterviewQuestion(result.session);
+    $("answerInput").value = "";
+    toast("面试进度已同步，请回答当前问题");
+    return;
+  }
+  if (result.kind !== "busy") toast("提交结果不确定，请重试");
 }
 
 async function sendRoomAnswer() {

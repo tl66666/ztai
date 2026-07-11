@@ -445,7 +445,35 @@ class InterviewService:
             raise ValueError("invalid interview session state")
         if (row["status"] == "completed") != (stage_index == 5):
             raise ValueError("invalid interview session state")
+        if not all(
+            self._valid_cached_response(row, response, stages)
+            for response in processed.values()
+        ):
+            raise ValueError("invalid interview session state")
         return state
+
+    @staticmethod
+    def _valid_cached_response(
+        row: sqlite3.Row,
+        response: dict[str, Any],
+        stages: list[tuple[str, str]],
+    ) -> bool:
+        progress = response.get("progress")
+        if isinstance(progress, bool) or not isinstance(progress, int) or not 1 <= progress <= 6:
+            return False
+        expected_stage = "opening" if progress == 1 else stages[progress - 2][0]
+        return (
+            response.get("success") is True
+            and response.get("session_id") == str(row["id"])
+            and response.get("stage") == expected_stage
+            and isinstance(response.get("question"), str)
+            and isinstance(response.get("profile"), dict)
+            and response.get("total") == 6
+            and response.get("status") in {"active", "completed"}
+            and response.get("job_title") == row["job_title"]
+            and (response.get("mode") is None or isinstance(response.get("mode"), str))
+            and isinstance(response.get("feedback"), dict)
+        )
 
     def _require_local_user(self, user_id: int) -> None:
         if user_id != self.local_user_id:
