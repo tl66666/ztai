@@ -62,7 +62,7 @@ class AgentService:
             "analyze_resume": {"label": "打开简历实验室", "page": "resume", "module": "analysis"},
             "match_job": {"label": "继续 JD 优化", "page": "resume", "module": "jd"},
             "get_interview_question": {"label": "进入面试训练", "page": "interview", "module": "mock"},
-            "list_applications": {"label": "打开投递看板", "page": "applications", "module": "board"},
+            "list_applications": {"label": "打开投递看板", "page": "tracker", "module": "board"},
             "get_dashboard": {"label": "查看项目总览", "page": "dashboard", "module": "overview"},
         }
         return [mapping[name] for name in tools_used if name in mapping][:2]

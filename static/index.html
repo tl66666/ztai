@@ -501,6 +501,12 @@
           </div>
         </section>
         <section class="panel chat-panel">
+          <div class="agent-conversation-bar">
+            <label for="agentConversationSelect">当前会话</label>
+            <select id="agentConversationSelect" class="input compact" aria-label="选择 AI 教练会话"></select>
+            <button class="icon-button" id="newAgentConversation" type="button" title="新建会话" aria-label="新建会话"><i data-lucide="message-square-plus"></i></button>
+            <button class="icon-button" id="clearAgentConversation" type="button" title="清空当前会话" aria-label="清空当前会话"><i data-lucide="eraser"></i></button>
+          </div>
           <div id="chatLog" class="chat-log">
             <div class="message bot">你好，我是你的 AI 求职教练。把目标岗位、简历片段或面试问题发给我，我们直接打磨。</div>
           </div>

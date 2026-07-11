@@ -86,6 +86,20 @@ class AgentAPITests(unittest.TestCase):
 
         self.assertEqual([item["title"] for item in response["conversations"]], ["我的会话"])
 
+    def test_application_tool_suggests_the_existing_tracker_page(self):
+        conversation_id = self.create_conversation()
+
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "user_id": 1,
+                "conversation_id": conversation_id,
+                "message": "查看我的投递记录",
+            },
+        ).get_json()
+
+        self.assertEqual(response["suggested_actions"][0]["page"], "tracker")
+
 
 if __name__ == "__main__":
     unittest.main()

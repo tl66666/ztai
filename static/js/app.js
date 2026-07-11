@@ -1,5 +1,6 @@
 const API = window.location.protocol === "file:" ? "http://localhost:5000/api" : "/api";
 const USER_ID = 1;
+const JOBHUNTER_AGENT_CONVERSATION = `jobhunter_agent_conversation_${USER_ID}`;
 
 const state = {
   resumes: [],
@@ -22,6 +23,7 @@ const state = {
   recordingTarget: "answer",
   soundEnabled: localStorage.getItem("jobhunter_sound") !== "off",
   audioContext: null,
+  agentConversationId: localStorage.getItem(JOBHUNTER_AGENT_CONVERSATION) || "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -48,6 +50,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadCareerProfiles();
   await loadProviders();
   await Promise.all([loadResumes(), loadDashboard(), loadApplications(), loadQuestions(), loadTrainingRecords()]);
+  await loadAgentConversations();
   applyInitialRouteFromQuery();
   lucide.createIcons();
 });
@@ -191,6 +194,13 @@ function bindActions() {
   $("salaryBtn").addEventListener("click", evaluateSalary);
   $("sendAgentBtn").addEventListener("click", sendAgentMessage);
   $("careerReportBtn").addEventListener("click", generateCareerReport);
+  $("newAgentConversation")?.addEventListener("click", createAgentConversation);
+  $("clearAgentConversation")?.addEventListener("click", clearAgentConversation);
+  $("agentConversationSelect")?.addEventListener("change", async () => {
+    state.agentConversationId = $("agentConversationSelect").value;
+    localStorage.setItem(JOBHUNTER_AGENT_CONVERSATION, state.agentConversationId);
+    await restoreAgentMessages();
+  });
   $("agentInput").addEventListener("keydown", (event) => {
     if (event.key === "Enter") sendAgentMessage();
   });
@@ -1669,40 +1679,33 @@ async function sendAgentMessage() {
   const input = $("agentInput");
   const message = input.value.trim();
   if (!message) return;
+  if (!state.agentConversationId) await createAgentConversation();
   appendMessage(message, "user");
   input.value = "";
   const data = await withLoading(
-    () => api("/agent/chat", { method: "POST", body: { message } }),
-    "Agent 正在思考并选择工具..."
+    () => api("/agent/chat", {
+      method: "POST",
+      body: {
+        user_id: USER_ID,
+        conversation_id: state.agentConversationId,
+        message,
+      },
+    }),
+    "AI 教练正在读取上下文并处理任务..."
   );
+  if (!data.success) return toast(data.message || "AI 教练暂时不可用");
+  state.agentConversationId = data.conversation_id;
+  localStorage.setItem(JOBHUNTER_AGENT_CONVERSATION, state.agentConversationId);
   const reply = data.reply || data.message || "我暂时没想好，换个问法试试。";
   appendMessage(reply, "bot");
-
-  // 如果有 Agent 思考链路，展示工具使用过程
-  if (data.tools_used && data.tools_used.length > 0) {
-    const traceHtml = `<div class="agent-trace" style="margin-top:0.5rem;padding:0.6rem 0.8rem;background:rgba(78,168,222,0.08);border:1px solid rgba(78,168,222,0.2);border-radius:6px;font-size:0.8rem;color:var(--text-secondary)">
-      <div style="color:var(--accent);font-weight:600;margin-bottom:0.3rem">🤖 Agent 自主决策过程</div>
-      <div>循环轮次：${data.iterations} | 使用工具：${data.tools_used.join(" → ")}</div>
-    </div>`;
-    const lastMsg = $("chatLog").lastChild;
-    if (lastMsg) lastMsg.insertAdjacentHTML("beforeend", traceHtml);
-  } else if (data.tools_used && data.tools_used.length === 0) {
-    const traceHtml = `<div class="agent-trace" style="margin-top:0.5rem;padding:0.6rem 0.8rem;background:rgba(92,184,92,0.08);border:1px solid rgba(92,184,92,0.2);border-radius:6px;font-size:0.8rem;color:var(--text-secondary)">
-      <div style="color:var(--success);font-weight:600">🤖 Agent 判断：无需调用工具，直接回答</div>
-    </div>`;
-    const lastMsg = $("chatLog").lastChild;
-    if (lastMsg) lastMsg.insertAdjacentHTML("beforeend", traceHtml);
-  }
+  renderAgentEvents(data.events || [], data.status);
+  renderAgentSuggestedActions(data.suggested_actions || []);
+  await loadAgentConversations(state.agentConversationId, false);
 }
 
 async function generateCareerReport() {
-  const data = await withLoading(
-    () => api(`/career/report/${USER_ID}`, { method: "POST" }),
-    "AI 正在生成求职作战报告..."
-  );
-  if (!data.success) return toast(data.message || "报告生成失败");
-  appendMessage("生成一份我的求职作战报告", "user");
-  appendMessage(data.report, "bot");
+  $("agentInput").value = "结合我的简历、面试和投递数据，生成一份求职作战报告";
+  await sendAgentMessage();
 }
 
 function appendMessage(text, type) {
@@ -1711,4 +1714,113 @@ function appendMessage(text, type) {
   node.innerHTML = renderText(text);
   $("chatLog").appendChild(node);
   $("chatLog").scrollTop = $("chatLog").scrollHeight;
+}
+
+async function loadAgentConversations(preferredId = "", restore = true) {
+  const data = await api(`/agent/conversations/${USER_ID}`);
+  if (!data.success) return;
+  let conversations = data.conversations || [];
+  if (!conversations.length) {
+    await createAgentConversation();
+    return;
+  }
+  const saved = preferredId || state.agentConversationId || localStorage.getItem(JOBHUNTER_AGENT_CONVERSATION);
+  state.agentConversationId = conversations.some((item) => item.id === saved)
+    ? saved
+    : conversations[0].id;
+  localStorage.setItem(JOBHUNTER_AGENT_CONVERSATION, state.agentConversationId);
+  const select = $("agentConversationSelect");
+  select.innerHTML = conversations.map((item) => (
+    `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title || "新对话")}</option>`
+  )).join("");
+  select.value = state.agentConversationId;
+  if (restore) await restoreAgentMessages();
+}
+
+async function createAgentConversation() {
+  const data = await api("/agent/conversations", {
+    method: "POST",
+    body: { user_id: USER_ID, title: "新对话" },
+  });
+  if (!data.success) return toast(data.message || "新建会话失败");
+  state.agentConversationId = data.conversation.id;
+  localStorage.setItem(JOBHUNTER_AGENT_CONVERSATION, state.agentConversationId);
+  await loadAgentConversations(state.agentConversationId, false);
+  renderAgentWelcome();
+  $("agentInput")?.focus();
+}
+
+async function clearAgentConversation() {
+  if (!state.agentConversationId) return;
+  if (!confirm("确定清空当前 AI 教练会话吗？其他会话和求职数据不会受影响。")) return;
+  const data = await api(`/agent/conversations/${state.agentConversationId}/clear`, {
+    method: "POST",
+    body: { user_id: USER_ID },
+  });
+  if (!data.success) return toast(data.message || "清空失败");
+  renderAgentWelcome();
+  toast("当前会话已清空");
+}
+
+async function restoreAgentMessages() {
+  if (!state.agentConversationId) return renderAgentWelcome();
+  const data = await api(
+    `/agent/conversations/${state.agentConversationId}/messages?user_id=${USER_ID}`
+  );
+  if (!data.success || !data.messages?.length) return renderAgentWelcome();
+  $("chatLog").innerHTML = "";
+  data.messages.forEach((message) => {
+    appendMessage(message.content, message.role === "user" ? "user" : "bot");
+    if (message.role === "assistant") {
+      renderAgentEvents(message.metadata?.events || [], message.metadata?.status || "completed");
+    }
+  });
+}
+
+function renderAgentWelcome() {
+  $("chatLog").innerHTML = "";
+  appendMessage(
+    "你好，我是你的 AI 求职教练。把目标岗位、简历问题或面试难点发给我，我会结合已保存数据继续推进。",
+    "bot"
+  );
+}
+
+function renderAgentEvents(events, status = "completed") {
+  if (!events.length && status === "completed") return;
+  const labels = {
+    list_resumes: "读取简历列表",
+    get_resume: "读取简历正文",
+    analyze_resume: "分析简历",
+    match_job: "匹配目标岗位",
+    analyze_jd: "解析岗位 JD",
+    get_interview_question: "获取面试题",
+    evaluate_answer: "评估面试回答",
+    list_applications: "读取投递记录",
+    get_dashboard: "读取求职看板",
+    generate_career_report: "汇总求职报告",
+    web_search: "搜索公开信息",
+    fetch_webpage: "读取公开网页",
+  };
+  const rows = events.map((event) => `
+    <span class="agent-event ${event.status === "success" ? "is-success" : "is-error"}">
+      <i data-lucide="${event.status === "success" ? "check" : "triangle-alert"}"></i>
+      ${escapeHtml(labels[event.name] || event.name)}
+    </span>
+  `).join("");
+  const statusText = status === "degraded" ? "本地模式" : status === "needs_input" ? "等待补充" : "任务记录";
+  const node = $("chatLog").lastElementChild;
+  node?.insertAdjacentHTML("beforeend", `<div class="agent-events"><small>${statusText}</small>${rows}</div>`);
+  lucide.createIcons();
+}
+
+function renderAgentSuggestedActions(actions) {
+  if (!actions.length) return;
+  const node = $("chatLog").lastElementChild;
+  const buttons = actions.map((action) => `
+    <button type="button" onclick="jumpToModule('${escapeAttr(action.page)}','${escapeAttr(action.module)}')">
+      ${escapeHtml(action.label)}<i data-lucide="arrow-right"></i>
+    </button>
+  `).join("");
+  node?.insertAdjacentHTML("beforeend", `<div class="agent-suggested-actions">${buttons}</div>`);
+  lucide.createIcons();
 }
