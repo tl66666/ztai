@@ -335,3 +335,125 @@ class MemoryStore:
             }
             for row in rows
         ]
+
+    def create_task(
+        self,
+        conversation_id: str,
+        user_id: int,
+        task_type: str,
+        slots: dict | None = None,
+    ) -> str:
+        task_id = uuid.uuid4().hex
+        timestamp = _now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE agent_tasks SET status = 'superseded', updated_at = ?
+                WHERE conversation_id = ? AND user_id = ? AND status = 'waiting_input'
+                """,
+                (timestamp, conversation_id, user_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO agent_tasks
+                    (id, conversation_id, user_id, task_type, status, slots_json,
+                     result_summary, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'waiting_input', ?, '', ?, ?)
+                """,
+                (
+                    task_id,
+                    conversation_id,
+                    user_id,
+                    task_type,
+                    json.dumps(slots or {}, ensure_ascii=False),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        return task_id
+
+    def get_active_task(self, conversation_id: str, user_id: int) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM agent_tasks
+                WHERE conversation_id = ? AND user_id = ? AND status = 'waiting_input'
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                (conversation_id, user_id),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "task_type": row["task_type"],
+            "status": row["status"],
+            "slots": json.loads(row["slots_json"] or "{}"),
+        }
+
+    def update_task(
+        self,
+        task_id: str,
+        user_id: int,
+        status: str,
+        slots: dict | None = None,
+        result_summary: str = "",
+    ) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE agent_tasks
+                SET status = ?, slots_json = COALESCE(?, slots_json),
+                    result_summary = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    status,
+                    json.dumps(slots, ensure_ascii=False) if slots is not None else None,
+                    result_summary,
+                    _now(),
+                    task_id,
+                    user_id,
+                ),
+            )
+        return cursor.rowcount > 0
+
+    def record_run(
+        self,
+        conversation_id: str,
+        user_id: int,
+        status: str,
+        iterations: int,
+        tools: list[str],
+        events: list[dict],
+        provider: str = "local",
+        model: str = "local-policy",
+        task_id: str | None = None,
+        error_code: str = "",
+        latency_ms: int = 0,
+    ) -> str:
+        run_id = uuid.uuid4().hex
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO agent_runs
+                    (id, conversation_id, user_id, task_id, status, provider, model,
+                     iterations, tools_json, events_json, error_code, latency_ms, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id, conversation_id, user_id, task_id, status, provider, model,
+                    iterations, json.dumps(tools, ensure_ascii=False),
+                    json.dumps(events, ensure_ascii=False), error_code or None,
+                    latency_ms, _now(),
+                ),
+            )
+        return run_id
+
+    def run_count(self, conversation_id: str, user_id: int) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM agent_runs WHERE conversation_id = ? AND user_id = ?",
+                (conversation_id, user_id),
+            ).fetchone()
+        return int(row["count"] if row else 0)
