@@ -136,7 +136,7 @@ class DomainMigrationTests(unittest.TestCase):
                     for table in REQUIRED_COLUMNS
                 }
 
-            self.assertEqual(version, 3)
+            self.assertEqual(version, 4)
             self.assertEqual(status, "一面")
             self.assertTrue(REQUIRED_TABLES.issubset(tables))
             for table, required in REQUIRED_COLUMNS.items():
@@ -271,7 +271,7 @@ class DomainMigrationTests(unittest.TestCase):
                     )
                 }
 
-            self.assertEqual(version, 3)
+            self.assertEqual(version, 4)
             self.assertIn("source_session_id", interview_columns)
             self.assertTrue(
                 {
@@ -322,7 +322,7 @@ class DomainMigrationTests(unittest.TestCase):
                     """
                 ).fetchone()
 
-            self.assertEqual(version, 3)
+            self.assertEqual(version, 4)
             self.assertTrue(
                 {
                     "arguments_json",
@@ -347,6 +347,61 @@ class DomainMigrationTests(unittest.TestCase):
             self.assertEqual(json.loads(legacy["arguments_json"]), {"title": "Legacy"})
             self.assertIsNotNone(legacy["expires_at"])
             self.assertIsNotNone(legacy["idempotency_key"])
+
+    def test_version_three_adds_unique_agent_domain_event_receipts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "version-three.db")
+            create_legacy_database(db_path)
+            migrate_database(db_path)
+            with connect(db_path) as conn:
+                conn.execute("PRAGMA user_version = 3")
+
+            migrate_database(db_path)
+            migrate_database(db_path)
+
+            with connect(db_path) as conn:
+                version = conn.execute("PRAGMA user_version").fetchone()[0]
+                columns = {
+                    row[1]
+                    for row in conn.execute('PRAGMA table_info("domain_events")')
+                }
+                indexes = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'index'"
+                    )
+                }
+                event_values = (
+                    1,
+                    "action_item",
+                    "1",
+                    "action_item.created",
+                    "{}",
+                    "agent:receipt:create_action_item",
+                )
+                conn.execute(
+                    """
+                    INSERT INTO domain_events (
+                        user_id, aggregate_type, aggregate_id, event_type,
+                        payload_json, source
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    event_values,
+                )
+                with self.assertRaises(sqlite3.IntegrityError):
+                    conn.execute(
+                        """
+                        INSERT INTO domain_events (
+                            user_id, aggregate_type, aggregate_id, event_type,
+                            payload_json, source
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        event_values,
+                    )
+
+            self.assertEqual(version, 4)
+            self.assertIn("source", columns)
+            self.assertIn("idx_domain_events_agent_source_receipt", indexes)
 
 
 if __name__ == "__main__":

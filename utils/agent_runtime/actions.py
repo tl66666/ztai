@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import uuid
@@ -34,6 +35,28 @@ PROPOSAL_STATUSES = frozenset(
     {"pending", "executing", "completed", "cancelled", "expired", "failed"}
 )
 DEFAULT_EXPIRY_MINUTES = 30
+EXECUTION_LEASE_SECONDS = 30
+
+OPPORTUNITY_TEXT_LIMITS = {
+    "company": 300,
+    "job_title": 300,
+    "status": 50,
+    "city": 200,
+    "notes": 20_000,
+    "jd_text": 200_000,
+    "source_url": 2_000,
+    "channel": 200,
+    "contact_name": 300,
+    "contact_info": 2_000,
+    "next_action_at": 100,
+    "interview_at": 100,
+    "deadline_at": 100,
+    "rejection_reason": 5_000,
+    "offer_details": 20_000,
+}
+OPPORTUNITY_FIELDS = frozenset(
+    {*OPPORTUNITY_TEXT_LIMITS, "salary_min", "salary_max", "resume_id", "priority"}
+)
 
 _LOCKS_GUARD = threading.Lock()
 _PROPOSAL_LOCKS: dict[tuple[str, int], threading.Lock] = {}
@@ -163,50 +186,39 @@ class ActionProposalService:
             proposal = self.get(user_id, proposal_id)
             if proposal["status"] == "completed":
                 return proposal
-            if proposal["status"] != "pending":
+            receipt = self._receipt_result(proposal)
+            if receipt is not None:
+                self._finalize_completed(proposal_id, receipt)
+                return self.get(user_id, proposal_id)
+            if proposal["status"] == "pending":
+                claimed = self._claim_pending(proposal_id)
+            elif proposal["status"] == "executing":
+                if not self._execution_is_stale(proposal.get("executing_at")):
+                    raise self._state_error("executing")
+                claimed = self._claim_stale_execution(
+                    proposal_id, proposal.get("executing_at")
+                )
+            else:
                 raise self._state_error(proposal["status"])
-            with connect(self.db_path) as conn:
-                claimed = conn.execute(
-                    """
-                    UPDATE agent_action_proposals
-                    SET status = 'executing', reviewed_by = 'local_user',
-                        reviewed_at = CURRENT_TIMESTAMP, executing_at = CURRENT_TIMESTAMP,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ? AND user_id = ? AND status = 'pending'
-                    """,
-                    (proposal_id, self.local_user_id),
-                ).rowcount
             if claimed != 1:
-                raise ActionProposalError("proposal_executing", "proposal is executing")
+                return self._resolve_competing_confirm(user_id, proposal_id)
 
+            source = self._receipt_source(proposal)
             try:
-                result = self._execute(proposal["action_type"], proposal["arguments"])
+                result = self._execute(
+                    proposal["action_type"], proposal["arguments"], source
+                )
             except Exception as exc:
-                with connect(self.db_path) as conn:
-                    conn.execute(
-                        """
-                        UPDATE agent_action_proposals
-                        SET status = 'failed', error_code = 'execution_failed',
-                            failed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ? AND user_id = ? AND status = 'executing'
-                        """,
-                        (proposal_id, self.local_user_id),
-                    )
+                receipt = self._receipt_result(proposal)
+                if receipt is not None:
+                    self._finalize_completed(proposal_id, receipt)
+                    return self.get(user_id, proposal_id)
+                self._mark_failed(proposal_id)
                 raise ActionProposalError(
                     "execution_failed", f"action execution failed: {exc}", 422
                 ) from exc
 
-            with connect(self.db_path) as conn:
-                conn.execute(
-                    """
-                    UPDATE agent_action_proposals
-                    SET status = 'completed', result_json = ?, error_code = NULL,
-                        executed_at = CURRENT_TIMESTAMP, completed_at = CURRENT_TIMESTAMP,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ? AND user_id = ? AND status = 'executing'
-                    """,
-                    (self._json(result), proposal_id, self.local_user_id),
-                )
+            self._finalize_completed(proposal_id, result)
             return self.get(user_id, proposal_id)
 
     def cancel(self, user_id: int, proposal_id: int) -> dict[str, Any]:
@@ -243,18 +255,24 @@ class ActionProposalService:
             ).fetchall()
         return [self._from_row(row) for row in rows]
 
-    def _execute(self, action_type: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _execute(
+        self, action_type: str, arguments: dict[str, Any], source: str
+    ) -> dict[str, Any]:
         service = self.career_service
         user_id = self.local_user_id
         if action_type == "set_career_goal":
-            entity = service.upsert_profile(user_id, arguments, source="agent")
+            entity = service.upsert_profile(user_id, arguments, source=source)
             return self._result("career_profile", entity)
         if action_type == "create_opportunity":
-            entity = service.create_opportunity(user_id, arguments, source="agent")
+            entity = service.create_opportunity(user_id, arguments, source=source)
             return self._result("opportunity", entity)
         if action_type == "create_resume_version":
             entity = service.create_resume_version(
-                user_id, arguments["resume_id"], arguments["content"], arguments["metadata"]
+                user_id,
+                arguments["resume_id"],
+                arguments["content"],
+                arguments["metadata"],
+                source=source,
             )
             return self._result("resume", entity)
         if action_type == "link_opportunity_resume":
@@ -262,7 +280,7 @@ class ActionProposalService:
                 user_id,
                 arguments["opportunity_id"],
                 {"resume_id": arguments["resume_id"]},
-                source="agent",
+                source=source,
             )
             return self._result("opportunity", entity)
         if action_type == "create_interview_plan":
@@ -273,23 +291,26 @@ class ActionProposalService:
                 "due_at": arguments.get("due_at"),
                 "type": "interview_plan",
             }
-            entity = service.create_action_item(user_id, values, source="agent")
+            entity = service.create_action_item(user_id, values, source=source)
             return self._result("action_item", entity)
         if action_type == "create_action_item":
-            entity = service.create_action_item(user_id, arguments, source="agent")
+            entity = service.create_action_item(user_id, arguments, source=source)
             return self._result("action_item", entity)
         if action_type == "complete_action_item":
             entity = service.complete_action_item(
-                user_id, arguments["action_id"], arguments.get("evidence", "")
+                user_id,
+                arguments["action_id"],
+                arguments.get("evidence", ""),
+                source=source,
             )
             return self._result("action_item", entity)
         if action_type == "update_opportunity":
             entity = service.update_opportunity(
-                user_id, arguments["opportunity_id"], arguments["changes"], source="agent"
+                user_id, arguments["opportunity_id"], arguments["changes"], source=source
             )
             return self._result("opportunity", entity)
         if action_type == "save_career_report":
-            entity = service.save_report(user_id, arguments, source="agent")
+            entity = service.save_report(user_id, arguments, source=source)
             return self._result("career_report", entity)
         raise ValueError("invalid action type")
 
@@ -344,13 +365,19 @@ class ActionProposalService:
                 self._check_owned("job_applications", opportunity_id, "opportunity", True)
         elif action_type == "complete_action_item":
             self._required_id(result, "action_id")
+            if "evidence" in result:
+                result["evidence"] = self._text(
+                    result["evidence"], "evidence", 20_000
+                )
             self._check_owned("action_items", result["action_id"], "action item")
         elif action_type == "update_opportunity":
             self._required_id(result, "opportunity_id")
             if not isinstance(result.get("changes"), dict) or not result["changes"]:
                 raise ValueError("changes must be a non-empty object")
-            self._validate_opportunity_fields(result["changes"])
             self._check_owned("job_applications", result["opportunity_id"], "opportunity", True)
+            self._validate_opportunity_fields(
+                result["changes"], opportunity_id=result["opportunity_id"]
+            )
             if "status" in result["changes"]:
                 with connect(self.db_path) as conn:
                     current = conn.execute(
@@ -367,6 +394,7 @@ class ActionProposalService:
             self._required_text(result, "report_type", 100)
             if not isinstance(result.get("content"), dict):
                 raise ValueError("content must be an object")
+            self._validate_json_value(result["content"], "content")
             if len(self._json(result["content"])) > 200_000:
                 raise ValueError("content is too large")
             for field, limit in (
@@ -382,8 +410,8 @@ class ActionProposalService:
     @staticmethod
     def _all_fields(action_type: str) -> set[str]:
         fields = {
-            "set_career_goal": {"career_direction", "target_role", "cities", "salary", "experience", "confirmed_skills", "preferences", "constraints", "source_metadata"},
-            "create_opportunity": {"company", "job_title", "status", "city", "salary_min", "salary_max", "notes", "jd_text", "source_url", "channel", "resume_id", "priority", "contact_name", "contact_info", "next_action_at", "interview_at", "deadline_at", "rejection_reason", "offer_details"},
+            "set_career_goal": {"career_direction", "target_role", "cities", "salary", "experience", "confirmed_skills", "preferences", "constraints"},
+            "create_opportunity": set(OPPORTUNITY_FIELDS),
             "create_resume_version": {"resume_id", "content", "metadata"},
             "link_opportunity_resume": {"opportunity_id", "resume_id"},
             "create_interview_plan": {"opportunity_id", "title", "description", "due_at"},
@@ -465,6 +493,162 @@ class ActionProposalService:
         with _LOCKS_GUARD:
             return _PROPOSAL_LOCKS.setdefault(key, threading.Lock())
 
+    def _claim_pending(self, proposal_id: int) -> int:
+        executing_at = self._iso(self._now())
+        with connect(self.db_path) as conn:
+            return conn.execute(
+                """
+                UPDATE agent_action_proposals
+                SET status = 'executing', reviewed_by = 'local_user',
+                    reviewed_at = ?, executing_at = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ? AND status = 'pending'
+                """,
+                (executing_at, executing_at, proposal_id, self.local_user_id),
+            ).rowcount
+
+    def _claim_stale_execution(
+        self, proposal_id: int, previous_executing_at: str | None
+    ) -> int:
+        executing_at = self._iso(self._now())
+        with connect(self.db_path) as conn:
+            if previous_executing_at is None:
+                return conn.execute(
+                    """
+                    UPDATE agent_action_proposals
+                    SET executing_at = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND user_id = ? AND status = 'executing'
+                      AND executing_at IS NULL
+                    """,
+                    (executing_at, proposal_id, self.local_user_id),
+                ).rowcount
+            return conn.execute(
+                """
+                UPDATE agent_action_proposals
+                SET executing_at = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ? AND status = 'executing'
+                  AND executing_at = ?
+                """,
+                (
+                    executing_at,
+                    proposal_id,
+                    self.local_user_id,
+                    previous_executing_at,
+                ),
+            ).rowcount
+
+    def _resolve_competing_confirm(
+        self, user_id: int, proposal_id: int
+    ) -> dict[str, Any]:
+        proposal = self.get(user_id, proposal_id)
+        if proposal["status"] == "completed":
+            return proposal
+        receipt = self._receipt_result(proposal)
+        if receipt is not None:
+            self._finalize_completed(proposal_id, receipt)
+            return self.get(user_id, proposal_id)
+        raise self._state_error(proposal["status"])
+
+    def _receipt_source(self, proposal: dict[str, Any]) -> str:
+        key = str(proposal["idempotency_key"] or "").strip().lower()
+        if len(key) != 32 or any(char not in "0123456789abcdef" for char in key):
+            raise ValueError("invalid proposal idempotency key")
+        return f"agent:{key}:{proposal['action_type']}"
+
+    def _receipt_result(self, proposal: dict[str, Any]) -> dict[str, Any] | None:
+        source = self._receipt_source(proposal)
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT payload_json FROM domain_events
+                WHERE user_id = ? AND source = ?
+                """,
+                (self.local_user_id, source),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ActionProposalError(
+                "invalid_receipt", "agent execution receipt is invalid", 500
+            ) from exc
+        receipt = payload.get("_agent_receipt")
+        if not isinstance(receipt, dict) or receipt.get("action_type") != proposal["action_type"]:
+            raise ActionProposalError(
+                "invalid_receipt", "agent execution receipt is invalid", 500
+            )
+        result = {
+            "entity_type": receipt.get("entity_type"),
+            "id": receipt.get("id"),
+        }
+        if "status" in receipt:
+            result["status"] = receipt["status"]
+        self._verify_receipt_owner(result)
+        return result
+
+    def _verify_receipt_owner(self, result: dict[str, Any]) -> None:
+        tables = {
+            "career_profile": "career_profiles",
+            "opportunity": "job_applications",
+            "resume": "resumes",
+            "action_item": "action_items",
+            "career_report": "career_reports",
+        }
+        table = tables.get(result.get("entity_type"))
+        entity_id = result.get("id")
+        if table is None or not isinstance(entity_id, int):
+            raise ActionProposalError(
+                "invalid_receipt", "agent execution receipt is invalid", 500
+            )
+        with connect(self.db_path) as conn:
+            owned = conn.execute(
+                f"SELECT 1 FROM {table} WHERE id = ? AND user_id = ?",
+                (entity_id, self.local_user_id),
+            ).fetchone()
+        if owned is None:
+            raise ActionProposalError(
+                "invalid_receipt", "agent execution receipt target is unavailable", 500
+            )
+
+    def _finalize_completed(
+        self, proposal_id: int, result: dict[str, Any]
+    ) -> None:
+        with connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE agent_action_proposals
+                SET status = 'completed', result_json = ?, error_code = NULL,
+                    executed_at = COALESCE(executed_at, CURRENT_TIMESTAMP),
+                    completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ? AND status IN ('executing', 'completed')
+                """,
+                (self._json(result), proposal_id, self.local_user_id),
+            )
+
+    def _mark_failed(self, proposal_id: int) -> None:
+        with connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE agent_action_proposals
+                SET status = 'failed', error_code = 'execution_failed',
+                    failed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ? AND status = 'executing'
+                """,
+                (proposal_id, self.local_user_id),
+            )
+
+    def _execution_is_stale(self, value: str | None) -> bool:
+        if not value:
+            return True
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return True
+        return (self._now() - parsed).total_seconds() >= EXECUTION_LEASE_SECONDS
+
     def _check_optional_owned(self, values, field, table, label):
         if values.get(field) is not None:
             self._check_owned(table, values[field], label, table == "job_applications")
@@ -480,14 +664,46 @@ class ActionProposalService:
         if row is None:
             raise LookupError(f"{label} not found")
 
-    def _validate_opportunity_fields(self, values: dict[str, Any]):
+    def _validate_opportunity_fields(
+        self, values: dict[str, Any], opportunity_id: int | None = None
+    ) -> None:
+        if not isinstance(values, dict):
+            raise ValueError("opportunity fields must be an object")
+        unknown = set(values) - OPPORTUNITY_FIELDS
+        if unknown:
+            raise ValueError(f"unknown opportunity fields: {', '.join(sorted(unknown))}")
+        for field, limit in OPPORTUNITY_TEXT_LIMITS.items():
+            if field not in values:
+                continue
+            required = field in {"company", "job_title", "status"}
+            values[field] = self._text(values[field], field, limit, required=required)
         if "status" in values and values["status"] not in APPLICATION_STATUSES:
             raise ValueError("invalid application status")
         for field in ("salary_min", "salary_max", "resume_id", "priority"):
             if field in values and values[field] is not None:
                 values[field] = self._integer(values[field], field)
-        if values.get("salary_min") is not None and values.get("salary_max") is not None:
-            if values["salary_min"] > values["salary_max"]:
+        if values.get("resume_id") is not None and values["resume_id"] <= 0:
+            raise ValueError("resume_id must be positive")
+        for field in ("salary_min", "salary_max"):
+            if values.get(field) is not None and not 0 <= values[field] <= 1_000_000_000:
+                raise ValueError(f"{field} is out of range")
+        if values.get("priority") is not None and not -1000 <= values["priority"] <= 1000:
+            raise ValueError("priority is out of range")
+        salary_min = values.get("salary_min")
+        salary_max = values.get("salary_max")
+        if opportunity_id is not None and (salary_min is None or salary_max is None):
+            with connect(self.db_path) as conn:
+                current = conn.execute(
+                    """
+                    SELECT salary_min, salary_max FROM job_applications
+                    WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+                    """,
+                    (opportunity_id, self.local_user_id),
+                ).fetchone()
+            salary_min = values.get("salary_min", current["salary_min"])
+            salary_max = values.get("salary_max", current["salary_max"])
+        if salary_min is not None and salary_max is not None:
+            if salary_min > salary_max:
                 raise ValueError("salary_min cannot exceed salary_max")
 
     def _validate_profile_fields(self, values: dict[str, Any]) -> None:
@@ -501,12 +717,67 @@ class ActionProposalService:
                 values[field] = [
                     self._text(item, field, 500, required=True) for item in values[field]
                 ]
-        for field in ("salary", "preferences", "source_metadata"):
+        for field in ("salary", "preferences"):
             if field in values:
                 if not isinstance(values[field], dict):
                     raise ValueError(f"{field} must be an object")
                 if len(self._json(values[field])) > 20_000:
                     raise ValueError(f"{field} is too large")
+        if "salary" in values:
+            salary = values["salary"]
+            unknown = set(salary) - {"min", "max", "currency"}
+            if unknown:
+                raise ValueError(f"unknown salary fields: {', '.join(sorted(unknown))}")
+            for field in ("min", "max"):
+                if salary.get(field) is not None:
+                    salary[field] = self._integer(salary[field], f"salary.{field}")
+                    if not 0 <= salary[field] <= 1_000_000_000:
+                        raise ValueError(f"salary.{field} is out of range")
+            if "currency" in salary:
+                salary["currency"] = self._text(
+                    salary["currency"], "salary.currency", 50, required=True
+                )
+            if salary.get("min") is not None and salary.get("max") is not None:
+                if salary["min"] > salary["max"]:
+                    raise ValueError("salary.min cannot exceed salary.max")
+        if "preferences" in values:
+            preferences = values["preferences"]
+            allowed = {
+                "remote",
+                "hybrid",
+                "onsite",
+                "relocation",
+                "employment_types",
+                "work_modes",
+                "industries",
+                "company_sizes",
+            }
+            unknown = set(preferences) - allowed
+            if unknown:
+                raise ValueError(
+                    f"unknown preference fields: {', '.join(sorted(unknown))}"
+                )
+            for field in ("remote", "hybrid", "onsite", "relocation"):
+                if field in preferences and not isinstance(preferences[field], bool):
+                    raise ValueError(f"preferences.{field} must be a boolean")
+            for field in (
+                "employment_types", "work_modes", "industries", "company_sizes"
+            ):
+                if field in preferences:
+                    value = preferences[field]
+                    if not isinstance(value, list) or len(value) > 50:
+                        raise ValueError(
+                            f"preferences.{field} must be a list with at most 50 items"
+                        )
+                    preferences[field] = [
+                        self._text(
+                            item,
+                            f"preferences.{field}",
+                            100,
+                            required=True,
+                        )
+                        for item in value
+                    ]
 
     def _validate_resume_metadata(self, metadata: dict[str, Any]) -> None:
         permitted = {
@@ -527,6 +798,8 @@ class ActionProposalService:
             metadata["application_id"] = self._integer(
                 metadata["application_id"], "application_id"
             )
+            if metadata["application_id"] <= 0:
+                raise ValueError("application_id must be positive")
 
     def _validate_action_item_fields(self, values: dict[str, Any]) -> None:
         if values.get("status", "pending") not in ACTION_STATUSES:
@@ -536,6 +809,26 @@ class ActionProposalService:
                 values[field] = self._text(values[field], field, limit)
         if "priority" in values:
             values["priority"] = self._integer(values["priority"], "priority")
+            if not -1000 <= values["priority"] <= 1000:
+                raise ValueError("priority is out of range")
+        for field in ("opportunity_id", "application_id"):
+            if values.get(field) is not None:
+                self._required_id(values, field)
+                self._check_owned(
+                    "job_applications", values[field], "opportunity", True
+                )
+        if (
+            values.get("opportunity_id") is not None
+            and values.get("application_id") is not None
+            and values["opportunity_id"] != values["application_id"]
+        ):
+            raise ValueError("opportunity_id and application_id must match")
+        if (
+            values.get("due_date") is not None
+            and values.get("due_at") is not None
+            and values["due_date"] != values["due_at"]
+        ):
+            raise ValueError("due_date and due_at must match")
 
     def _required_id(self, values: dict[str, Any], field: str):
         if field not in values:
@@ -543,6 +836,41 @@ class ActionProposalService:
         values[field] = self._integer(values[field], field)
         if values[field] <= 0:
             raise ValueError(f"{field} must be positive")
+
+    def _validate_json_value(
+        self, value: Any, name: str, depth: int = 0
+    ) -> None:
+        if depth > 10:
+            raise ValueError(f"{name} is too deeply nested")
+        if value is None or isinstance(value, bool):
+            return
+        if isinstance(value, str):
+            if len(value) > 20_000:
+                raise ValueError(f"{name} string exceeds 20000 characters")
+            return
+        if isinstance(value, int):
+            if abs(value) > 1_000_000_000_000_000:
+                raise ValueError(f"{name} number is out of range")
+            return
+        if isinstance(value, float):
+            if not math.isfinite(value) or abs(value) > 1_000_000_000_000_000:
+                raise ValueError(f"{name} number is out of range")
+            return
+        if isinstance(value, list):
+            if len(value) > 500:
+                raise ValueError(f"{name} list has too many items")
+            for index, item in enumerate(value):
+                self._validate_json_value(item, f"{name}[{index}]", depth + 1)
+            return
+        if isinstance(value, dict):
+            if len(value) > 500:
+                raise ValueError(f"{name} object has too many fields")
+            for key, item in value.items():
+                if not isinstance(key, str) or not key or len(key) > 200:
+                    raise ValueError(f"{name} has an invalid field name")
+                self._validate_json_value(item, f"{name}.{key}", depth + 1)
+            return
+        raise ValueError(f"{name} contains an unsupported value")
 
     def _required_text(self, values: dict[str, Any], field: str, limit: int):
         values[field] = self._text(values.get(field), field, limit, required=True)
@@ -613,7 +941,15 @@ class ActionProposalService:
 
     @staticmethod
     def _json(value: Any) -> str:
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        try:
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("value must be valid JSON") from exc
 
     @staticmethod
     def _now() -> datetime:
@@ -644,5 +980,6 @@ __all__ = [
     "ActionProposalError",
     "ActionProposalService",
     "DEFAULT_EXPIRY_MINUTES",
+    "EXECUTION_LEASE_SECONDS",
     "PROPOSAL_STATUSES",
 ]

@@ -29,7 +29,7 @@ LEGACY_STATUS_MAP = {
     "拒绝": "已拒绝",
 }
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -90,6 +90,9 @@ def migrate_database(db_path: str | os.PathLike[str]) -> None:
             if current_version < 3:
                 _migrate_to_version_3(conn)
                 conn.execute("PRAGMA user_version = 3")
+            if current_version < 4:
+                _migrate_to_version_4(conn)
+                conn.execute("PRAGMA user_version = 4")
             conn.commit()
         except Exception:
             conn.rollback()
@@ -274,6 +277,17 @@ def _migrate_to_version_3(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_version_4(conn: sqlite3.Connection) -> None:
+    ensure_column(conn, "domain_events", "source", "TEXT")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_domain_events_agent_source_receipt
+        ON domain_events(user_id, source)
+        WHERE source LIKE 'agent:%'
+        """
+    )
+
+
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
@@ -362,6 +376,7 @@ def _create_domain_tables(conn: sqlite3.Connection) -> None:
             aggregate_id TEXT NOT NULL,
             event_type TEXT NOT NULL,
             payload_json TEXT,
+            source TEXT,
             occurred_at TEXT DEFAULT CURRENT_TIMESTAMP,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
@@ -445,6 +460,7 @@ def _create_domain_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_action_items_application ON action_items(application_id)",
         "CREATE INDEX IF NOT EXISTS idx_domain_events_aggregate ON domain_events(aggregate_type, aggregate_id, occurred_at)",
         "CREATE INDEX IF NOT EXISTS idx_domain_events_user ON domain_events(user_id, occurred_at)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_domain_events_agent_source_receipt ON domain_events(user_id, source) WHERE source LIKE 'agent:%'",
         "CREATE INDEX IF NOT EXISTS idx_career_reports_user_type ON career_reports(user_id, report_type, generated_at)",
         "CREATE INDEX IF NOT EXISTS idx_interview_sessions_application ON interview_sessions(application_id)",
         "CREATE INDEX IF NOT EXISTS idx_interview_sessions_user_status ON interview_sessions(user_id, status)",

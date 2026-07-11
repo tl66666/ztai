@@ -626,16 +626,18 @@ class CareerService:
                     """,
                     (self.local_user_id, *serialized),
                 )
+            row = conn.execute(
+                "SELECT * FROM career_profiles WHERE user_id = ?", (self.local_user_id,)
+            ).fetchone()
             self._write_event(
                 conn,
                 "profile",
                 self.local_user_id,
                 "profile.updated",
-                {"fields": sorted(values), "source": source},
+                self._agent_receipt_payload(
+                    {"fields": sorted(values)}, source, "career_profile", row["id"]
+                ),
             )
-            row = conn.execute(
-                "SELECT * FROM career_profiles WHERE user_id = ?", (self.local_user_id,)
-            ).fetchone()
         return self._profile_from_row(row)
 
     def list_opportunities(self, user_id: int) -> list[dict[str, Any]]:
@@ -685,7 +687,13 @@ class CareerService:
                 "opportunity",
                 opportunity_id,
                 "opportunity.created",
-                self._compact_opportunity_payload(values, source),
+                self._agent_receipt_payload(
+                    self._compact_opportunity_payload(values, source),
+                    source,
+                    "opportunity",
+                    opportunity_id,
+                    values["status"],
+                ),
             )
             row = self._owned_opportunity(conn, opportunity_id)
         return self._opportunity_from_row(row)
@@ -728,12 +736,20 @@ class CareerService:
                     "WHERE id = ? AND user_id = ?",
                     (*changes.values(), opportunity_id, self.local_user_id),
                 )
+            result_status = changes.get("status", existing["status"])
+            if changes or source.startswith("agent:"):
                 self._write_event(
                     conn,
                     "opportunity",
                     opportunity_id,
                     "opportunity.updated",
-                    self._compact_opportunity_payload(changes, source),
+                    self._agent_receipt_payload(
+                        self._compact_opportunity_payload(changes, source),
+                        source,
+                        "opportunity",
+                        opportunity_id,
+                        result_status,
+                    ),
                 )
             row = self._owned_opportunity(conn, opportunity_id)
         return self._opportunity_from_row(row)
@@ -772,6 +788,7 @@ class CareerService:
         resume_id: int,
         content: str,
         metadata: dict[str, Any],
+        source: str = "user",
     ) -> dict[str, Any]:
         self._require_local_user(user_id)
         content = self._bounded_text(content, "content", 1_000_000, required=True)
@@ -800,15 +817,16 @@ class CareerService:
         )
         if source_type not in RESUME_SOURCE_TYPES:
             raise ValueError("invalid source_type")
+        source = self._bounded_text(source, "source", 100, required=True)
         with connect(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            source = self._owned_row(conn, "resumes", resume_id)
-            if not source:
+            source_row = self._owned_row(conn, "resumes", resume_id)
+            if not source_row:
                 raise LookupError("resume not found")
             application_id = metadata.get("application_id")
             if application_id is not None and not self._owned_opportunity(conn, application_id):
                 raise LookupError("opportunity not found")
-            title = metadata.get("title") or metadata.get("version_label") or source["title"]
+            title = metadata.get("title") or metadata.get("version_label") or source_row["title"]
             cursor = conn.execute(
                 """
                 INSERT INTO resumes (
@@ -836,12 +854,18 @@ class CareerService:
                 aggregate_type,
                 aggregate_id,
                 "resume.version_created",
-                {
-                    "resume_id": new_id,
-                    "parent_resume_id": resume_id,
-                    "version_label": metadata.get("version_label"),
-                    "source_type": source_type,
-                },
+                self._agent_receipt_payload(
+                    {
+                        "resume_id": new_id,
+                        "parent_resume_id": resume_id,
+                        "version_label": metadata.get("version_label"),
+                        "source_type": source_type,
+                    },
+                    source,
+                    "resume",
+                    new_id,
+                    resume_status,
+                ),
             )
             row = self._owned_row(conn, "resumes", new_id)
         return dict(row)
@@ -907,7 +931,13 @@ class CareerService:
                 aggregate_type,
                 aggregate_id,
                 "action_item.created",
-                {"action_id": action_id, "title": title, "type": action_type, "source": source},
+                self._agent_receipt_payload(
+                    {"action_id": action_id, "title": title, "type": action_type},
+                    source,
+                    "action_item",
+                    action_id,
+                    status,
+                ),
             )
             row = self._owned_row(conn, "action_items", action_id)
         return self._action_from_row(row)
@@ -922,16 +952,18 @@ class CareerService:
         return [self._action_from_row(row) for row in rows]
 
     def complete_action_item(
-        self, user_id: int, action_id: int, evidence: str = ""
+        self, user_id: int, action_id: int, evidence: str = "", source: str = "user"
     ) -> dict[str, Any]:
         self._require_local_user(user_id)
         evidence = self._bounded_text(evidence, "evidence", 20_000) or ""
+        source = self._bounded_text(source, "source", 100, required=True)
         with connect(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = self._owned_row(conn, "action_items", action_id)
             if not row:
                 raise LookupError("action item not found")
-            if row["status"] != "completed":
+            changed = row["status"] != "completed"
+            if changed:
                 conn.execute(
                     """
                     UPDATE action_items
@@ -941,6 +973,7 @@ class CareerService:
                     """,
                     (evidence, action_id, self.local_user_id),
                 )
+            if changed or source.startswith("agent:"):
                 aggregate_type = "opportunity" if row["application_id"] is not None else "action_item"
                 aggregate_id = row["application_id"] if row["application_id"] is not None else action_id
                 self._write_event(
@@ -948,7 +981,13 @@ class CareerService:
                     aggregate_type,
                     aggregate_id,
                     "action_item.completed",
-                    {"action_id": action_id, "has_evidence": bool(evidence)},
+                    self._agent_receipt_payload(
+                        {"action_id": action_id, "has_evidence": bool(evidence)},
+                        source,
+                        "action_item",
+                        action_id,
+                        "completed",
+                    ),
                 )
             row = self._owned_row(conn, "action_items", action_id)
         return self._action_from_row(row)
@@ -999,7 +1038,13 @@ class CareerService:
                 "career_report",
                 report_id,
                 "career_report.saved",
-                {"report_type": report_type, "status": status, "source": source},
+                self._agent_receipt_payload(
+                    {"report_type": report_type},
+                    source,
+                    "career_report",
+                    report_id,
+                    status,
+                ),
             )
             row = self._owned_row(conn, "career_reports", report_id)
         result = dict(row)
@@ -1223,11 +1268,12 @@ class CareerService:
         event_type: str,
         payload: dict[str, Any],
     ) -> None:
+        source = payload.get("source")
         conn.execute(
             """
             INSERT INTO domain_events (
-                user_id, aggregate_type, aggregate_id, event_type, payload_json
-            ) VALUES (?, ?, ?, ?, ?)
+                user_id, aggregate_type, aggregate_id, event_type, payload_json, source
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 self.local_user_id,
@@ -1235,8 +1281,32 @@ class CareerService:
                 str(aggregate_id),
                 event_type,
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                source,
             ),
         )
+
+    @staticmethod
+    def _agent_receipt_payload(
+        payload: dict[str, Any],
+        source: str,
+        entity_type: str,
+        entity_id: int,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        result = {**payload, "source": source}
+        if source.startswith("agent:"):
+            parts = source.split(":", 2)
+            if len(parts) != 3 or not parts[2]:
+                raise ValueError("invalid agent receipt source")
+            receipt = {
+                "action_type": parts[2],
+                "entity_type": entity_type,
+                "id": entity_id,
+            }
+            if status is not None:
+                receipt["status"] = status
+            result["_agent_receipt"] = receipt
+        return result
 
     @staticmethod
     def _compact_opportunity_payload(values: dict[str, Any], source: str) -> dict[str, Any]:
