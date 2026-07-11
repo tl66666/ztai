@@ -1,0 +1,91 @@
+import os
+import tempfile
+import unittest
+
+import app as app_module
+
+
+class AgentAPITests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_db_path = app_module.DB_PATH
+        app_module.DB_PATH = os.path.join(self.temp_dir.name, "api.db")
+        app_module._agent_service = None
+        app_module.init_db()
+        app_module.app.config["TESTING"] = True
+        self.client = app_module.app.test_client()
+
+    def tearDown(self):
+        app_module._agent_service = None
+        app_module.DB_PATH = self.original_db_path
+        self.temp_dir.cleanup()
+
+    def create_conversation(self, user_id=1, title="新对话"):
+        response = self.client.post(
+            "/api/agent/conversations",
+            json={"user_id": user_id, "title": title},
+        )
+        self.assertEqual(response.status_code, 201)
+        return response.get_json()["conversation"]["id"]
+
+    def messages(self, conversation_id, user_id=1):
+        return self.client.get(
+            f"/api/agent/conversations/{conversation_id}/messages?user_id={user_id}"
+        )
+
+    def test_chat_creates_and_reuses_conversation(self):
+        first = self.client.post(
+            "/api/agent/chat", json={"user_id": 1, "message": "你好"}
+        ).get_json()
+        second = self.client.post(
+            "/api/agent/chat",
+            json={
+                "user_id": 1,
+                "conversation_id": first["conversation_id"],
+                "message": "看我的求职进度",
+            },
+        ).get_json()
+
+        self.assertTrue(first["success"])
+        self.assertEqual(second["conversation_id"], first["conversation_id"])
+        self.assertEqual(len(self.messages(first["conversation_id"]).get_json()["messages"]), 4)
+
+    def test_conversation_history_cannot_be_read_by_another_user(self):
+        conversation_id = self.create_conversation(user_id=1)
+        self.client.post(
+            "/api/agent/chat",
+            json={"user_id": 1, "conversation_id": conversation_id, "message": "你好"},
+        )
+
+        response = self.messages(conversation_id, user_id=2)
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_clear_only_affects_requested_conversation(self):
+        first = self.create_conversation()
+        second = self.create_conversation()
+        for conversation_id in (first, second):
+            self.client.post(
+                "/api/agent/chat",
+                json={"user_id": 1, "conversation_id": conversation_id, "message": "你好"},
+            )
+
+        response = self.client.post(
+            f"/api/agent/conversations/{first}/clear", json={"user_id": 1}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.messages(first).get_json()["messages"], [])
+        self.assertNotEqual(self.messages(second).get_json()["messages"], [])
+
+    def test_list_conversations_returns_only_owned_records(self):
+        self.create_conversation(user_id=1, title="我的会话")
+        self.create_conversation(user_id=2, title="别人的会话")
+
+        response = self.client.get("/api/agent/conversations/1").get_json()
+
+        self.assertEqual([item["title"] for item in response["conversations"]], ["我的会话"])
+
+
+if __name__ == "__main__":
+    unittest.main()

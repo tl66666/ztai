@@ -33,6 +33,7 @@ os.makedirs(EXPORT_FOLDER, exist_ok=True)
 
 
 INTERVIEW_SESSIONS: dict[str, dict] = {}
+_agent_service = None
 
 
 CAREER_PROFILES = {
@@ -1648,40 +1649,90 @@ def clear_training_records(user_id):
     return jsonify({"success": True, "message": "训练记录已清空"})
 
 
+def get_agent_service():
+    global _agent_service
+    from utils.agent_runtime.service import AgentService
+
+    if _agent_service is None or _agent_service.db_path != DB_PATH:
+        _agent_service = AgentService(DB_PATH)
+    return _agent_service
+
+
+@app.route("/api/agent/conversations", methods=["POST"])
+def create_agent_conversation():
+    data = request.get_json() or {}
+    user_id = int(data.get("user_id", 1))
+    conversation = get_agent_service().create_conversation(
+        user_id, data.get("title", "新对话")
+    )
+    return jsonify({"success": True, "conversation": conversation}), 201
+
+
+@app.route("/api/agent/conversations/<int:user_id>", methods=["GET"])
+def list_agent_conversations(user_id):
+    conversations = get_agent_service().list_conversations(user_id)
+    return jsonify({"success": True, "conversations": conversations})
+
+
+@app.route("/api/agent/conversations/<conversation_id>/messages", methods=["GET"])
+def list_agent_conversation_messages(conversation_id):
+    user_id = int(request.args.get("user_id", 1))
+    messages = get_agent_service().list_messages(conversation_id, user_id)
+    if messages is None:
+        return jsonify({"success": False, "message": "会话不存在"}), 404
+    return jsonify({"success": True, "messages": messages})
+
+
+@app.route("/api/agent/conversations/<conversation_id>/clear", methods=["POST"])
+def clear_agent_conversation(conversation_id):
+    data = request.get_json() or {}
+    user_id = int(data.get("user_id", 1))
+    if not get_agent_service().clear_conversation(conversation_id, user_id):
+        return jsonify({"success": False, "message": "会话不存在"}), 404
+    return jsonify({"success": True, "message": "当前会话已清空"})
+
+
 @app.route("/api/agent/chat", methods=["POST"])
 def agent_chat():
     data = request.get_json() or {}
-    message = data.get("message", "")
+    message = str(data.get("message", "")).strip()
     if not message:
         return jsonify({"success": False, "message": "请输入问题"}), 400
-    context = data.get("context") or build_agent_runtime_context(data.get("user_id", 1))
-
-    # ===== 真正的 Agent 执行器（ReAct 框架）=====
-    # 不再代码写死调用哪个模型/工具，而是让 LLM 自主思考、选择工具、决定何时结束
-    from utils.agent import run_agent
-    agent_result = run_agent(
-        user_message=message,
-        context=context,
-        db_path=DB_PATH,
-        max_iterations=5,
-    )
+    user_id = int(data.get("user_id", 1))
+    try:
+        agent_result = get_agent_service().chat(
+            user_id=user_id,
+            message=message,
+            conversation_id=str(data.get("conversation_id", "")),
+        )
+    except ValueError:
+        return jsonify({"success": False, "message": "会话不存在"}), 404
     return jsonify({
         "success": True,
         "reply": agent_result["reply"],
         "ai_used": agent_result["ai_used"],
-        "agent_trace": agent_result["trace"],       # 思考-行动-观察的完整链路
-        "tools_used": agent_result["tools_used"],    # 使用了哪些工具
-        "iterations": agent_result["iterations"],     # 执行了几轮
-        "provider": "react-agent",
+        "conversation_id": agent_result["conversation_id"],
+        "status": agent_result["status"],
+        "events": agent_result["events"],
+        "agent_trace": agent_result["events"],
+        "tools_used": agent_result["tools_used"],
+        "iterations": max(1, len(agent_result["tools_used"])),
+        "suggested_actions": agent_result["suggested_actions"],
+        "provider": "structured-agent-runtime",
     })
 
 
 @app.route("/api/agent/clear-memory", methods=["POST"])
 def agent_clear_memory():
-    """清空 Agent 的对话记忆"""
-    from utils.agent import clear_memory
-    clear_memory()
-    return jsonify({"success": True, "message": "对话记忆已清空"})
+    """Deprecated compatibility endpoint; only clears one owned conversation."""
+    data = request.get_json() or {}
+    conversation_id = str(data.get("conversation_id", ""))
+    user_id = int(data.get("user_id", 1))
+    if not conversation_id:
+        return jsonify({"success": False, "message": "请提供 conversation_id"}), 400
+    if not get_agent_service().clear_conversation(conversation_id, user_id):
+        return jsonify({"success": False, "message": "会话不存在"}), 404
+    return jsonify({"success": True, "message": "当前会话已清空"})
 
 
 @app.route("/api/career/report/<int:user_id>", methods=["POST"])
