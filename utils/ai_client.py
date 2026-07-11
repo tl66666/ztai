@@ -247,11 +247,13 @@ class MultiModelAIClient:
                 "content": "",
             }
 
-    def analyze_resume(self, resume_content: str, job_title: str = "") -> dict:
+    def analyze_resume(
+        self, resume_content: str, job_title: str = "", timeout: float = 45
+    ) -> dict:
         return self.chat([
             {"role": "system", "content": "你是资深招聘顾问。请从岗位匹配、项目含金量、表达质量、量化结果、风险点五个维度诊断简历，并给出具体改法。"},
             {"role": "user", "content": f"目标岗位：{job_title or '未指定'}\n简历：\n{resume_content[:4200]}"},
-        ])
+        ], timeout=timeout)
 
     def optimize_resume(self, resume_content: str, job_title: str = "", jd: str = "") -> dict:
         return self.chat([
@@ -259,11 +261,17 @@ class MultiModelAIClient:
             {"role": "user", "content": f"目标岗位：{job_title}\nJD：{jd[:2600]}\n简历：\n{resume_content[:4200]}"},
         ])
 
-    def match_job(self, resume_content: str, job_title: str, job_requirements: str = "") -> dict:
+    def match_job(
+        self,
+        resume_content: str,
+        job_title: str,
+        job_requirements: str = "",
+        timeout: float = 45,
+    ) -> dict:
         return self.chat([
             {"role": "system", "content": "你是岗位匹配分析师。请给出0-100匹配分、已命中能力、缺口、投递建议、面试准备清单。"},
             {"role": "user", "content": f"岗位：{job_title}\nJD：{job_requirements[:3200]}\n简历：\n{resume_content[:3600]}"},
-        ])
+        ], timeout=timeout)
 
     def agent_chat(self, user_message: str, context: str = "") -> dict:
         return self.chat([

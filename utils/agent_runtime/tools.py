@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import ipaddress
 import random
 import re
 import socket
 import sqlite3
+import time
 from typing import Callable
 from urllib.parse import urlparse
 
@@ -21,6 +21,22 @@ from utils.ai_client import get_ai_client
 class ToolContext:
     user_id: int
     db_path: str
+    deadline: float
+
+    def remaining_seconds(self) -> float:
+        return self.deadline - time.monotonic()
+
+    def check_timeout(self) -> None:
+        if self.remaining_seconds() <= 0:
+            raise ToolTimeoutError("tool deadline exceeded")
+
+    def request_timeout(self, maximum: float) -> float:
+        self.check_timeout()
+        return max(0.1, min(maximum, self.remaining_seconds()))
+
+
+class ToolTimeoutError(TimeoutError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -111,27 +127,24 @@ class ToolRegistry:
                 error_code="invalid_arguments",
             )
         try:
-            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"agent-{name}")
-            future = executor.submit(
-                definition.executor,
-                safe_arguments,
-                ToolContext(user_id=int(user_id), db_path=self.db_path),
-            )
             effective_timeout = definition.timeout_seconds
             if timeout_seconds is not None:
                 effective_timeout = min(effective_timeout, max(0.01, timeout_seconds))
-            try:
-                return future.result(timeout=effective_timeout)
-            except FutureTimeoutError:
-                future.cancel()
-                return ToolResult(
-                    False,
-                    display_text=f"工具 {name} 执行超时",
-                    error_code="tool_timeout",
-                    retryable=True,
-                )
-            finally:
-                executor.shutdown(wait=False, cancel_futures=True)
+            context = ToolContext(
+                user_id=int(user_id),
+                db_path=self.db_path,
+                deadline=time.monotonic() + effective_timeout,
+            )
+            result = definition.executor(safe_arguments, context)
+            context.check_timeout()
+            return result
+        except ToolTimeoutError:
+            return ToolResult(
+                False,
+                display_text=f"工具 {name} 执行超时",
+                error_code="tool_timeout",
+                retryable=True,
+            )
         except (sqlite3.Error, ValueError, TypeError) as exc:
             return ToolResult(False, display_text=str(exc), error_code="tool_error", retryable=False)
         except requests.RequestException as exc:
@@ -201,7 +214,11 @@ def _analyze_resume(arguments: dict, context: ToolContext) -> ToolResult:
     resume = _owned_resume(arguments, context)
     if not resume.ok:
         return resume
-    result = get_ai_client().analyze_resume(resume.data["content"], arguments.get("job_title", ""))
+    result = get_ai_client().analyze_resume(
+        resume.data["content"],
+        arguments.get("job_title", ""),
+        timeout=context.request_timeout(45),
+    )
     content = result.get("content", "")
     return ToolResult(bool(content), data={"resume_id": resume.data["id"], "analysis": content}, display_text=content)
 
@@ -211,7 +228,8 @@ def _match_job(arguments: dict, context: ToolContext) -> ToolResult:
     if not resume.ok:
         return resume
     result = get_ai_client().match_job(
-        resume.data["content"], arguments["job_title"], arguments.get("jd", "")
+        resume.data["content"], arguments["job_title"], arguments.get("jd", ""),
+        timeout=context.request_timeout(45),
     )
     content = result.get("content", "")
     return ToolResult(bool(content), data={"resume_id": resume.data["id"], "analysis": content}, display_text=content)
@@ -222,7 +240,7 @@ def _analyze_jd(arguments: dict, context: ToolContext) -> ToolResult:
     result = get_ai_client().chat([
         {"role": "system", "content": "你是岗位分析专家。提取核心职责、必备技能、加分项和面试重点。"},
         {"role": "user", "content": jd[:5000]},
-    ], temperature=0.2)
+    ], temperature=0.2, timeout=context.request_timeout(45))
     content = result.get("content", "")
     return ToolResult(bool(content), data={"analysis": content}, display_text=content)
 
@@ -295,7 +313,7 @@ def _web_search(arguments: dict, context: ToolContext) -> ToolResult:
     response = requests.get(
         "https://api.duckduckgo.com/",
         params={"q": query, "format": "json", "no_html": "1"},
-        timeout=8,
+        timeout=context.request_timeout(8),
         headers={"User-Agent": "JobHunterAI/1.0"},
     )
     response.raise_for_status()
@@ -330,7 +348,7 @@ def _fetch_webpage(arguments: dict, context: ToolContext) -> ToolResult:
         return ToolResult(False, display_text="拒绝访问本机、内网或无效地址", error_code="unsafe_url")
     response = requests.get(
         url,
-        timeout=10,
+        timeout=context.request_timeout(10),
         headers={"User-Agent": "JobHunterAI/1.0"},
         allow_redirects=False,
         stream=True,

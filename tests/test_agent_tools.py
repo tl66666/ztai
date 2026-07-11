@@ -93,9 +93,15 @@ class AgentToolTests(unittest.TestCase):
 
     def test_tool_timeout_is_enforced(self):
         registry = ToolRegistry(self.db_path)
+        completed = []
 
         def slow(arguments, context):
-            time.sleep(0.2)
+            while True:
+                time.sleep(0.005)
+                context.check_timeout()
+                if time.monotonic() - started > 0.2:
+                    break
+            completed.append(True)
             return ToolResult(True, display_text="too late")
 
         registry.register(
@@ -110,6 +116,8 @@ class AgentToolTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.error_code, "tool_timeout")
         self.assertLess(time.monotonic() - started, 0.15)
+        time.sleep(0.05)
+        self.assertEqual(completed, [])
 
     def test_registry_exposes_machine_readable_function_schemas(self):
         schemas = self.registry.schemas(["get_resume"])

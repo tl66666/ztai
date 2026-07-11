@@ -24,6 +24,7 @@ class RunState:
     active_task: dict | None = None
     model_messages: list[dict] = field(default_factory=list)
     observations: list[dict] = field(default_factory=list)
+    pending_decisions: list[AgentDecision] = field(default_factory=list)
     deadline: float = float("inf")
 
 
@@ -37,6 +38,10 @@ class RemoteModelPolicy:
         self.last_error_code = ""
 
     def decide(self, state: RunState, tool_schemas: list[dict]) -> AgentDecision:
+        if not hasattr(state, "pending_decisions"):
+            state.pending_decisions = []
+        if state.pending_decisions:
+            return state.pending_decisions.pop(0)
         if not state.model_messages:
             active_task = json.dumps(
                 getattr(state, "active_task", None) or {},
@@ -74,23 +79,29 @@ class RemoteModelPolicy:
         tool_calls = message.get("tool_calls") or []
         if tool_calls:
             state.model_messages.append(message)
-            function = tool_calls[0].get("function", {})
-            try:
-                arguments = json.loads(function.get("arguments") or "{}")
-            except json.JSONDecodeError:
-                return AgentDecision("needs_input", message="工具参数格式无效，请换一种方式描述需求。")
-            return AgentDecision(
-                "tool_call",
-                function.get("name", ""),
-                arguments,
-                call_id=tool_calls[0].get("id", ""),
-            )
+            decisions = []
+            for tool_call in tool_calls:
+                function = tool_call.get("function", {})
+                try:
+                    arguments = json.loads(function.get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    arguments = None
+                decisions.append(AgentDecision(
+                    "tool_call",
+                    function.get("name", ""),
+                    arguments,
+                    call_id=tool_call.get("id", ""),
+                ))
+            state.pending_decisions.extend(decisions[1:])
+            return decisions[0]
         content = (message.get("content") or "").strip()
         state.model_messages.append(message)
         try:
             payload = json.loads(content)
         except json.JSONDecodeError:
             return AgentDecision("final", message=content or "我暂时无法生成可靠回答。")
+        if not isinstance(payload, dict):
+            return AgentDecision("final", message="模型返回了无法识别的结构化决策。")
         if payload.get("type") not in {"tool_call", "final", "needs_input"}:
             return AgentDecision("final", message="模型返回了无法识别的决策。")
         return AgentDecision(
@@ -151,11 +162,16 @@ class AgentOrchestrator:
                 )
             decision = self.policy.decide(state, self.tools.schemas())
             if decision.type == "needs_input":
-                task_type = decision.arguments.get("task_type")
-                slots = decision.arguments.get("slots") or {}
+                decision_arguments = decision.arguments if isinstance(decision.arguments, dict) else {}
+                task_type = decision_arguments.get("task_type") or (
+                    active_task["task_type"] if active_task else "clarification"
+                )
+                slots = decision_arguments.get("slots") or (
+                    active_task["slots"] if active_task else {}
+                )
                 if task_id:
                     self.store.update_task(task_id, user_id, "waiting_input", slots=slots)
-                elif task_type:
+                else:
                     task_id = self.store.create_task(
                         conversation_id, user_id, task_type, slots
                     )

@@ -246,6 +246,66 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(tool_message["tool_call_id"], "call_1")
         self.assertIn('"ok": true', tool_message["content"])
 
+    def test_remote_parallel_tool_calls_all_receive_tool_responses(self):
+        client = SequenceAIClient([
+            {
+                "success": True,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "get_dashboard", "arguments": "{}"}},
+                        {"id": "call_2", "type": "function", "function": {"name": "get_dashboard", "arguments": '{"view":"detail"}'}},
+                    ],
+                },
+            },
+            {"success": True, "message": {"role": "assistant", "content": "汇总完成。"}},
+        ])
+
+        result = self.make_orchestrator(RemoteModelPolicy(client)).run(
+            1, self.conversation.id, "读取两组看板数据"
+        )
+
+        final_messages = client.calls[1]["messages"]
+        tool_messages = [item for item in final_messages if item["role"] == "tool"]
+        self.assertEqual(result.status, "completed")
+        self.assertEqual({item["tool_call_id"] for item in tool_messages}, {"call_1", "call_2"})
+
+    def test_remote_needs_input_without_metadata_still_persists_task(self):
+        client = SequenceAIClient([
+            {
+                "success": True,
+                "message": {
+                    "role": "assistant",
+                    "content": '{"type":"needs_input","message":"请提供 JD"}',
+                },
+            }
+        ])
+
+        result = self.make_orchestrator(RemoteModelPolicy(client)).run(
+            1, self.conversation.id, "帮我分析岗位"
+        )
+
+        active_task = self.store.get_active_task(self.conversation.id, 1)
+        self.assertEqual(result.status, "needs_input")
+        self.assertIsNotNone(active_task)
+        self.assertEqual(active_task["task_type"], "clarification")
+
+    def test_remote_non_object_json_fallback_becomes_safe_final(self):
+        client = FakeAIClient({
+            "success": True,
+            "message": {"role": "assistant", "content": "[]"},
+        })
+        state = type("State", (), {
+            "model_messages": [], "context_prompt": "", "observations": [],
+            "user_message": "分析", "active_task": None,
+        })()
+
+        decision = RemoteModelPolicy(client).decide(state, [])
+
+        self.assertEqual(decision.type, "final")
+        self.assertIn("无法识别", decision.message)
+
     def test_remote_policy_receives_persisted_active_task_slots(self):
         client = SequenceAIClient([
             {"success": True, "message": {"role": "assistant", "content": "继续处理。"}}
