@@ -16,7 +16,7 @@ from flask_cors import CORS
 
 from utils.ai_client import extract_keywords, get_ai_client, set_api_key
 from utils.agent_runtime.memory import create_agent_tables
-from utils.domain import APPLICATION_STATUSES, CareerService
+from utils.domain import APPLICATION_STATUSES, CareerService, InterviewService
 from utils.domain.database import ensure_column, migrate_database
 
 
@@ -34,8 +34,8 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(EXPORT_FOLDER, exist_ok=True)
 
 
-INTERVIEW_SESSIONS: dict[str, dict] = {}
 _agent_service = None
+_interview_service = None
 AGENT_USER_ID = int(os.environ.get("JOBHUNTER_AGENT_USER_ID", "1"))
 
 
@@ -216,6 +216,32 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
 
 def get_career_service() -> CareerService:
     return CareerService(DB_PATH, local_user_id=AGENT_USER_ID)
+
+
+def get_interview_service() -> InterviewService:
+    global _interview_service
+    if _interview_service is None or _interview_service.db_path != DB_PATH:
+        _interview_service = InterviewService(
+            DB_PATH,
+            local_user_id=AGENT_USER_ID,
+            stages_builder=build_interview_stages,
+            answer_evaluator=evaluate_interview_answer,
+            profile_selector=lambda profile, resume, job: select_career_profile(
+                {"career_profile": profile} if profile else {},
+                text=resume,
+                job_title=job,
+            ),
+            profile_resolver=lambda profile: {
+                "id": normalize_career_profile(profile),
+                "label": CAREER_PROFILES[normalize_career_profile(profile)]["label"],
+                "interviewer": CAREER_PROFILES[normalize_career_profile(profile)]["interviewer"],
+            },
+            completion_summary=(
+                "整体流程完成。建议把自我介绍压缩到 120 秒内，并准备 2 个项目深挖版本、"
+                "1 个问题定位案例和 1 个团队协作案例。"
+            ),
+        )
+    return _interview_service
 
 
 def career_error_response(exc: Exception):
@@ -1222,72 +1248,44 @@ def job_match():
 
 @app.route("/api/interview/sessions", methods=["POST"])
 def start_interview_session():
-    data = request.get_json() or {}
-    session_id = uuid.uuid4().hex[:12]
-    resume_id = data.get("resume_id")
-    resume = get_resume_or_404(int(resume_id)) if resume_id else None
-    job_title = data.get("job_title", "目标岗位")
-    profile_key = select_career_profile(data, text=resume["content"] if resume else "", job_title=job_title)
-    profile = CAREER_PROFILES[profile_key]
-    session = {
-        "session_id": session_id,
-        "user_id": data.get("user_id", 1),
-        "resume_id": resume_id,
-        "job_title": job_title,
-        "jd": data.get("jd", ""),
-        "mode": data.get("mode", "standard"),
-        "career_profile": profile_key,
-        "interviewer": profile["interviewer"],
-        "stage_index": 0,
-        "conversation": [],
-        "resume_content": resume["content"] if resume else "",
-    }
-    question = f"欢迎参加{profile['interviewer']}模拟面试。请先做一个 2 分钟自我介绍，重点说清楚目标岗位、相关经历和你的优势。"
-    session["conversation"].append({"role": "interviewer", "stage": "opening", "content": question})
-    INTERVIEW_SESSIONS[session_id] = session
-    return jsonify({"success": True, "session_id": session_id, "stage": "opening", "question": question, "profile": {"id": profile_key, "label": profile["label"], "interviewer": profile["interviewer"]}, "progress": 1, "total": 6})
+    try:
+        data = json_object_body()
+        session = get_interview_service().start(
+            AGENT_USER_ID,
+            data.get("resume_id"),
+            data.get("job_title", "目标岗位"),
+            data.get("jd", ""),
+            data.get("mode", "standard"),
+            data.get("career_profile") or data.get("profile"),
+            data.get("application_id"),
+        )
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify(session)
+
+
+@app.route("/api/interview/sessions/open", methods=["GET"])
+def list_open_interview_sessions():
+    try:
+        sessions = get_interview_service().list_open(AGENT_USER_ID)
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify({"success": True, "data": sessions})
 
 
 @app.route("/api/interview/sessions/<session_id>/answer", methods=["POST"])
 def answer_interview_session(session_id):
-    session = INTERVIEW_SESSIONS.get(session_id)
-    if not session:
-        return jsonify({"success": False, "message": "面试会话不存在"}), 404
-    data = request.get_json() or {}
-    answer = (data.get("answer") or "").strip()
-    if not answer:
-        return jsonify({"success": False, "message": "回答不能为空"}), 400
-    answer_intent = detect_answer_intent(answer)
-    voice = analyze_voice_text(answer, data.get("duration_seconds"))
-    if answer_intent in {"skip", "too_short"}:
-        voice["overall_score"] = 0
-        voice["dimension_scores"] = {"表达流畅": 0, "结构逻辑": 0, "岗位相关": 0, "信息密度": 0}
-    session["conversation"].append({"role": "candidate", "content": answer, "voice": voice})
-    stages = build_interview_stages(session)
-    session["stage_index"] += 1
-    stage, next_question = stages[min(session["stage_index"] - 1, len(stages) - 1)]
-    if answer_intent in {"skip", "too_short"}:
-        feedback = skipped_feedback(session["job_title"], stage)
-    else:
-        feedback = {
-            "score": voice["overall_score"],
-            "summary": build_interview_summary(answer, voice, session["job_title"]),
-            "voice": voice,
-            "suggestions": voice["tips"],
-            "answer_upgrade": build_answer_upgrade(answer, session["job_title"]),
-        }
-    if stage == "finished":
-        score = int(sum(item.get("voice", {}).get("overall_score", 75) for item in session["conversation"] if item["role"] == "candidate") / max(1, len([item for item in session["conversation"] if item["role"] == "candidate"])))
-        feedback["score"] = score
-        feedback["summary"] = "整体流程完成。建议把自我介绍压缩到 120 秒内，并准备 2 个项目深挖版本、1 个问题定位案例和 1 个团队协作案例。"
-        with get_db() as conn:
-            conn.execute(
-                "INSERT INTO interviews (user_id, resume_id, job_title, conversation, score, feedback) VALUES (?, ?, ?, ?, ?, ?)",
-                (session["user_id"], session.get("resume_id"), session["job_title"], json.dumps(session["conversation"], ensure_ascii=False), score, json.dumps(feedback, ensure_ascii=False)),
-            )
-    else:
-        session["conversation"].append({"role": "interviewer", "stage": stage, "content": next_question})
-    return jsonify({"success": True, "session_id": session_id, "stage": stage, "question": next_question, "feedback": feedback, "progress": min(session["stage_index"] + 1, 6), "total": 6})
+    try:
+        data = json_object_body()
+        result = get_interview_service().answer(
+            AGENT_USER_ID,
+            session_id,
+            data.get("answer"),
+            data.get("duration_seconds"),
+        )
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify(result)
 
 
 def build_interview_stages(session: dict) -> list[tuple[str, str]]:
@@ -1353,6 +1351,36 @@ def skipped_feedback(job_title: str, stage_name_text: str = "本题") -> dict:
         ],
         "answer_upgrade": f"保底回答：这个问题我还需要补充学习。面向 {job_title}，我会从岗位要求出发，先查清概念，再用项目里的真实场景做验证和复盘。",
     }
+
+
+def evaluate_interview_answer(
+    session: dict,
+    answer: str,
+    duration_seconds: float | None,
+    stage: str,
+) -> tuple[dict, dict, bool]:
+    answer_intent = detect_answer_intent(answer)
+    voice = analyze_voice_text(answer, duration_seconds)
+    skipped = answer_intent in {"skip", "too_short"}
+    if skipped:
+        voice["overall_score"] = 0
+        voice["dimension_scores"] = {
+            "表达流畅": 0,
+            "结构逻辑": 0,
+            "岗位相关": 0,
+            "信息密度": 0,
+        }
+        feedback = skipped_feedback(session["job_title"], stage)
+    else:
+        feedback = {
+            "score": voice["overall_score"],
+            "summary": build_interview_summary(answer, voice, session["job_title"]),
+            "voice": voice,
+            "suggestions": voice["tips"],
+            "answer_upgrade": build_answer_upgrade(answer, session["job_title"]),
+        }
+    candidate = {"role": "candidate", "content": answer, "voice": voice}
+    return candidate, feedback, skipped
 
 
 @app.route("/api/interview/analyze-voice", methods=["POST"])

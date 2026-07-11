@@ -8,10 +8,12 @@ from .database import (
     migrate_database,
 )
 from .career import CareerService
+from .interviews import InterviewService
 
 __all__ = [
     "APPLICATION_STATUSES",
     "CareerService",
+    "InterviewService",
     "LEGACY_STATUS_MAP",
     "connect",
     "ensure_column",

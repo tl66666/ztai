@@ -1,0 +1,331 @@
+import json
+import importlib
+import os
+import tempfile
+import unittest
+
+from utils.domain.database import connect, migrate_database
+
+
+def create_database(db_path):
+    with connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE resumes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL
+            );
+            CREATE TABLE job_applications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                company TEXT NOT NULL,
+                job_title TEXT NOT NULL,
+                status TEXT,
+                deleted_at TEXT
+            );
+            CREATE TABLE interviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                resume_id INTEGER,
+                job_title TEXT NOT NULL,
+                conversation TEXT,
+                score INTEGER,
+                feedback TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+    migrate_database(db_path)
+
+
+def stages(_session):
+    return [
+        ("resume_deep_dive", "Resume question"),
+        ("professional", "Professional question"),
+        ("behavioral", "Behavioral question"),
+        ("candidate_questions", "Candidate question"),
+        ("finished", "Interview finished"),
+    ]
+
+
+def evaluate(_session, answer, duration_seconds, stage):
+    skipped = answer.lower() in {"skip", "pass"}
+    score = 0 if skipped else 80
+    voice = {"overall_score": score, "tips": [], "duration_seconds": duration_seconds}
+    return (
+        {"role": "candidate", "content": answer, "voice": voice},
+        {"score": score, "summary": "Skipped" if skipped else f"Feedback for {stage}", "voice": voice},
+        skipped,
+    )
+
+
+class InterviewPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "interviews.db")
+        create_database(self.db_path)
+        with connect(self.db_path) as conn:
+            self.resume_id = conn.execute(
+                "INSERT INTO resumes (user_id, title, content) VALUES (1, 'Resume', 'Python projects')"
+            ).lastrowid
+        self.service = self.make_service()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def make_service(self, local_user_id=1):
+        from utils.domain.interviews import InterviewService
+
+        return InterviewService(
+            self.db_path,
+            local_user_id=local_user_id,
+            stages_builder=stages,
+            answer_evaluator=evaluate,
+            profile_resolver=lambda profile: {
+                "id": profile or "tech",
+                "label": "Technology",
+                "interviewer": "Technical interviewer",
+            },
+        )
+
+    def start(self, **overrides):
+        values = {
+            "user_id": 1,
+            "resume_id": self.resume_id,
+            "job_title": "Backend Engineer",
+            "jd": "Build APIs",
+            "mode": "standard",
+            "career_profile": "tech",
+        }
+        values.update(overrides)
+        return self.service.start(**values)
+
+    def test_start_then_new_service_resumes_complete_state(self):
+        started = self.start()
+
+        resumed = self.make_service().get(1, started["session_id"])
+
+        self.assertEqual(resumed["session_id"], started["session_id"])
+        self.assertEqual(resumed["stage"], "opening")
+        self.assertEqual(resumed["question"], started["question"])
+        self.assertEqual(resumed["progress"], 1)
+        self.assertEqual(resumed["total"], 6)
+        with connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT conversation_json, current_stage, status FROM interview_sessions WHERE id = ?",
+                (started["session_id"],),
+            ).fetchone()
+        state = json.loads(row["conversation_json"])
+        self.assertEqual(row["current_stage"], "opening")
+        self.assertEqual(row["status"], "active")
+        self.assertEqual(state["jd"], "Build APIs")
+        self.assertEqual(state["career_profile"], "tech")
+        self.assertEqual(state["stage_index"], 0)
+
+    def test_answer_is_persisted_and_resumable(self):
+        session_id = self.start()["session_id"]
+
+        answered = self.service.answer(1, session_id, "A substantive answer", 42)
+        resumed = self.make_service().get(1, session_id)
+
+        self.assertEqual(answered["stage"], "resume_deep_dive")
+        self.assertEqual(resumed["stage"], "resume_deep_dive")
+        self.assertEqual(resumed["question"], "Resume question")
+        self.assertEqual(resumed["progress"], 2)
+        with connect(self.db_path) as conn:
+            state = json.loads(
+                conn.execute(
+                    "SELECT conversation_json FROM interview_sessions WHERE id = ?", (session_id,)
+                ).fetchone()[0]
+            )
+        self.assertEqual(state["conversation"][1]["content"], "A substantive answer")
+        self.assertEqual(state["conversation"][1]["voice"]["duration_seconds"], 42)
+
+    def test_completion_inserts_result_once_and_repeat_is_idempotent(self):
+        session_id = self.start()["session_id"]
+        for index in range(4):
+            self.service.answer(1, session_id, f"Answer {index} with enough detail")
+
+        completed = self.service.answer(1, session_id, "Final answer with enough detail")
+        repeated = self.service.answer(1, session_id, "Retried final answer")
+
+        self.assertEqual(completed["stage"], "finished")
+        self.assertEqual(completed["question"], "Interview finished")
+        self.assertEqual(completed["status"], "completed")
+        self.assertTrue(repeated["idempotent"])
+        self.assertEqual(repeated["status"], "completed")
+        with connect(self.db_path) as conn:
+            result_count = conn.execute("SELECT COUNT(*) FROM interviews").fetchone()[0]
+            completion_events = conn.execute(
+                "SELECT COUNT(*) FROM domain_events WHERE event_type = 'interview.completed'"
+            ).fetchone()[0]
+        self.assertEqual(result_count, 1)
+        self.assertEqual(completion_events, 1)
+
+    def test_open_list_excludes_completed_sessions(self):
+        open_id = self.start(job_title="Open role")["session_id"]
+        completed_id = self.start(job_title="Completed role")["session_id"]
+        for index in range(5):
+            self.service.answer(1, completed_id, f"Answer {index} with enough detail")
+
+        sessions = self.make_service().list_open(1)
+
+        self.assertEqual([item["session_id"] for item in sessions], [open_id])
+
+    def test_fixed_user_and_cross_user_resources_are_rejected(self):
+        with connect(self.db_path) as conn:
+            foreign_resume = conn.execute(
+                "INSERT INTO resumes (user_id, title, content) VALUES (2, 'Private', 'Secret')"
+            ).lastrowid
+            foreign_application = conn.execute(
+                "INSERT INTO job_applications (user_id, company, job_title) VALUES (2, 'Private', 'Role')"
+            ).lastrowid
+        with self.assertRaises(PermissionError):
+            self.start(user_id=2)
+        with self.assertRaises(PermissionError):
+            self.start(resume_id=foreign_resume)
+        with self.assertRaises(PermissionError):
+            self.start(application_id=foreign_application)
+
+        session_id = self.start()["session_id"]
+        with connect(self.db_path) as conn:
+            conn.execute("UPDATE interview_sessions SET user_id = 2 WHERE id = ?", (session_id,))
+        with self.assertRaises(PermissionError):
+            self.service.get(1, session_id)
+        with self.assertRaises(PermissionError):
+            self.service.answer(1, session_id, "Answer")
+
+    def test_deleted_or_archived_resources_are_rejected(self):
+        with connect(self.db_path) as conn:
+            archived_resume = conn.execute(
+                "INSERT INTO resumes (user_id, title, content, status) VALUES (1, 'Old', 'Old', 'archived')"
+            ).lastrowid
+            deleted_application = conn.execute(
+                """
+                INSERT INTO job_applications (user_id, company, job_title, deleted_at)
+                VALUES (1, 'Deleted', 'Role', CURRENT_TIMESTAMP)
+                """
+            ).lastrowid
+        with self.assertRaises(LookupError):
+            self.start(resume_id=archived_resume)
+        with self.assertRaises(LookupError):
+            self.start(application_id=deleted_application)
+
+    def test_empty_answer_is_rejected_without_changing_state(self):
+        session_id = self.start()["session_id"]
+        with self.assertRaises(ValueError):
+            self.service.answer(1, session_id, "   ")
+        self.assertEqual(self.service.get(1, session_id)["progress"], 1)
+
+    def test_skip_behavior_is_persisted_without_inflating_score(self):
+        session_id = self.start()["session_id"]
+
+        result = self.service.answer(1, session_id, "skip")
+
+        self.assertEqual(result["feedback"]["score"], 0)
+        self.assertEqual(self.make_service().get(1, session_id)["progress"], 2)
+        with connect(self.db_path) as conn:
+            payload = json.loads(
+                conn.execute(
+                    "SELECT payload_json FROM domain_events WHERE event_type = 'interview.answered'"
+                ).fetchone()[0]
+            )
+        self.assertTrue(payload["skipped"])
+        self.assertNotIn("answer", payload)
+
+
+class InterviewApiPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "api.db")
+        os.environ["JOBHUNTER_DB_PATH"] = self.db_path
+        import app as app_module
+
+        self.app_module = importlib.reload(app_module)
+        self.app_module.app.config["TESTING"] = True
+        self.app_module.init_db()
+        self.app_module._interview_service = None
+        self.client = self.app_module.app.test_client()
+        with connect(self.db_path) as conn:
+            self.resume_id = conn.execute(
+                "INSERT INTO resumes (user_id, title, content) VALUES (1, 'Resume', 'Python testing')"
+            ).lastrowid
+
+    def tearDown(self):
+        self.app_module._interview_service = None
+        self.temp_dir.cleanup()
+        os.environ.pop("JOBHUNTER_DB_PATH", None)
+
+    def start(self, **overrides):
+        body = {
+            "user_id": 2,
+            "resume_id": self.resume_id,
+            "job_title": "QA Engineer",
+            "jd": "Test APIs",
+            "mode": "campus",
+        }
+        body.update(overrides)
+        return self.client.post("/api/interview/sessions", json=body)
+
+    def test_flask_recreates_cached_service_and_continues_session(self):
+        started_response = self.start()
+        started = started_response.get_json()
+        self.app_module._interview_service = None
+
+        answered_response = self.client.post(
+            f"/api/interview/sessions/{started['session_id']}/answer",
+            json={"answer": "I tested a Flask application with API automation."},
+        )
+        open_response = self.client.get("/api/interview/sessions/open")
+
+        self.assertEqual(started_response.status_code, 200)
+        self.assertEqual(answered_response.status_code, 200)
+        self.assertEqual(answered_response.get_json()["progress"], 2)
+        self.assertEqual(open_response.status_code, 200)
+        self.assertEqual(open_response.get_json()["data"][0]["session_id"], started["session_id"])
+        with connect(self.db_path) as conn:
+            owner = conn.execute(
+                "SELECT user_id FROM interview_sessions WHERE id = ?", (started["session_id"],)
+            ).fetchone()[0]
+        self.assertEqual(owner, 1)
+
+    def test_non_object_json_and_empty_answers_return_stable_400(self):
+        start_response = self.client.post("/api/interview/sessions", json=[])
+        session_id = self.start().get_json()["session_id"]
+        non_object_answer = self.client.post(
+            f"/api/interview/sessions/{session_id}/answer", json=[]
+        )
+        empty_answer = self.client.post(
+            f"/api/interview/sessions/{session_id}/answer", json={"answer": "   "}
+        )
+
+        self.assertEqual(start_response.status_code, 400)
+        self.assertEqual(start_response.get_json()["message"], "JSON body must be an object")
+        self.assertEqual(non_object_answer.status_code, 400)
+        self.assertEqual(non_object_answer.get_json()["message"], "JSON body must be an object")
+        self.assertEqual(empty_answer.status_code, 400)
+        self.assertEqual(empty_answer.get_json()["message"], "answer is required")
+
+    def test_missing_and_cross_user_sessions_return_404_and_403(self):
+        missing = self.client.post(
+            "/api/interview/sessions/99999/answer", json={"answer": "Answer"}
+        )
+        started = self.start().get_json()
+        with connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE interview_sessions SET user_id = 2 WHERE id = ?",
+                (started["session_id"],),
+            )
+        cross_user = self.client.post(
+            f"/api/interview/sessions/{started['session_id']}/answer",
+            json={"answer": "Answer"},
+        )
+
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(cross_user.status_code, 403)
+
+
+if __name__ == "__main__":
+    unittest.main()
