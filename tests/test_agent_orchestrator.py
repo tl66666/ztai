@@ -291,6 +291,29 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertIsNotNone(active_task)
         self.assertEqual(active_task["task_type"], "clarification")
 
+    def test_clarification_task_completes_when_next_turn_answers_directly(self):
+        needs_client = SequenceAIClient([{
+            "success": True,
+            "message": {
+                "role": "assistant",
+                "content": '{"type":"needs_input","message":"请提供 JD"}',
+            },
+        }])
+        self.make_orchestrator(RemoteModelPolicy(needs_client)).run(
+            1, self.conversation.id, "帮我分析岗位"
+        )
+        final_client = SequenceAIClient([{
+            "success": True,
+            "message": {"role": "assistant", "content": "这份 JD 的重点是接口自动化。"},
+        }])
+
+        result = self.make_orchestrator(RemoteModelPolicy(final_client)).run(
+            1, self.conversation.id, "JD 要求 Python 和接口自动化"
+        )
+
+        self.assertEqual(result.status, "completed")
+        self.assertIsNone(self.store.get_active_task(self.conversation.id, 1))
+
     def test_remote_non_object_json_fallback_becomes_safe_final(self):
         client = FakeAIClient({
             "success": True,
@@ -305,6 +328,37 @@ class AgentOrchestratorTests(unittest.TestCase):
 
         self.assertEqual(decision.type, "final")
         self.assertIn("无法识别", decision.message)
+
+    def test_four_parallel_tool_calls_still_get_a_final_model_turn(self):
+        tool_calls = [
+            {
+                "id": f"call_{index}",
+                "type": "function",
+                "function": {
+                    "name": "get_dashboard",
+                    "arguments": f'{{"view":{index}}}',
+                },
+            }
+            for index in range(4)
+        ]
+        client = SequenceAIClient([
+            {
+                "success": True,
+                "message": {"role": "assistant", "content": None, "tool_calls": tool_calls},
+            },
+            {
+                "success": True,
+                "message": {"role": "assistant", "content": "四组数据已汇总。"},
+            },
+        ])
+
+        result = self.make_orchestrator(RemoteModelPolicy(client)).run(
+            1, self.conversation.id, "汇总四组数据"
+        )
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.reply, "四组数据已汇总。")
+        self.assertEqual(len(result.tools_used), 4)
 
     def test_remote_policy_receives_persisted_active_task_slots(self):
         client = SequenceAIClient([

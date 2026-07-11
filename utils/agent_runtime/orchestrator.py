@@ -153,7 +153,8 @@ class AgentOrchestrator:
         fingerprints = set()
         task_id = active_task["id"] if active_task else None
 
-        for iteration in range(1, self.max_iterations + 1):
+        # Reserve one decision after the tool budget for final answer synthesis.
+        for iteration in range(1, self.max_iterations + 2):
             if time.monotonic() >= state.deadline:
                 return self._finish(
                     user_id, conversation_id, "处理已达到时间预算，请缩小问题范围后重试。",
@@ -181,7 +182,7 @@ class AgentOrchestrator:
                 )
             if decision.type == "final":
                 status = "completed" if getattr(self.policy, "ai_used", False) else "degraded"
-                if task_id and state.observations:
+                if task_id:
                     self.store.update_task(
                         task_id, user_id, "completed", result_summary=decision.message[:500]
                     )
@@ -194,6 +195,14 @@ class AgentOrchestrator:
                 return self._finish(
                     user_id, conversation_id, "无法识别智能体决策。", "degraded", iteration,
                     tools_used, events, task_id, started, "invalid_decision",
+                )
+
+            if len(tools_used) >= self.max_iterations:
+                return self._finish(
+                    user_id, conversation_id,
+                    "已达到工具调用预算，请缩小任务范围后重试。",
+                    "degraded", iteration, tools_used, events, task_id, started,
+                    "tool_limit",
                 )
 
             fingerprint = (decision.tool, json.dumps(decision.arguments, ensure_ascii=False, sort_keys=True))
