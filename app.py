@@ -16,6 +16,7 @@ from flask_cors import CORS
 
 from utils.ai_client import extract_keywords, get_ai_client, set_api_key
 from utils.agent_runtime.memory import create_agent_tables
+from utils.domain.database import ensure_column, migrate_database
 
 
 BASE_DIR = os.path.dirname(__file__)
@@ -203,13 +204,8 @@ def init_db() -> None:
         )
         ensure_column(conn, "resumes", "analysis_result", "TEXT")
         ensure_column(conn, "resumes", "tailored_result", "TEXT")
+    migrate_database(DB_PATH)
     create_agent_tables(DB_PATH)
-
-
-def ensure_column(conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
-    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-    if column not in columns:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict | None:
