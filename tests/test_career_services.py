@@ -87,8 +87,10 @@ class CareerServiceTests(unittest.TestCase):
             lambda: self.service.get_opportunity(2, 1),
             lambda: self.service.create_opportunity(2, {"company": "A", "job_title": "B"}),
             lambda: self.service.update_opportunity(2, 1, {}),
+            lambda: self.service.delete_opportunity(2, 1),
             lambda: self.service.create_resume_version(2, 1, "content", {}),
             lambda: self.service.create_action_item(2, {"title": "Follow up"}),
+            lambda: self.service.list_action_items(2),
             lambda: self.service.complete_action_item(2, 1),
             lambda: self.service.timeline(2, 1),
         ]
@@ -128,6 +130,41 @@ class CareerServiceTests(unittest.TestCase):
         with connect(self.db_path) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM domain_events").fetchone()[0], 0)
 
+    def test_terminal_and_implausible_backward_transitions_are_rejected(self):
+        offer = self.service.create_opportunity(
+            1, {"company": "Acme", "job_title": "Engineer", "status": "Offer"}
+        )
+        with self.assertRaisesRegex(ValueError, "transition"):
+            self.service.update_opportunity(1, offer["id"], {"status": "意向"})
+
+        ended = self.service.create_opportunity(
+            1, {"company": "Done", "job_title": "Engineer", "status": "已结束"}
+        )
+        for status in APPLICATION_STATUSES:
+            if status == "已结束":
+                continue
+            with self.subTest(status=status), self.assertRaisesRegex(ValueError, "transition"):
+                self.service.update_opportunity(1, ended["id"], {"status": status})
+
+        interview = self.service.create_opportunity(
+            1, {"company": "Pipeline", "job_title": "Engineer", "status": "二面"}
+        )
+        with self.assertRaisesRegex(ValueError, "transition"):
+            self.service.update_opportunity(1, interview["id"], {"status": "已投递"})
+
+    def test_normal_forward_and_adjacent_correction_transitions_are_allowed(self):
+        opportunity = self.service.create_opportunity(
+            1, {"company": "Acme", "job_title": "Engineer", "status": "一面"}
+        )
+        corrected = self.service.update_opportunity(1, opportunity["id"], {"status": "笔试"})
+        advanced = self.service.update_opportunity(1, opportunity["id"], {"status": "HR 面"})
+        unchanged = self.service.update_opportunity(1, opportunity["id"], {"status": "HR 面"})
+
+        self.assertEqual(corrected["status"], "笔试")
+        self.assertEqual(advanced["status"], "HR 面")
+        self.assertEqual(unchanged["status"], "HR 面")
+        self.assertEqual(len(self.service.timeline(1, opportunity["id"])), 3)
+
     def test_opportunity_rejects_resume_owned_by_another_user(self):
         with connect(self.db_path) as conn:
             resume_id = conn.execute(
@@ -149,6 +186,25 @@ class CareerServiceTests(unittest.TestCase):
                 )
 
         self.assertEqual(self.service.list_opportunities(1), [])
+
+    def test_event_failure_rolls_back_update_and_action_completion(self):
+        opportunity = self.service.create_opportunity(
+            1, {"company": "Acme", "job_title": "Engineer", "status": "已投递"}
+        )
+        action = self.service.create_action_item(
+            1, {"opportunity_id": opportunity["id"], "title": "Follow up"}
+        )
+
+        with patch.object(self.service, "_write_event", side_effect=RuntimeError("event failed")):
+            with self.assertRaisesRegex(RuntimeError, "event failed"):
+                self.service.update_opportunity(
+                    1, opportunity["id"], {"status": "简历筛选"}
+                )
+            with self.assertRaisesRegex(RuntimeError, "event failed"):
+                self.service.complete_action_item(1, action["id"], "sent")
+
+        self.assertEqual(self.service.get_opportunity(1, opportunity["id"])["status"], "已投递")
+        self.assertEqual(self.service.list_action_items(1)[0]["status"], "pending")
 
     def test_unknown_legacy_status_remains_visible_for_review(self):
         with connect(self.db_path) as conn:
@@ -184,6 +240,43 @@ class CareerServiceTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT content FROM resumes WHERE id = ?", (source_id,)).fetchone()[0], "original")
         with self.assertRaisesRegex(LookupError, "resume"):
             self.service.create_resume_version(1, other_id, "stolen", {})
+
+    def test_resume_version_rejects_invalid_status_and_source_type(self):
+        with connect(self.db_path) as conn:
+            source_id = conn.execute(
+                "INSERT INTO resumes (user_id, title, content) VALUES (1, 'Base', 'original')"
+            ).lastrowid
+
+        with self.assertRaisesRegex(ValueError, "resume status"):
+            self.service.create_resume_version(1, source_id, "draft", {"status": "published"})
+        with self.assertRaisesRegex(ValueError, "source_type"):
+            self.service.create_resume_version(1, source_id, "draft", {"source_type": "email"})
+
+        defaulted = self.service.create_resume_version(1, source_id, "draft", {})
+        uploaded = self.service.create_resume_version(
+            1, source_id, "upload", {"status": "archived", "source_type": "upload"}
+        )
+        self.assertEqual((defaulted["status"], defaulted["source_type"]), ("active", "manual"))
+        self.assertEqual((uploaded["status"], uploaded["source_type"]), ("archived", "upload"))
+
+    def test_delete_opportunity_is_owned_and_preserves_timeline(self):
+        opportunity = self.service.create_opportunity(
+            1, {"company": "Acme", "job_title": "Engineer"}
+        )
+        with connect(self.db_path) as conn:
+            other_id = conn.execute(
+                "INSERT INTO job_applications (user_id, company, job_title, status) VALUES (2, 'Other', 'Private', '已投递')"
+            ).lastrowid
+
+        deleted = self.service.delete_opportunity(1, opportunity["id"])
+
+        self.assertEqual(deleted["id"], opportunity["id"])
+        self.assertEqual(self.service.list_opportunities(1), [])
+        with self.assertRaisesRegex(LookupError, "opportunity"):
+            self.service.get_opportunity(1, opportunity["id"])
+        self.assertEqual(self.service.timeline(1, opportunity["id"])[-1]["event_type"], "opportunity.deleted")
+        with self.assertRaisesRegex(LookupError, "opportunity"):
+            self.service.delete_opportunity(1, other_id)
 
     def test_action_completion_is_idempotent_and_records_evidence(self):
         opportunity = self.service.create_opportunity(1, {"company": "Acme", "job_title": "Engineer"})
@@ -237,11 +330,19 @@ class CareerApiTests(unittest.TestCase):
         listing = self.client.get("/api/opportunities").get_json()
         self.assertEqual(listing["data"][0]["id"], opportunity_id)
         self.assertEqual(tuple(listing["canonical_statuses"]), APPLICATION_STATUSES)
+        detail = self.client.get(f"/api/opportunities/{opportunity_id}").get_json()
+        self.assertEqual(detail["data"]["company"], "Acme")
+        updated = self.client.put(
+            f"/api/opportunities/{opportunity_id}", json={"status": "简历筛选"}
+        ).get_json()
+        self.assertEqual(updated["data"]["status"], "简历筛选")
 
         action = self.client.post(
             "/api/action-items", json={"opportunity_id": opportunity_id, "title": "Follow up"}
         )
         action_id = action.get_json()["data"]["id"]
+        actions = self.client.get("/api/action-items").get_json()
+        self.assertEqual(actions["data"][0]["id"], action_id)
         completed = self.client.post(
             f"/api/action-items/{action_id}/complete", json={"evidence": "sent"}
         )
@@ -257,6 +358,14 @@ class CareerApiTests(unittest.TestCase):
 
         self.assertEqual(listing["data"][0]["id"], application_id)
         self.assertIn("canonical_statuses", listing)
+
+        deleted = self.client.delete(f"/api/applications/{application_id}")
+        missing = self.client.delete(f"/api/applications/{application_id}")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertTrue(deleted.get_json()["success"])
+        self.assertEqual(missing.status_code, 404)
+        self.assertFalse(missing.get_json()["success"])
+        self.assertEqual(missing.get_json()["message"], "投递记录不存在")
 
 
 if __name__ == "__main__":

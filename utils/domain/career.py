@@ -10,9 +10,23 @@ from .database import APPLICATION_STATUSES, connect, ensure_column
 
 DEFAULT_APPLICATION_STATUS = "已投递"
 ACTION_STATUSES = ("pending", "in_progress", "completed", "cancelled")
-ALLOWED_STATUS_TRANSITIONS = {
-    status: frozenset(APPLICATION_STATUSES) for status in APPLICATION_STATUSES
-}
+RESUME_STATUSES = ("draft", "active", "archived")
+RESUME_SOURCE_TYPES = ("upload", "manual", "agent")
+
+_ACTIVE_PIPELINE = APPLICATION_STATUSES[:8]
+ALLOWED_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {}
+for index, status in enumerate(_ACTIVE_PIPELINE):
+    allowed = set(_ACTIVE_PIPELINE[index:]) | {"Offer", "已拒绝", "已结束"}
+    if index:
+        allowed.add(_ACTIVE_PIPELINE[index - 1])
+    ALLOWED_STATUS_TRANSITIONS[status] = frozenset(allowed)
+ALLOWED_STATUS_TRANSITIONS.update(
+    {
+        "Offer": frozenset({"Offer", "已结束"}),
+        "已拒绝": frozenset({"已拒绝", "已结束"}),
+        "已结束": frozenset({"已结束"}),
+    }
+)
 
 _OPPORTUNITY_FIELDS = (
     "company",
@@ -61,6 +75,7 @@ class CareerService:
         with connect(self.db_path) as conn:
             ensure_column(conn, "action_items", "action_type", "TEXT")
             ensure_column(conn, "action_items", "completion_evidence", "TEXT")
+            ensure_column(conn, "job_applications", "deleted_at", "TEXT")
 
     def get_profile(self, user_id: int) -> dict[str, Any] | None:
         self._require_local_user(user_id)
@@ -119,7 +134,11 @@ class CareerService:
         self._require_local_user(user_id)
         with connect(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT * FROM job_applications WHERE user_id = ? ORDER BY updated_at DESC, id DESC",
+                """
+                SELECT * FROM job_applications
+                WHERE user_id = ? AND deleted_at IS NULL
+                ORDER BY updated_at DESC, id DESC
+                """,
                 (self.local_user_id,),
             ).fetchall()
         return [self._opportunity_from_row(row) for row in rows]
@@ -127,7 +146,7 @@ class CareerService:
     def get_opportunity(self, user_id: int, opportunity_id: int) -> dict[str, Any]:
         self._require_local_user(user_id)
         with connect(self.db_path) as conn:
-            row = self._owned_row(conn, "job_applications", opportunity_id)
+            row = self._owned_opportunity(conn, opportunity_id)
         if not row:
             raise LookupError("opportunity not found")
         return self._opportunity_from_row(row)
@@ -160,7 +179,7 @@ class CareerService:
                 "opportunity.created",
                 self._compact_opportunity_payload(values, source),
             )
-            row = self._owned_row(conn, "job_applications", opportunity_id)
+            row = self._owned_opportunity(conn, opportunity_id)
         return self._opportunity_from_row(row)
 
     def update_opportunity(
@@ -175,7 +194,7 @@ class CareerService:
         source = self._bounded_text(source, "source", 100, required=True)
         with connect(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            existing = self._owned_row(conn, "job_applications", opportunity_id)
+            existing = self._owned_opportunity(conn, opportunity_id)
             if not existing:
                 raise LookupError("opportunity not found")
             if changes.get("resume_id") is not None and not self._owned_row(
@@ -186,6 +205,9 @@ class CareerService:
                 allowed = ALLOWED_STATUS_TRANSITIONS.get(existing["status"], frozenset(APPLICATION_STATUSES))
                 if changes["status"] not in allowed:
                     raise ValueError("invalid status transition")
+            changes = {
+                field: value for field, value in changes.items() if existing[field] != value
+            }
             if changes:
                 assignments = ", ".join(f"{column} = ?" for column in changes)
                 conn.execute(
@@ -200,6 +222,34 @@ class CareerService:
                     "opportunity.updated",
                     self._compact_opportunity_payload(changes, source),
                 )
+            row = self._owned_opportunity(conn, opportunity_id)
+        return self._opportunity_from_row(row)
+
+    def delete_opportunity(
+        self, user_id: int, opportunity_id: int, source: str = "user"
+    ) -> dict[str, Any]:
+        self._require_local_user(user_id)
+        source = self._bounded_text(source, "source", 100, required=True)
+        with connect(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = self._owned_opportunity(conn, opportunity_id)
+            if not existing:
+                raise LookupError("opportunity not found")
+            self._write_event(
+                conn,
+                "opportunity",
+                opportunity_id,
+                "opportunity.deleted",
+                {"source": source},
+            )
+            conn.execute(
+                """
+                UPDATE job_applications
+                SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+                """,
+                (opportunity_id, self.local_user_id),
+            )
             row = self._owned_row(conn, "job_applications", opportunity_id)
         return self._opportunity_from_row(row)
 
@@ -227,13 +277,23 @@ class CareerService:
         for field in ("version_label", "target_job_title", "status", "source_type", "title"):
             if field in metadata:
                 metadata[field] = self._bounded_text(metadata[field], field, 300)
+        resume_status = self._bounded_text(
+            metadata.get("status", "active"), "resume status", 20, required=True
+        )
+        if resume_status not in RESUME_STATUSES:
+            raise ValueError("invalid resume status")
+        source_type = self._bounded_text(
+            metadata.get("source_type", "manual"), "source_type", 20, required=True
+        )
+        if source_type not in RESUME_SOURCE_TYPES:
+            raise ValueError("invalid source_type")
         with connect(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             source = self._owned_row(conn, "resumes", resume_id)
             if not source:
                 raise LookupError("resume not found")
             application_id = metadata.get("application_id")
-            if application_id is not None and not self._owned_row(conn, "job_applications", application_id):
+            if application_id is not None and not self._owned_opportunity(conn, application_id):
                 raise LookupError("opportunity not found")
             title = metadata.get("title") or metadata.get("version_label") or source["title"]
             cursor = conn.execute(
@@ -251,8 +311,8 @@ class CareerService:
                     metadata.get("version_label"),
                     metadata.get("target_job_title"),
                     application_id,
-                    metadata.get("status") or "active",
-                    metadata.get("source_type") or "manual",
+                    resume_status,
+                    source_type,
                 ),
             )
             new_id = cursor.lastrowid
@@ -267,7 +327,7 @@ class CareerService:
                     "resume_id": new_id,
                     "parent_resume_id": resume_id,
                     "version_label": metadata.get("version_label"),
-                    "source_type": metadata.get("source_type") or "manual",
+                    "source_type": source_type,
                 },
             )
             row = self._owned_row(conn, "resumes", new_id)
@@ -305,7 +365,7 @@ class CareerService:
         priority = self._integer(values.get("priority", 0), "priority")
         with connect(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            if application_id is not None and not self._owned_row(conn, "job_applications", application_id):
+            if application_id is not None and not self._owned_opportunity(conn, application_id):
                 raise LookupError("opportunity not found")
             cursor = conn.execute(
                 """
@@ -578,6 +638,17 @@ class CareerService:
             (row_id, self.local_user_id),
         ).fetchone()
 
+    def _owned_opportunity(
+        self, conn: sqlite3.Connection, opportunity_id: int
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            """
+            SELECT * FROM job_applications
+            WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+            """,
+            (opportunity_id, self.local_user_id),
+        ).fetchone()
+
     def _write_event(
         self,
         conn: sqlite3.Connection,
@@ -610,4 +681,10 @@ class CareerService:
         return payload
 
 
-__all__ = ["ACTION_STATUSES", "ALLOWED_STATUS_TRANSITIONS", "CareerService"]
+__all__ = [
+    "ACTION_STATUSES",
+    "ALLOWED_STATUS_TRANSITIONS",
+    "CareerService",
+    "RESUME_SOURCE_TYPES",
+    "RESUME_STATUSES",
+]

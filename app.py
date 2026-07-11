@@ -1998,10 +1998,12 @@ def update_application(application_id):
 
 @app.route("/api/applications/<int:application_id>", methods=["DELETE"])
 def delete_application(application_id):
-    with get_db() as conn:
-        cursor = conn.execute("DELETE FROM job_applications WHERE id = ?", (application_id,))
-    if cursor.rowcount == 0:
+    try:
+        get_career_service().delete_opportunity(AGENT_USER_ID, application_id)
+    except LookupError:
         return jsonify({"success": False, "message": "投递记录不存在"}), 404
+    except (PermissionError, ValueError) as exc:
+        return career_error_response(exc)
     return jsonify({"success": True, "message": "投递记录已删除"})
 
 
@@ -2040,7 +2042,7 @@ def coach_application(application_id):
 
 @app.route("/api/applications/<int:application_id>/advance", methods=["POST"])
 def advance_application(application_id):
-    stages = ["已投递", "简历筛选", "笔试", "一面", "二面", "HR 面", "Offer", "已拒绝"]
+    stages = ["已投递", "简历筛选", "笔试", "一面", "二面", "HR 面", "Offer", "已结束"]
     service = get_career_service()
     try:
         opportunity = service.get_opportunity(AGENT_USER_ID, application_id)
