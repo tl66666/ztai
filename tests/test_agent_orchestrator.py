@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 import unittest
 
 from utils.agent_runtime.context import ContextBuilder
@@ -26,6 +27,14 @@ class RepeatPolicy:
         return AgentDecision("tool_call", "get_dashboard", {})
 
 
+class SlowPolicy:
+    ai_used = True
+
+    def decide(self, state, tool_schemas):
+        time.sleep(0.04)
+        return AgentDecision("tool_call", "get_dashboard", {})
+
+
 class FakeRegistry:
     def __init__(self):
         self.calls = []
@@ -33,7 +42,7 @@ class FakeRegistry:
     def schemas(self, names=None):
         return []
 
-    def execute(self, name, arguments, user_id):
+    def execute(self, name, arguments, user_id, timeout_seconds=None):
         self.calls.append((name, arguments, user_id))
         if name == "get_dashboard":
             return ToolResult(True, {"resumes": 2}, "你目前有 2 份简历")
@@ -52,6 +61,16 @@ class FakeAIClient:
 
     def chat(self, *args, **kwargs):
         return self.result
+
+
+class SequenceAIClient(FakeAIClient):
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = []
+
+    def chat(self, messages, **kwargs):
+        self.calls.append({"messages": [dict(item) for item in messages], **kwargs})
+        return self.results.pop(0)
 
 
 class AgentOrchestratorTests(unittest.TestCase):
@@ -97,6 +116,22 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(result.status, "degraded")
         self.assertEqual(result.tools_used, ["get_dashboard"])
         self.assertIn("重复", result.reply)
+
+    def test_total_runtime_budget_stops_before_late_tool_execution(self):
+        orchestrator = AgentOrchestrator(
+            policy=SlowPolicy(),
+            tools=self.registry,
+            store=self.store,
+            context_builder=self.context_builder,
+            max_iterations=4,
+            max_runtime_seconds=0.01,
+        )
+
+        result = orchestrator.run(1, self.conversation.id, "看板")
+
+        self.assertEqual(result.status, "degraded")
+        self.assertIn("时间预算", result.reply)
+        self.assertEqual(self.registry.calls, [])
 
     def test_local_policy_persists_missing_slot_and_continues_next_turn(self):
         orchestrator = self.make_orchestrator(LocalPolicy())
@@ -178,6 +213,60 @@ class AgentOrchestratorTests(unittest.TestCase):
 
         self.assertEqual(decision.type, "tool_call")
         self.assertEqual(decision.tool, "get_dashboard")
+        self.assertEqual(decision.call_id, "call_1")
+
+    def test_remote_tool_result_uses_assistant_and_tool_roles_on_next_decision(self):
+        client = SequenceAIClient([
+            {
+                "success": True,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_dashboard", "arguments": "{}"},
+                    }],
+                },
+            },
+            {
+                "success": True,
+                "message": {"role": "assistant", "content": "你目前有 2 份简历。"},
+            },
+        ])
+
+        result = self.make_orchestrator(RemoteModelPolicy(client)).run(
+            1, self.conversation.id, "看我的进度"
+        )
+
+        second_messages = client.calls[1]["messages"]
+        self.assertEqual(result.status, "completed")
+        self.assertTrue(any(item.get("tool_calls") for item in second_messages if item["role"] == "assistant"))
+        tool_message = next(item for item in second_messages if item["role"] == "tool")
+        self.assertEqual(tool_message["tool_call_id"], "call_1")
+        self.assertIn('"ok": true', tool_message["content"])
+
+    def test_remote_policy_receives_persisted_active_task_slots(self):
+        client = SequenceAIClient([
+            {"success": True, "message": {"role": "assistant", "content": "继续处理。"}}
+        ])
+        state = type("State", (), {
+            "model_messages": [],
+            "context_prompt": "上下文",
+            "observations": [],
+            "user_message": "这是 JD 原文",
+            "active_task": {
+                "task_type": "match_job",
+                "slots": {"job_title": "Python 测试工程师"},
+            },
+            "deadline": 9999999999,
+        })()
+
+        RemoteModelPolicy(client).decide(state, [])
+
+        prompt = client.calls[0]["messages"][1]["content"]
+        self.assertIn("match_job", prompt)
+        self.assertIn("Python 测试工程师", prompt)
 
     def test_remote_policy_only_accepts_strict_json_fallback(self):
         client = FakeAIClient({

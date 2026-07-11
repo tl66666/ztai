@@ -50,6 +50,22 @@ class AgentAPITests(unittest.TestCase):
         self.assertEqual(second["conversation_id"], first["conversation_id"])
         self.assertEqual(len(self.messages(first["conversation_id"]).get_json()["messages"]), 4)
 
+    def test_first_message_names_a_precreated_conversation(self):
+        conversation_id = self.create_conversation(title="新对话")
+
+        self.client.post(
+            "/api/agent/chat",
+            json={
+                "user_id": 1,
+                "conversation_id": conversation_id,
+                "message": "准备杭州 Python 测试岗位",
+            },
+        )
+
+        conversations = self.client.get("/api/agent/conversations/1").get_json()["conversations"]
+        title = next(item["title"] for item in conversations if item["id"] == conversation_id)
+        self.assertEqual(title, "准备杭州 Python 测试岗位")
+
     def test_conversation_history_cannot_be_read_by_another_user(self):
         conversation_id = self.create_conversation(user_id=1)
         self.client.post(
@@ -59,7 +75,7 @@ class AgentAPITests(unittest.TestCase):
 
         response = self.messages(conversation_id, user_id=2)
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 403)
 
     def test_clear_only_affects_requested_conversation(self):
         first = self.create_conversation()
@@ -80,11 +96,26 @@ class AgentAPITests(unittest.TestCase):
 
     def test_list_conversations_returns_only_owned_records(self):
         self.create_conversation(user_id=1, title="我的会话")
-        self.create_conversation(user_id=2, title="别人的会话")
+        app_module.get_agent_service().store.create_conversation(2, "别人的会话")
 
         response = self.client.get("/api/agent/conversations/1").get_json()
 
         self.assertEqual([item["title"] for item in response["conversations"]], ["我的会话"])
+
+    def test_single_user_api_rejects_client_user_impersonation(self):
+        create_response = self.client.post(
+            "/api/agent/conversations",
+            json={"user_id": 2, "title": "冒充会话"},
+        )
+        chat_response = self.client.post(
+            "/api/agent/chat",
+            json={"user_id": 2, "message": "读取我的简历"},
+        )
+        list_response = self.client.get("/api/agent/conversations/2")
+
+        self.assertEqual(create_response.status_code, 403)
+        self.assertEqual(chat_response.status_code, 403)
+        self.assertEqual(list_response.status_code, 403)
 
     def test_application_tool_suggests_the_existing_tracker_page(self):
         conversation_id = self.create_conversation()

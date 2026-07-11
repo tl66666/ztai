@@ -24,6 +24,7 @@ class RunState:
     active_task: dict | None = None
     model_messages: list[dict] = field(default_factory=list)
     observations: list[dict] = field(default_factory=list)
+    deadline: float = float("inf")
 
 
 class RemoteModelPolicy:
@@ -36,19 +37,32 @@ class RemoteModelPolicy:
         self.last_error_code = ""
 
     def decide(self, state: RunState, tool_schemas: list[dict]) -> AgentDecision:
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"{state.context_prompt}\n\n当前请求：{state.user_message}"},
-        ]
-        for observation in state.observations:
-            messages.append({
-                "role": "user",
-                "content": f"工具 {observation['tool']} 返回：{observation['display_text']}",
-            })
+        if not state.model_messages:
+            active_task = json.dumps(
+                getattr(state, "active_task", None) or {},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            state.model_messages.extend([
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"{state.context_prompt}\n\n"
+                        f"待继续任务：{active_task}\n\n"
+                        f"当前请求：{state.user_message}"
+                    ),
+                },
+            ])
+        remaining = max(
+            1,
+            min(20, getattr(state, "deadline", time.monotonic() + 20) - time.monotonic()),
+        )
         result = self.client.chat(
-            messages,
+            state.model_messages,
             temperature=0.2,
             max_tokens=1000,
+            timeout=remaining,
             tools=tool_schemas,
             tool_choice="auto",
         )
@@ -59,13 +73,20 @@ class RemoteModelPolicy:
         message = result.get("message") or result.get("assistant_message") or {}
         tool_calls = message.get("tool_calls") or []
         if tool_calls:
+            state.model_messages.append(message)
             function = tool_calls[0].get("function", {})
             try:
                 arguments = json.loads(function.get("arguments") or "{}")
             except json.JSONDecodeError:
                 return AgentDecision("needs_input", message="工具参数格式无效，请换一种方式描述需求。")
-            return AgentDecision("tool_call", function.get("name", ""), arguments)
+            return AgentDecision(
+                "tool_call",
+                function.get("name", ""),
+                arguments,
+                call_id=tool_calls[0].get("id", ""),
+            )
         content = (message.get("content") or "").strip()
+        state.model_messages.append(message)
         try:
             payload = json.loads(content)
         except json.JSONDecodeError:
@@ -88,12 +109,14 @@ class AgentOrchestrator:
         store: MemoryStore,
         context_builder: ContextBuilder,
         max_iterations: int = 4,
+        max_runtime_seconds: float = 60,
     ):
         self.policy = policy
         self.tools = tools
         self.store = store
         self.context_builder = context_builder
         self.max_iterations = max_iterations
+        self.max_runtime_seconds = max_runtime_seconds
 
     def run(self, user_id: int, conversation_id: str, message: str) -> AgentRunResult:
         started = time.monotonic()
@@ -112,6 +135,7 @@ class AgentOrchestrator:
             user_message=message,
             context_prompt=runtime_context.as_prompt(),
             active_task=active_task,
+            deadline=started + self.max_runtime_seconds,
         )
         events = []
         tools_used = []
@@ -119,6 +143,12 @@ class AgentOrchestrator:
         task_id = active_task["id"] if active_task else None
 
         for iteration in range(1, self.max_iterations + 1):
+            if time.monotonic() >= state.deadline:
+                return self._finish(
+                    user_id, conversation_id, "处理已达到时间预算，请缩小问题范围后重试。",
+                    "degraded", iteration, tools_used, events, task_id, started,
+                    "runtime_limit",
+                )
             decision = self.policy.decide(state, self.tools.schemas())
             if decision.type == "needs_input":
                 task_type = decision.arguments.get("task_type")
@@ -158,7 +188,13 @@ class AgentOrchestrator:
                     "repeated_tool_call",
                 )
             fingerprints.add(fingerprint)
-            result = self.tools.execute(decision.tool, decision.arguments, user_id)
+            remaining = max(0.01, state.deadline - time.monotonic())
+            result = self.tools.execute(
+                decision.tool,
+                decision.arguments,
+                user_id,
+                timeout_seconds=remaining,
+            )
             tools_used.append(decision.tool)
             event = {
                 "type": "tool",
@@ -174,6 +210,23 @@ class AgentOrchestrator:
                 "display_text": result.display_text,
                 "error_code": result.error_code,
             })
+            if decision.call_id:
+                state.model_messages.append({
+                    "role": "tool",
+                    "tool_call_id": decision.call_id,
+                    "name": decision.tool,
+                    "content": json.dumps(
+                        {
+                            "ok": result.ok,
+                            "data": result.data,
+                            "display_text": result.display_text,
+                            "error_code": result.error_code,
+                            "retryable": result.retryable,
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                })
 
         answer = state.observations[-1]["display_text"] if state.observations else "处理预算已用完，请缩小问题范围后重试。"
         return self._finish(

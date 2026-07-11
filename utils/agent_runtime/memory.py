@@ -156,6 +156,22 @@ class MemoryStore:
             for row in rows
         ]
 
+    def name_conversation_from_message(
+        self, conversation_id: str, user_id: int, message: str
+    ) -> bool:
+        title = " ".join(message.strip().split())[:24]
+        if not title:
+            return False
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE agent_conversations SET title = ?, updated_at = ?
+                WHERE id = ? AND user_id = ? AND title = '新对话'
+                """,
+                (title, _now(), conversation_id, user_id),
+            )
+        return cursor.rowcount > 0
+
     def add_message(
         self,
         conversation_id: str,
@@ -229,6 +245,13 @@ class MemoryStore:
             )
             connection.execute(
                 """
+                UPDATE agent_tasks SET status = 'cancelled', updated_at = ?
+                WHERE conversation_id = ? AND user_id = ? AND status = 'waiting_input'
+                """,
+                (_now(), conversation_id, user_id),
+            )
+            connection.execute(
+                """
                 UPDATE agent_conversations
                 SET summary = '', summary_until_message_id = NULL, updated_at = ?
                 WHERE id = ? AND user_id = ?
@@ -244,6 +267,47 @@ class MemoryStore:
                 (conversation_id, user_id),
             ).fetchone()
         return int(row["count"] if row else 0)
+
+    def unsummarized_message_count(self, conversation_id: str, user_id: int) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM agent_messages
+                WHERE conversation_id = ? AND user_id = ?
+                  AND id > COALESCE((
+                      SELECT summary_until_message_id
+                      FROM agent_conversations
+                      WHERE id = ? AND user_id = ?
+                  ), 0)
+                """,
+                (conversation_id, user_id, conversation_id, user_id),
+            ).fetchone()
+        return int(row["count"] if row else 0)
+
+    def list_unsummarized_messages(self, conversation_id: str, user_id: int) -> list[Message]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, conversation_id, user_id, role, content, metadata_json
+                FROM agent_messages
+                WHERE conversation_id = ? AND user_id = ?
+                  AND id > COALESCE((
+                      SELECT summary_until_message_id
+                      FROM agent_conversations
+                      WHERE id = ? AND user_id = ?
+                  ), 0)
+                ORDER BY id
+                """,
+                (conversation_id, user_id, conversation_id, user_id),
+            ).fetchall()
+        return [
+            Message(
+                row["id"], row["conversation_id"], row["user_id"], row["role"], row["content"],
+                json.loads(row["metadata_json"] or "{}"),
+            )
+            for row in rows
+        ]
 
     def save_summary(
         self,

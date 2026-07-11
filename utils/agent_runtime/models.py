@@ -38,6 +38,7 @@ class AgentDecision:
     tool: str = ""
     arguments: dict[str, Any] = field(default_factory=dict)
     message: str = ""
+    call_id: str = ""
 
 
 @dataclass(frozen=True)

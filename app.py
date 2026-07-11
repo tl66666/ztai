@@ -34,6 +34,7 @@ os.makedirs(EXPORT_FOLDER, exist_ok=True)
 
 INTERVIEW_SESSIONS: dict[str, dict] = {}
 _agent_service = None
+AGENT_USER_ID = int(os.environ.get("JOBHUNTER_AGENT_USER_ID", "1"))
 
 
 CAREER_PROFILES = {
@@ -1658,10 +1659,24 @@ def get_agent_service():
     return _agent_service
 
 
+def require_agent_user(value):
+    try:
+        user_id = int(value)
+    except (TypeError, ValueError):
+        return None
+    return user_id if user_id == AGENT_USER_ID else None
+
+
+def agent_access_denied():
+    return jsonify({"success": False, "message": "当前本地版本仅允许访问当前用户数据"}), 403
+
+
 @app.route("/api/agent/conversations", methods=["POST"])
 def create_agent_conversation():
     data = request.get_json() or {}
-    user_id = int(data.get("user_id", 1))
+    user_id = require_agent_user(data.get("user_id", AGENT_USER_ID))
+    if user_id is None:
+        return agent_access_denied()
     conversation = get_agent_service().create_conversation(
         user_id, data.get("title", "新对话")
     )
@@ -1670,13 +1685,17 @@ def create_agent_conversation():
 
 @app.route("/api/agent/conversations/<int:user_id>", methods=["GET"])
 def list_agent_conversations(user_id):
+    if require_agent_user(user_id) is None:
+        return agent_access_denied()
     conversations = get_agent_service().list_conversations(user_id)
     return jsonify({"success": True, "conversations": conversations})
 
 
 @app.route("/api/agent/conversations/<conversation_id>/messages", methods=["GET"])
 def list_agent_conversation_messages(conversation_id):
-    user_id = int(request.args.get("user_id", 1))
+    user_id = require_agent_user(request.args.get("user_id", AGENT_USER_ID))
+    if user_id is None:
+        return agent_access_denied()
     messages = get_agent_service().list_messages(conversation_id, user_id)
     if messages is None:
         return jsonify({"success": False, "message": "会话不存在"}), 404
@@ -1686,7 +1705,9 @@ def list_agent_conversation_messages(conversation_id):
 @app.route("/api/agent/conversations/<conversation_id>/clear", methods=["POST"])
 def clear_agent_conversation(conversation_id):
     data = request.get_json() or {}
-    user_id = int(data.get("user_id", 1))
+    user_id = require_agent_user(data.get("user_id", AGENT_USER_ID))
+    if user_id is None:
+        return agent_access_denied()
     if not get_agent_service().clear_conversation(conversation_id, user_id):
         return jsonify({"success": False, "message": "会话不存在"}), 404
     return jsonify({"success": True, "message": "当前会话已清空"})
@@ -1698,7 +1719,9 @@ def agent_chat():
     message = str(data.get("message", "")).strip()
     if not message:
         return jsonify({"success": False, "message": "请输入问题"}), 400
-    user_id = int(data.get("user_id", 1))
+    user_id = require_agent_user(data.get("user_id", AGENT_USER_ID))
+    if user_id is None:
+        return agent_access_denied()
     try:
         agent_result = get_agent_service().chat(
             user_id=user_id,
@@ -1727,7 +1750,9 @@ def agent_clear_memory():
     """Deprecated compatibility endpoint; only clears one owned conversation."""
     data = request.get_json() or {}
     conversation_id = str(data.get("conversation_id", ""))
-    user_id = int(data.get("user_id", 1))
+    user_id = require_agent_user(data.get("user_id", AGENT_USER_ID))
+    if user_id is None:
+        return agent_access_denied()
     if not conversation_id:
         return jsonify({"success": False, "message": "请提供 conversation_id"}), 400
     if not get_agent_service().clear_conversation(conversation_id, user_id):

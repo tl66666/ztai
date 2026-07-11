@@ -55,10 +55,11 @@ class ContextBuilder:
         self.recent_limit = recent_limit
 
     def needs_summary(self, conversation_id: str, user_id: int) -> bool:
-        return self.store.message_count(conversation_id, user_id) > 16
+        return self.store.unsummarized_message_count(conversation_id, user_id) > 16
 
     def summarize(self, conversation_id: str, user_id: int) -> str:
-        messages = self.store.list_messages(conversation_id, user_id)
+        conversation = self.store.get_conversation(conversation_id, user_id)
+        messages = self.store.list_unsummarized_messages(conversation_id, user_id)
         if not messages:
             summary = "当前目标：暂无\n关键结论：暂无\n待办：暂无"
             until_id = None
@@ -68,7 +69,9 @@ class ContextBuilder:
             goal = user_messages[0][:180] if user_messages else "暂无"
             latest = user_messages[-1][:180] if user_messages else "暂无"
             conclusion = assistant_messages[-1][:240] if assistant_messages else "尚未形成结论"
+            previous = conversation.summary[:600] if conversation else ""
             summary = (
+                f"既有摘要：{previous or '暂无'}\n"
                 f"当前目标：{goal}\n"
                 f"关键结论：{conclusion}\n"
                 f"最新诉求：{latest}\n"

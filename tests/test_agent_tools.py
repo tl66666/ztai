@@ -1,9 +1,12 @@
 import os
 import sqlite3
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
 
-from utils.agent_runtime.tools import build_tool_registry
+from utils.agent_runtime.models import ToolResult
+from utils.agent_runtime.tools import ToolDefinition, ToolRegistry, build_tool_registry
 
 
 class AgentToolTests(unittest.TestCase):
@@ -69,6 +72,45 @@ class AgentToolTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.error_code, "invalid_arguments")
 
+    def test_non_object_arguments_return_stable_error_instead_of_raising(self):
+        result = self.registry.execute("get_resume", [], user_id=1)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_code, "invalid_arguments")
+
+    def test_unexpected_executor_exception_is_contained(self):
+        registry = ToolRegistry(self.db_path)
+
+        def broken(arguments, context):
+            raise RuntimeError("unexpected")
+
+        registry.register(ToolDefinition("broken", "测试", {"type": "object"}, broken))
+
+        result = registry.execute("broken", {}, user_id=1)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_code, "tool_error")
+
+    def test_tool_timeout_is_enforced(self):
+        registry = ToolRegistry(self.db_path)
+
+        def slow(arguments, context):
+            time.sleep(0.2)
+            return ToolResult(True, display_text="too late")
+
+        registry.register(
+            ToolDefinition(
+                "slow", "测试超时", {"type": "object"}, slow, timeout_seconds=0.02
+            )
+        )
+        started = time.monotonic()
+
+        result = registry.execute("slow", {}, user_id=1)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_code, "tool_timeout")
+        self.assertLess(time.monotonic() - started, 0.15)
+
     def test_registry_exposes_machine_readable_function_schemas(self):
         schemas = self.registry.schemas(["get_resume"])
 
@@ -86,6 +128,36 @@ class AgentToolTests(unittest.TestCase):
 
         self.assertFalse(result.ok)
         self.assertEqual(result.error_code, "unsafe_url")
+
+    def test_fetch_webpage_streams_and_caps_the_download(self):
+        class StreamingResponse:
+            headers = {"Content-Type": "text/html; charset=utf-8"}
+            encoding = "utf-8"
+
+            @property
+            def content(self):
+                raise AssertionError("full response content must not be buffered")
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                for _ in range(300):
+                    yield b"a" * 1024
+
+            def close(self):
+                return None
+
+        with patch("utils.agent_runtime.tools._is_safe_public_url", return_value=True), patch(
+            "utils.agent_runtime.tools.requests.get", return_value=StreamingResponse()
+        ) as request_get:
+            result = self.registry.execute(
+                "fetch_webpage", {"url": "https://example.com/page"}, user_id=1
+            )
+
+        self.assertTrue(result.ok)
+        self.assertLessEqual(len(result.data["text"]), 6000)
+        self.assertTrue(request_get.call_args.kwargs["stream"])
 
 
 if __name__ == "__main__":

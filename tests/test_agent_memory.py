@@ -48,6 +48,14 @@ class AgentMemoryTests(unittest.TestCase):
         self.assertEqual(self.store.list_messages(first.id, 1), [])
         self.assertEqual(self.store.list_messages(second.id, 1)[0].content, "保留我")
 
+    def test_clear_cancels_the_conversation_pending_task(self):
+        conversation = self.store.create_conversation(1, "待完成")
+        self.store.create_task(conversation.id, 1, "match_job", {})
+
+        self.store.clear_conversation(conversation.id, 1)
+
+        self.assertIsNone(self.store.get_active_task(conversation.id, 1))
+
     def test_new_confirmed_memory_supersedes_the_previous_value(self):
         self.store.upsert_memory(
             user_id=1,
@@ -119,6 +127,13 @@ class AgentMemoryTests(unittest.TestCase):
         restored = self.store.get_conversation(conversation.id, 1)
         self.assertIn("当前目标", summary)
         self.assertEqual(restored.summary, summary)
+        self.assertFalse(builder.needs_summary(conversation.id, 1))
+
+        for index in range(16):
+            self.store.add_message(conversation.id, 1, "user", f"摘要后消息{index}")
+        self.assertFalse(builder.needs_summary(conversation.id, 1))
+        self.store.add_message(conversation.id, 1, "user", "摘要后第17条")
+        self.assertTrue(builder.needs_summary(conversation.id, 1))
 
 
 if __name__ == "__main__":

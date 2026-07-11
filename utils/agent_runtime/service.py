@@ -42,6 +42,8 @@ class AgentService:
             conversation = self.store.create_conversation(user_id, title)
             conversation_id = conversation.id
 
+        self.store.name_conversation_from_message(conversation_id, user_id, message)
+
         client = get_ai_client()
         policy = RemoteModelPolicy(client) if client.api_key else LocalPolicy()
         orchestrator = AgentOrchestrator(

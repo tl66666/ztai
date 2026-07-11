@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import ipaddress
 import random
 import re
@@ -84,10 +85,22 @@ class ToolRegistry:
             for tool in selected
         ]
 
-    def execute(self, name: str, arguments: dict, user_id: int) -> ToolResult:
+    def execute(
+        self,
+        name: str,
+        arguments: dict,
+        user_id: int,
+        timeout_seconds: float | None = None,
+    ) -> ToolResult:
         definition = self._tools.get(name)
         if not definition:
             return ToolResult(False, display_text="未知工具", error_code="unknown_tool")
+        if not isinstance(arguments, dict):
+            return ToolResult(
+                False,
+                display_text="工具参数必须是 JSON 对象",
+                error_code="invalid_arguments",
+            )
         safe_arguments = {key: value for key, value in arguments.items() if key != "user_id"}
         errors = _validate(definition.parameters, safe_arguments)
         if errors:
@@ -98,14 +111,38 @@ class ToolRegistry:
                 error_code="invalid_arguments",
             )
         try:
-            return definition.executor(
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"agent-{name}")
+            future = executor.submit(
+                definition.executor,
                 safe_arguments,
                 ToolContext(user_id=int(user_id), db_path=self.db_path),
             )
+            effective_timeout = definition.timeout_seconds
+            if timeout_seconds is not None:
+                effective_timeout = min(effective_timeout, max(0.01, timeout_seconds))
+            try:
+                return future.result(timeout=effective_timeout)
+            except FutureTimeoutError:
+                future.cancel()
+                return ToolResult(
+                    False,
+                    display_text=f"工具 {name} 执行超时",
+                    error_code="tool_timeout",
+                    retryable=True,
+                )
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
         except (sqlite3.Error, ValueError, TypeError) as exc:
             return ToolResult(False, display_text=str(exc), error_code="tool_error", retryable=False)
         except requests.RequestException as exc:
             return ToolResult(False, display_text=str(exc), error_code="network_error", retryable=True)
+        except Exception:
+            return ToolResult(
+                False,
+                display_text=f"工具 {name} 执行失败",
+                error_code="tool_error",
+                retryable=False,
+            )
 
 
 def _object(properties: dict | None = None, required: list[str] | None = None) -> dict:
@@ -296,11 +333,25 @@ def _fetch_webpage(arguments: dict, context: ToolContext) -> ToolResult:
         timeout=10,
         headers={"User-Agent": "JobHunterAI/1.0"},
         allow_redirects=False,
+        stream=True,
     )
-    response.raise_for_status()
-    if "text/" not in response.headers.get("Content-Type", ""):
-        return ToolResult(False, display_text="仅支持抓取文本网页", error_code="unsupported_content")
-    content = response.content[:262144].decode(response.encoding or "utf-8", errors="replace")
+    try:
+        response.raise_for_status()
+        if "text/" not in response.headers.get("Content-Type", ""):
+            return ToolResult(False, display_text="仅支持抓取文本网页", error_code="unsupported_content")
+        chunks = bytearray()
+        for chunk in response.iter_content(chunk_size=8192):
+            if not chunk:
+                continue
+            remaining = 262144 - len(chunks)
+            if remaining <= 0:
+                break
+            chunks.extend(chunk[:remaining])
+            if len(chunks) >= 262144:
+                break
+        content = bytes(chunks).decode(response.encoding or "utf-8", errors="replace")
+    finally:
+        response.close()
     content = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", content, flags=re.I | re.S)
     text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", content)).strip()[:6000]
     return ToolResult(bool(text), data={"url": url, "text": text}, display_text=text, error_code="" if text else "empty_content")
