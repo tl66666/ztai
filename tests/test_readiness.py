@@ -2,9 +2,15 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from utils.domain.career import CareerService
+from utils.domain.career import (
+    DELIVERABLE_THRESHOLD,
+    POLISH_THRESHOLD,
+    REAL_JD_MIN_LENGTH,
+    CareerService,
+)
 from utils.domain.database import APPLICATION_STATUSES, connect, migrate_database
 
 
@@ -117,6 +123,36 @@ class ReadinessTests(unittest.TestCase):
             ),
         )
 
+    def seed_complete_evidence(self):
+        timestamp = "2026-07-01 00:00:00"
+        resume_id = self.add_resume(94)
+        with connect(self.db_path) as conn:
+            conn.execute(
+                """INSERT INTO job_matches
+                   (user_id, resume_id, job_title, match_score, analysis, jd_text, created_at)
+                   VALUES (1, ?, 'Backend Engineer', 92, '{}', ?, ?)""",
+                (resume_id, "J" * REAL_JD_MIN_LENGTH, timestamp),
+            )
+            conn.execute(
+                "INSERT INTO interviews (user_id, job_title, score, created_at) VALUES (1, 'Role', 88, ?)",
+                (timestamp,),
+            )
+            conn.execute(
+                "INSERT INTO practice_records (user_id, question, score, created_at) VALUES (1, 'Q', 86, ?)",
+                (timestamp,),
+            )
+            conn.execute(
+                "INSERT INTO audio_records (user_id, transcript, score, created_at) VALUES (1, 'answer', 90, ?)",
+                (timestamp,),
+            )
+            conn.execute(
+                """INSERT INTO job_applications
+                   (user_id, company, job_title, status, jd_text, next_action_at, updated_at)
+                   VALUES (1, 'A', 'Role', ?, 'real jd requirements', datetime('now', '+2 days'), ?)""",
+                (APPLICATION_STATUSES[6], timestamp),
+            )
+        return resume_id, timestamp
+
     def test_empty_user_has_stable_schema_and_low_score(self):
         result = self.service.calculate_readiness(1)
 
@@ -131,6 +167,12 @@ class ReadinessTests(unittest.TestCase):
         self.assertTrue(result["weekly_plan"])
 
     def test_no_resume_caps_total_at_30(self):
+        self.insert(
+            """INSERT INTO job_matches
+               (user_id, resume_id, job_title, match_score, analysis, jd_text)
+               VALUES (1, 999, 'Role', 100, '{}', ?)""",
+            ("J" * REAL_JD_MIN_LENGTH,),
+        )
         self.insert("INSERT INTO interviews (user_id, job_title, score) VALUES (1, 'Role', 100)")
         self.insert("INSERT INTO practice_records (user_id, question, score) VALUES (1, 'Q', 100)")
         self.insert("INSERT INTO audio_records (user_id, transcript, score) VALUES (1, 'clear answer', 100)")
@@ -141,7 +183,7 @@ class ReadinessTests(unittest.TestCase):
 
         result = self.service.calculate_readiness(1)
 
-        self.assertLessEqual(result["score"], 30)
+        self.assertEqual(result["score"], 30)
         self.assertIn("no_resume", result["caps"])
         self.assertNotEqual(result["label"], "可投递")
 
@@ -153,7 +195,7 @@ class ReadinessTests(unittest.TestCase):
 
         result = self.service.calculate_readiness(1)
 
-        self.assertLessEqual(result["score"], 55)
+        self.assertEqual(result["score"], 55)
         self.assertIn("no_real_jd_match", result["caps"])
 
     def test_repeated_zero_and_invalid_scores_do_not_create_positive_quality(self):
@@ -241,6 +283,134 @@ class ReadinessTests(unittest.TestCase):
 
         self.add_resume()
         self.assertEqual(self.service.calculate_readiness(1), self.service.calculate_readiness(1))
+
+    def test_duplicate_match_does_not_inflate_component_or_final_score(self):
+        resume_id, timestamp = self.seed_complete_evidence()
+        self.insert(
+            """INSERT INTO job_matches
+               (user_id, resume_id, job_title, match_score, analysis, jd_text, created_at)
+               VALUES (1, ?, 'Backend Engineer', 70, '{}', ?, '2026-06-30 00:00:00')""",
+            (resume_id, "J" * REAL_JD_MIN_LENGTH),
+        )
+        before = self.service.calculate_readiness(1)
+
+        self.insert(
+            """INSERT INTO job_matches
+               (user_id, resume_id, job_title, match_score, analysis, jd_text, created_at)
+               VALUES (1, ?, 'Backend Engineer', 92, '{}', ?, ?)""",
+            (resume_id, "J" * REAL_JD_MIN_LENGTH, timestamp),
+        )
+        after = self.service.calculate_readiness(1)
+
+        self.assertEqual(after["components"]["alignment"]["score"], before["components"]["alignment"]["score"])
+        self.assertEqual(after["score"], before["score"])
+
+    def test_duplicate_interview_does_not_inflate_component_or_final_score(self):
+        _, timestamp = self.seed_complete_evidence()
+        self.insert(
+            "INSERT INTO interviews (user_id, job_title, score, created_at) VALUES (1, 'Role', 60, '2026-06-30 00:00:00')"
+        )
+        before = self.service.calculate_readiness(1)
+
+        self.insert(
+            "INSERT INTO interviews (user_id, job_title, score, created_at) VALUES (1, 'Role', 88, ?)",
+            (timestamp,),
+        )
+        after = self.service.calculate_readiness(1)
+
+        self.assertEqual(after["components"]["interview"]["score"], before["components"]["interview"]["score"])
+        self.assertEqual(after["score"], before["score"])
+
+    def test_duplicate_practice_and_audio_do_not_inflate_component_or_final_score(self):
+        _, timestamp = self.seed_complete_evidence()
+        self.insert(
+            "INSERT INTO practice_records (user_id, question, score, created_at) VALUES (1, 'Q', 60, '2026-06-30 00:00:00')"
+        )
+        self.insert(
+            "INSERT INTO audio_records (user_id, transcript, score, created_at) VALUES (1, 'answer', 70, '2026-06-30 00:00:00')"
+        )
+        before = self.service.calculate_readiness(1)
+
+        self.insert(
+            "INSERT INTO practice_records (user_id, question, score, created_at) VALUES (1, 'Q', 86, ?)",
+            (timestamp,),
+        )
+        self.insert(
+            "INSERT INTO audio_records (user_id, transcript, score, created_at) VALUES (1, 'answer', 90, ?)",
+            (timestamp,),
+        )
+        after = self.service.calculate_readiness(1)
+
+        self.assertEqual(after["components"]["practice"]["score"], before["components"]["practice"]["score"])
+        self.assertEqual(after["score"], before["score"])
+
+    def test_label_thresholds_are_exact_and_caps_override_deliverable(self):
+        self.assertEqual(CareerService._readiness_label(POLISH_THRESHOLD - 1, [], False), "先补基础")
+        self.assertEqual(CareerService._readiness_label(POLISH_THRESHOLD, [], False), "需要打磨")
+        self.assertEqual(CareerService._readiness_label(DELIVERABLE_THRESHOLD - 1, [], False), "需要打磨")
+        self.assertEqual(CareerService._readiness_label(DELIVERABLE_THRESHOLD, [], False), "可投递")
+        self.assertEqual(CareerService._readiness_label(100, ["no_resume"], False), "需要打磨")
+        self.assertEqual(CareerService._readiness_label(100, [], True), "需要打磨")
+
+    def test_interview_average_boundary_is_39_blocked_and_40_allowed(self):
+        self.seed_complete_evidence()
+        with connect(self.db_path) as conn:
+            conn.execute("DELETE FROM interviews")
+            conn.execute("INSERT INTO interviews (user_id, job_title, score) VALUES (1, 'Role', 39)")
+        below = self.service.calculate_readiness(1)
+        with connect(self.db_path) as conn:
+            conn.execute("UPDATE interviews SET score = 40")
+        at_boundary = self.service.calculate_readiness(1)
+
+        self.assertTrue(any("40" in blocker for blocker in below["blockers"]))
+        self.assertFalse(any("40" in blocker for blocker in at_boundary["blockers"]))
+        self.assertNotEqual(below["label"], "可投递")
+
+    def test_real_jd_length_boundary_is_exact(self):
+        self.assertFalse(CareerService._has_real_jd({"jd_text": "J" * (REAL_JD_MIN_LENGTH - 1)}))
+        self.assertTrue(CareerService._has_real_jd({"jd_text": "J" * REAL_JD_MIN_LENGTH}))
+
+    def test_recency_cutoffs_are_exact(self):
+        now = datetime.now(timezone.utc)
+        cases = (
+            (30, 1.0),
+            (31, 0.85),
+            (90, 0.85),
+            (91, 0.70),
+            (180, 0.70),
+            (181, 0.55),
+        )
+        for days, expected in cases:
+            with self.subTest(days=days):
+                timestamp = (now - timedelta(days=days, minutes=1)).isoformat()
+                self.assertEqual(CareerService._recency_factor(timestamp), expected)
+
+    def test_valid_score_endpoints_and_invalid_values(self):
+        self.assertTrue(CareerService._valid_score(0))
+        self.assertTrue(CareerService._valid_score(100))
+        for value in (-1, 101, None):
+            with self.subTest(value=value):
+                self.assertFalse(CareerService._valid_score(value))
+
+    def test_soft_deleted_application_linked_match_is_excluded(self):
+        resume_id = self.add_resume()
+        application_id = self.insert(
+            """INSERT INTO job_applications
+               (user_id, company, job_title, status, jd_text, deleted_at)
+               VALUES (1, 'Deleted', 'Role', ?, ?, CURRENT_TIMESTAMP)""",
+            (APPLICATION_STATUSES[3], "J" * REAL_JD_MIN_LENGTH),
+        )
+        self.insert(
+            """INSERT INTO job_matches
+               (user_id, resume_id, job_title, match_score, analysis, jd_text, application_id)
+               VALUES (1, ?, 'Role', 100, '{}', ?, ?)""",
+            (resume_id, "J" * REAL_JD_MIN_LENGTH, application_id),
+        )
+
+        result = self.service.calculate_readiness(1)
+
+        self.assertEqual(result["components"]["alignment"]["score"], 0)
+        self.assertIn("no_real_jd_match", result["caps"])
 
 
 class DashboardReadinessTests(unittest.TestCase):

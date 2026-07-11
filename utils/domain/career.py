@@ -69,8 +69,8 @@ _FIELD_LIMITS = {
     "offer_details": 20_000,
 }
 
-# Readiness is a deterministic local heuristic. Counts only provide the small
-# confidence bonuses below; evidence quality remains the dominant input.
+# Readiness is a deterministic local heuristic based on evidence quality,
+# recency, completion and trend. Repeated records never add a count bonus.
 READINESS_WEIGHTS = {
     "resume": 25,
     "alignment": 20,
@@ -146,7 +146,11 @@ class CareerService:
             weekly_plan.append({"title": "选择真实 JD 完成一次匹配", "page": "resume", "module": "jd"})
             weighted = min(weighted, 55)
 
-        interview_scores = self._valid_scores(interviews)
+        interview_scores = self._valid_scores(
+            self._unique_scored_rows(
+                [row for row in interviews if self._valid_score(row.get("score"))]
+            )
+        )
         low_interview = bool(interview_scores) and self._mean(interview_scores[:READINESS_RECENT_LIMIT]) < 40
         if low_interview:
             blockers.append("最近完成的面试平均分低于 40，先修复核心回答再投递。")
@@ -161,12 +165,7 @@ class CareerService:
             weekly_plan.append({"title": "建立投递看板并设置下一步", "page": "tracker", "module": "add"})
 
         weighted = self._clamp(weighted)
-        if weighted >= DELIVERABLE_THRESHOLD and not caps and not low_interview:
-            label = "可投递"
-        elif weighted >= POLISH_THRESHOLD:
-            label = "需要打磨"
-        else:
-            label = "先补基础"
+        label = self._readiness_label(weighted, caps, low_interview)
 
         funnel: dict[str, int] = {}
         for row in opportunities:
@@ -281,7 +280,11 @@ class CareerService:
         return self._component(score, evidence)
 
     def _score_alignment_component(self, matches: list[dict[str, Any]]) -> dict[str, Any]:
-        valid = [row for row in matches if self._has_real_jd(row) and self._valid_score(row.get("match_score"))]
+        valid = self._unique_scored_rows(
+            [row for row in matches if self._has_real_jd(row) and self._valid_score(row.get("match_score"))],
+            score_field="match_score",
+            extra_field="jd_text",
+        )
         if not valid:
             return self._component(0, [])
         recent = valid[:READINESS_RECENT_LIMIT]
@@ -289,15 +292,16 @@ class CareerService:
         quality = self._mean(
             [score * self._recency_factor(row.get("created_at")) for score, row in zip(scores, recent)]
         )
-        confidence = min(4, max(0, len(recent) - 1)) if quality > 0 else 0
         evidence = [
             self._evidence(f"真实 JD 匹配得分 {round(float(row['match_score']))}", row.get("id"), row.get("created_at"))
             for row in recent[:3]
         ]
-        return self._component(round(quality + confidence), evidence)
+        return self._component(round(quality), evidence)
 
     def _score_interview_component(self, interviews: list[dict[str, Any]]) -> dict[str, Any]:
-        valid_rows = [row for row in interviews if self._valid_score(row.get("score"))]
+        valid_rows = self._unique_scored_rows(
+            [row for row in interviews if self._valid_score(row.get("score"))]
+        )
         if not valid_rows:
             return self._component(0, [])
         recent = valid_rows[:READINESS_RECENT_LIMIT]
@@ -308,18 +312,21 @@ class CareerService:
         trend = 0.0
         if len(scores) >= 2:
             trend = max(-8.0, min(8.0, (scores[0] - scores[-1]) * 0.25))
-        confidence = min(4, len(scores) - 1) if quality > 0 else 0
         evidence = [
             self._evidence(f"已完成面试得分 {round(float(row['score']))}", row.get("id"), row.get("created_at"))
             for row in recent[:3]
         ]
-        return self._component(round(quality + trend + confidence), evidence)
+        return self._component(round(quality + trend), evidence)
 
     def _score_practice_component(
         self, practices: list[dict[str, Any]], audios: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        practice_rows = [row for row in practices if self._valid_score(row.get("score"))][:READINESS_RECENT_LIMIT]
-        audio_rows = [row for row in audios if self._valid_score(row.get("score"))][:READINESS_RECENT_LIMIT]
+        practice_rows = self._unique_scored_rows(
+            [row for row in practices if self._valid_score(row.get("score"))]
+        )[:READINESS_RECENT_LIMIT]
+        audio_rows = self._unique_scored_rows(
+            [row for row in audios if self._valid_score(row.get("score"))]
+        )[:READINESS_RECENT_LIMIT]
         if not practice_rows and not audio_rows:
             return self._component(0, [])
         practice_quality = self._mean(
@@ -332,13 +339,11 @@ class CareerService:
             quality = practice_quality * 0.65 + audio_quality * 0.35
         else:
             quality = (practice_quality or audio_quality) * 0.75
-        valid_count = len(practice_rows) + len(audio_rows)
-        confidence = min(4, max(0, valid_count - 1)) if quality > 0 else 0
         evidence = [
             *[self._evidence(f"练习得分 {round(float(row['score']))}", row.get("id"), row.get("created_at")) for row in practice_rows[:2]],
             *[self._evidence(f"录音复盘得分 {round(float(row['score']))}", row.get("id"), row.get("created_at")) for row in audio_rows[:1]],
         ]
-        return self._component(round(quality + confidence), evidence)
+        return self._component(round(quality), evidence)
 
     def _score_pipeline_component(self, opportunities: list[dict[str, Any]]) -> dict[str, Any]:
         if not opportunities:
@@ -372,6 +377,14 @@ class CareerService:
     @staticmethod
     def _component(score: float, evidence: list[dict[str, Any]]) -> dict[str, Any]:
         return {"score": CareerService._clamp(score), "evidence": evidence}
+
+    @staticmethod
+    def _readiness_label(score: int, caps: list[str], low_interview: bool) -> str:
+        if score >= DELIVERABLE_THRESHOLD and not caps and not low_interview:
+            return "可投递"
+        if score >= POLISH_THRESHOLD:
+            return "需要打磨"
+        return "先补基础"
 
     @staticmethod
     def _evidence(reason: str, entity_id: Any, timestamp: Any) -> dict[str, Any]:
@@ -409,6 +422,23 @@ class CareerService:
     @classmethod
     def _valid_scores(cls, rows: list[dict[str, Any]]) -> list[float]:
         return [float(row["score"]) for row in rows if cls._valid_score(row.get("score"))]
+
+    @staticmethod
+    def _unique_scored_rows(
+        rows: list[dict[str, Any]], score_field: str = "score", extra_field: str | None = None
+    ) -> list[dict[str, Any]]:
+        unique = []
+        seen = set()
+        for row in rows:
+            key = (
+                float(row[score_field]),
+                str(row.get("created_at") or ""),
+                str(row.get(extra_field) or "") if extra_field else "",
+            )
+            if key not in seen:
+                seen.add(key)
+                unique.append(row)
+        return unique
 
     @staticmethod
     def _has_real_jd(row: dict[str, Any]) -> bool:
