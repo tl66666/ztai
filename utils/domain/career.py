@@ -953,6 +953,59 @@ class CareerService:
             row = self._owned_row(conn, "action_items", action_id)
         return self._action_from_row(row)
 
+    def save_report(
+        self, user_id: int, values: dict[str, Any], source: str = "user"
+    ) -> dict[str, Any]:
+        self._require_local_user(user_id)
+        values = self._require_mapping(values, "report values")
+        permitted = {
+            "report_type", "title", "period_start", "period_end", "content", "status"
+        }
+        unknown = set(values) - permitted
+        if unknown:
+            raise ValueError(f"unknown report fields: {', '.join(sorted(unknown))}")
+        report_type = self._bounded_text(
+            values.get("report_type"), "report_type", 100, required=True
+        )
+        title = self._bounded_text(values.get("title"), "title", 500)
+        period_start = self._bounded_text(values.get("period_start"), "period_start", 100)
+        period_end = self._bounded_text(values.get("period_end"), "period_end", 100)
+        status = self._bounded_text(values.get("status", "ready"), "status", 50, required=True)
+        if status not in {"draft", "ready", "archived"}:
+            raise ValueError("invalid report status")
+        content = values.get("content")
+        if not isinstance(content, dict):
+            raise ValueError("content must be an object")
+        content_json = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+        if len(content_json) > 200_000:
+            raise ValueError("content is too large")
+        source = self._bounded_text(source, "source", 100, required=True)
+        with connect(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """
+                INSERT INTO career_reports (
+                    user_id, report_type, title, period_start, period_end, content_json, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self.local_user_id, report_type, title, period_start, period_end,
+                    content_json, status,
+                ),
+            )
+            report_id = cursor.lastrowid
+            self._write_event(
+                conn,
+                "career_report",
+                report_id,
+                "career_report.saved",
+                {"report_type": report_type, "status": status, "source": source},
+            )
+            row = self._owned_row(conn, "career_reports", report_id)
+        result = dict(row)
+        result["content"] = json.loads(result.pop("content_json"))
+        return result
+
     def timeline(self, user_id: int, opportunity_id: int) -> list[dict[str, Any]]:
         self._require_local_user(user_id)
         with connect(self.db_path) as conn:

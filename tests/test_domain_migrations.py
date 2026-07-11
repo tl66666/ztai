@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import tempfile
@@ -135,7 +136,7 @@ class DomainMigrationTests(unittest.TestCase):
                     for table in REQUIRED_COLUMNS
                 }
 
-            self.assertEqual(version, 2)
+            self.assertEqual(version, 3)
             self.assertEqual(status, "一面")
             self.assertTrue(REQUIRED_TABLES.issubset(tables))
             for table, required in REQUIRED_COLUMNS.items():
@@ -270,7 +271,7 @@ class DomainMigrationTests(unittest.TestCase):
                     )
                 }
 
-            self.assertEqual(version, 2)
+            self.assertEqual(version, 3)
             self.assertIn("source_session_id", interview_columns)
             self.assertTrue(
                 {
@@ -280,6 +281,72 @@ class DomainMigrationTests(unittest.TestCase):
                     "idx_audio_records_user_created",
                 }.issubset(indexes)
             )
+
+    def test_version_two_migrates_agent_proposals_to_version_three_idempotently(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "version-two.db")
+            create_legacy_database(db_path)
+            migrate_database(db_path)
+            with connect(db_path) as conn:
+                conn.execute("PRAGMA user_version = 2")
+                conn.execute(
+                    """
+                    INSERT INTO agent_action_proposals (
+                        user_id, action_type, payload_json, status
+                    ) VALUES (1, 'create_action_item', '{"title":"Legacy"}', 'pending')
+                    """
+                )
+
+            migrate_database(db_path)
+            migrate_database(db_path)
+
+            with connect(db_path) as conn:
+                version = conn.execute("PRAGMA user_version").fetchone()[0]
+                columns = {
+                    row[1]
+                    for row in conn.execute(
+                        'PRAGMA table_info("agent_action_proposals")'
+                    )
+                }
+                indexes = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'index'"
+                    )
+                }
+                legacy = conn.execute(
+                    """
+                    SELECT arguments_json, expires_at, idempotency_key
+                    FROM agent_action_proposals
+                    WHERE action_type = 'create_action_item'
+                    """
+                ).fetchone()
+
+            self.assertEqual(version, 3)
+            self.assertTrue(
+                {
+                    "arguments_json",
+                    "preview",
+                    "expires_at",
+                    "idempotency_key",
+                    "result_json",
+                    "error_code",
+                    "executing_at",
+                    "completed_at",
+                    "cancelled_at",
+                    "failed_at",
+                    "expired_at",
+                }.issubset(columns)
+            )
+            self.assertTrue(
+                {
+                    "idx_agent_proposals_user_status_expires",
+                    "idx_agent_proposals_user_idempotency",
+                }.issubset(indexes)
+            )
+            self.assertEqual(json.loads(legacy["arguments_json"]), {"title": "Legacy"})
+            self.assertIsNotNone(legacy["expires_at"])
+            self.assertIsNotNone(legacy["idempotency_key"])
 
 
 if __name__ == "__main__":

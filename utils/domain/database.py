@@ -29,7 +29,7 @@ LEGACY_STATUS_MAP = {
     "拒绝": "已拒绝",
 }
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -80,27 +80,29 @@ def migrate_database(db_path: str | os.PathLike[str]) -> None:
                 return
 
             # The reserved lock prevents new writes while a separate reader snapshots WAL.
-            if current_version == 0:
-                _backup_pre_migration_database(path)
+            _backup_pre_migration_database(path, current_version)
             if current_version < 1:
                 _migrate_to_version_1(conn)
                 conn.execute("PRAGMA user_version = 1")
             if current_version < 2:
                 _migrate_to_version_2(conn)
                 conn.execute("PRAGMA user_version = 2")
+            if current_version < 3:
+                _migrate_to_version_3(conn)
+                conn.execute("PRAGMA user_version = 3")
             conn.commit()
         except Exception:
             conn.rollback()
             raise
 
 
-def _backup_pre_migration_database(db_path: str) -> None:
+def _backup_pre_migration_database(db_path: str, current_version: int) -> None:
     if not os.path.isfile(db_path) or os.path.getsize(db_path) == 0:
         return
     if _is_obvious_temporary_database(db_path):
         return
 
-    backup_path = f"{db_path}.backup-v0"
+    backup_path = f"{db_path}.backup-v{current_version}"
     if os.path.exists(backup_path):
         return
 
@@ -204,6 +206,72 @@ def _migrate_to_version_2(conn: sqlite3.Connection) -> None:
                 f'CREATE INDEX IF NOT EXISTS "{index_name}" '
                 f'ON "{table}"(user_id, created_at)'
             )
+
+
+def _migrate_to_version_3(conn: sqlite3.Connection) -> None:
+    opportunity_columns = (
+        ("city", "TEXT"),
+        ("salary_min", "INTEGER"),
+        ("salary_max", "INTEGER"),
+        ("notes", "TEXT"),
+        ("applied_at", "TEXT"),
+        ("updated_at", "TEXT"),
+        ("deleted_at", "TEXT"),
+    )
+    if _table_exists(conn, "job_applications"):
+        for column, column_type in opportunity_columns:
+            ensure_column(conn, "job_applications", column, column_type)
+    if not _table_exists(conn, "agent_action_proposals"):
+        _create_domain_tables(conn)
+    columns = (
+        ("arguments_json", "TEXT"),
+        ("preview", "TEXT"),
+        ("expires_at", "TEXT"),
+        ("idempotency_key", "TEXT"),
+        ("result_json", "TEXT"),
+        ("error_code", "TEXT"),
+        ("executing_at", "TEXT"),
+        ("completed_at", "TEXT"),
+        ("cancelled_at", "TEXT"),
+        ("failed_at", "TEXT"),
+        ("expired_at", "TEXT"),
+    )
+    for column, column_type in columns:
+        ensure_column(conn, "agent_action_proposals", column, column_type)
+    conn.execute(
+        """
+        UPDATE agent_action_proposals
+        SET arguments_json = COALESCE(arguments_json, payload_json, '{}')
+        WHERE arguments_json IS NULL
+        """
+    )
+    conn.execute(
+        """
+        UPDATE agent_action_proposals
+        SET expires_at = datetime(COALESCE(created_at, CURRENT_TIMESTAMP), '+30 minutes')
+        WHERE status = 'pending' AND expires_at IS NULL
+        """
+    )
+    conn.execute(
+        """
+        UPDATE agent_action_proposals
+        SET idempotency_key = lower(hex(randomblob(16)))
+        WHERE idempotency_key IS NULL
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_agent_proposals_user_status_expires
+        ON agent_action_proposals(user_id, status, expires_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_proposals_user_idempotency
+        ON agent_action_proposals(user_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL
+        """
+    )
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -340,12 +408,23 @@ def _create_domain_tables(conn: sqlite3.Connection) -> None:
             target_type TEXT,
             target_id TEXT,
             payload_json TEXT NOT NULL,
+            arguments_json TEXT,
+            preview TEXT,
             rationale TEXT,
             status TEXT DEFAULT 'pending',
             risk_level TEXT DEFAULT 'low',
+            expires_at TEXT,
+            idempotency_key TEXT,
+            result_json TEXT,
+            error_code TEXT,
             reviewed_by TEXT,
             reviewed_at TEXT,
+            executing_at TEXT,
             executed_at TEXT,
+            completed_at TEXT,
+            cancelled_at TEXT,
+            failed_at TEXT,
+            expired_at TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
@@ -370,6 +449,8 @@ def _create_domain_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_interview_sessions_application ON interview_sessions(application_id)",
         "CREATE INDEX IF NOT EXISTS idx_interview_sessions_user_status ON interview_sessions(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_agent_proposals_user_status ON agent_action_proposals(user_id, status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_agent_proposals_user_status_expires ON agent_action_proposals(user_id, status, expires_at, created_at)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_proposals_user_idempotency ON agent_action_proposals(user_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
     )
     for statement in statements:
         conn.execute(statement)

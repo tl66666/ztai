@@ -40,6 +40,7 @@ os.makedirs(EXPORT_FOLDER, exist_ok=True)
 
 
 _agent_service = None
+_agent_action_service = None
 _interview_service = None
 AGENT_USER_ID = int(os.environ.get("JOBHUNTER_AGENT_USER_ID", "1"))
 
@@ -1796,6 +1797,109 @@ def get_agent_service():
     if _agent_service is None or _agent_service.db_path != DB_PATH:
         _agent_service = AgentService(DB_PATH)
     return _agent_service
+
+
+def get_agent_action_service():
+    global _agent_action_service
+    from utils.agent_runtime.actions import ActionProposalService
+
+    if _agent_action_service is None or _agent_action_service.db_path != DB_PATH:
+        _agent_action_service = ActionProposalService(
+            DB_PATH, career_service=get_career_service(), local_user_id=AGENT_USER_ID
+        )
+    return _agent_action_service
+
+
+def agent_action_error(exc: Exception):
+    from utils.agent_runtime.actions import ActionProposalError
+
+    if isinstance(exc, ActionProposalError):
+        status = exc.http_status
+        code = exc.code
+    elif isinstance(exc, PermissionError):
+        status, code = 403, "forbidden"
+    elif isinstance(exc, LookupError):
+        status, code = 404, "not_found"
+    else:
+        status, code = 400, "invalid_request"
+    return jsonify({"success": False, "error": {"code": code, "message": str(exc)}}), status
+
+
+def agent_action_user(data=None):
+    value = request.args.get("user_id", AGENT_USER_ID) if data is None else data.get("user_id", AGENT_USER_ID)
+    user_id = require_agent_user(value)
+    if user_id is None:
+        raise PermissionError("operation is restricted to the local user")
+    return user_id
+
+
+@app.route("/api/agent/actions", methods=["GET"])
+def list_agent_actions():
+    try:
+        user_id = agent_action_user()
+        status = request.args.get("status", "pending")
+        if status != "pending":
+            raise ValueError("only pending actions can be listed")
+        return jsonify({"success": True, "actions": get_agent_action_service().list_pending(user_id)})
+    except Exception as exc:
+        return agent_action_error(exc)
+
+
+@app.route("/api/agent/actions/<int:proposal_id>", methods=["GET"])
+def get_agent_action(proposal_id):
+    try:
+        user_id = agent_action_user()
+        action = get_agent_action_service().get(user_id, proposal_id)
+        return jsonify({"success": True, "action": action})
+    except Exception as exc:
+        return agent_action_error(exc)
+
+
+def agent_action_json_body():
+    data = request.get_json(silent=True)
+    if data is None and not request.data:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("JSON body must be an object")
+    return data
+
+
+@app.route("/api/agent/actions/<int:proposal_id>/edit", methods=["POST"])
+def edit_agent_action(proposal_id):
+    try:
+        data = agent_action_json_body()
+        user_id = agent_action_user(data)
+        changes = {key: value for key, value in data.items() if key != "user_id"}
+        action = get_agent_action_service().edit(user_id, proposal_id, changes)
+        return jsonify({"success": True, "action": action})
+    except Exception as exc:
+        return agent_action_error(exc)
+
+
+@app.route("/api/agent/actions/<int:proposal_id>/confirm", methods=["POST"])
+def confirm_agent_action(proposal_id):
+    try:
+        data = agent_action_json_body()
+        user_id = agent_action_user(data)
+        if set(data) - {"user_id"}:
+            raise ValueError("confirm does not accept changes")
+        action = get_agent_action_service().confirm(user_id, proposal_id)
+        return jsonify({"success": True, "action": action, "result": action["result"]})
+    except Exception as exc:
+        return agent_action_error(exc)
+
+
+@app.route("/api/agent/actions/<int:proposal_id>/cancel", methods=["POST"])
+def cancel_agent_action(proposal_id):
+    try:
+        data = agent_action_json_body()
+        user_id = agent_action_user(data)
+        if set(data) - {"user_id"}:
+            raise ValueError("cancel does not accept changes")
+        action = get_agent_action_service().cancel(user_id, proposal_id)
+        return jsonify({"success": True, "action": action})
+    except Exception as exc:
+        return agent_action_error(exc)
 
 
 def require_agent_user(value):
