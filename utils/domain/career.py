@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 from .database import APPLICATION_STATUSES, connect, ensure_column
@@ -67,6 +69,20 @@ _FIELD_LIMITS = {
     "offer_details": 20_000,
 }
 
+# Readiness is a deterministic local heuristic. Counts only provide the small
+# confidence bonuses below; evidence quality remains the dominant input.
+READINESS_WEIGHTS = {
+    "resume": 25,
+    "alignment": 20,
+    "interview": 25,
+    "practice": 15,
+    "pipeline": 15,
+}
+READINESS_RECENT_LIMIT = 5
+REAL_JD_MIN_LENGTH = 12
+DELIVERABLE_THRESHOLD = 70
+POLISH_THRESHOLD = 42
+
 
 class CareerService:
     def __init__(self, db_path: str | os.PathLike[str], local_user_id: int = 1):
@@ -84,6 +100,374 @@ class CareerService:
                 "SELECT * FROM career_profiles WHERE user_id = ?", (self.local_user_id,)
             ).fetchone()
         return self._profile_from_row(row) if row else None
+
+    def calculate_readiness(self, user_id: int) -> dict[str, Any]:
+        self._require_local_user(user_id)
+        with connect(self.db_path) as conn:
+            resume = self._readiness_resume(conn)
+            matches = self._readiness_matches(conn)
+            interviews = self._readiness_rows(conn, "interviews", "created_at")
+            practices = self._readiness_rows(conn, "practice_records", "created_at")
+            audios = self._readiness_rows(conn, "audio_records", "created_at")
+            opportunities = self._readiness_opportunities(conn)
+
+        components = {
+            "resume": self._score_resume_component(resume),
+            "alignment": self._score_alignment_component(matches),
+            "interview": self._score_interview_component(interviews),
+            "practice": self._score_practice_component(practices, audios),
+            "pipeline": self._score_pipeline_component(opportunities),
+        }
+        for name, weight in READINESS_WEIGHTS.items():
+            components[name]["weight"] = weight
+
+        weighted = round(
+            sum(components[name]["score"] * weight for name, weight in READINESS_WEIGHTS.items())
+            / 100
+        )
+        caps: list[str] = []
+        blockers: list[str] = []
+        weekly_plan: list[dict[str, str]] = []
+
+        if resume is None:
+            caps.append("no_resume")
+            blockers.append("缺少可用主简历，准备度最高限制为 30。")
+            weekly_plan.append({"title": "完善一份主简历并完成审计", "page": "resume", "module": "input"})
+            weighted = min(weighted, 30)
+
+        real_matches = [
+            row
+            for row in matches
+            if self._has_real_jd(row) and self._valid_score(row.get("match_score"))
+        ]
+        if not real_matches:
+            caps.append("no_real_jd_match")
+            blockers.append("尚无基于真实 JD 的有效匹配，准备度最高限制为 55。")
+            weekly_plan.append({"title": "选择真实 JD 完成一次匹配", "page": "resume", "module": "jd"})
+            weighted = min(weighted, 55)
+
+        interview_scores = self._valid_scores(interviews)
+        low_interview = bool(interview_scores) and self._mean(interview_scores[:READINESS_RECENT_LIMIT]) < 40
+        if low_interview:
+            blockers.append("最近完成的面试平均分低于 40，先修复核心回答再投递。")
+            weekly_plan.append({"title": "复盘低分面试并重练核心回答", "page": "interview", "module": "records"})
+
+        if not interview_scores:
+            blockers.append("缺少已完成且有有效评分的模拟面试。")
+            weekly_plan.append({"title": "完成一轮模拟面试", "page": "interview", "module": "mock"})
+        if components["practice"]["score"] < 50:
+            weekly_plan.append({"title": "完成题库练习和录音复盘", "page": "interview", "module": "practice"})
+        if not opportunities:
+            weekly_plan.append({"title": "建立投递看板并设置下一步", "page": "tracker", "module": "add"})
+
+        weighted = self._clamp(weighted)
+        if weighted >= DELIVERABLE_THRESHOLD and not caps and not low_interview:
+            label = "可投递"
+        elif weighted >= POLISH_THRESHOLD:
+            label = "需要打磨"
+        else:
+            label = "先补基础"
+
+        funnel: dict[str, int] = {}
+        for row in opportunities:
+            status = str(row.get("status") or "未设置")
+            funnel[status] = funnel.get(status, 0) + 1
+
+        if not weekly_plan:
+            weekly_plan = [
+                {"title": "复盘最近一次低分证据", "page": "interview", "module": "records"},
+                {"title": "推进一个投递阶段", "page": "tracker", "module": "board"},
+                {"title": "复核主简历与目标 JD", "page": "resume", "module": "jd"},
+            ]
+
+        return {
+            "score": weighted,
+            "label": label,
+            "components": components,
+            "caps": caps,
+            "blockers": blockers[:5],
+            "weekly_plan": weekly_plan[:4],
+            "summary": f"当前准备度 {weighted}/100，依据近期质量、完成度、时效和趋势综合计算。",
+            "funnel": funnel,
+        }
+
+    def _readiness_resume(self, conn: sqlite3.Connection) -> dict[str, Any] | None:
+        if not self._table_exists(conn, "resumes"):
+            return None
+        columns = self._table_columns(conn, "resumes")
+        status_filter = "AND (status IS NULL OR status IN ('active', 'main'))" if "status" in columns else ""
+        order_column = "updated_at" if "updated_at" in columns else "created_at"
+        row = conn.execute(
+            f"SELECT * FROM resumes WHERE user_id = ? {status_filter} "
+            f"ORDER BY {order_column} DESC, id DESC LIMIT 1",
+            (self.local_user_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def _readiness_matches(self, conn: sqlite3.Connection) -> list[dict[str, Any]]:
+        if not self._table_exists(conn, "job_matches"):
+            return []
+        columns = self._table_columns(conn, "job_matches")
+        jd_expression = "m.jd_text"
+        join = ""
+        application_filter = ""
+        if "application_id" in columns and self._table_exists(conn, "job_applications"):
+            application_columns = self._table_columns(conn, "job_applications")
+            if "jd_text" in application_columns:
+                jd_expression = "COALESCE(m.jd_text, a.jd_text)"
+                deleted_filter = "AND a.deleted_at IS NULL" if "deleted_at" in application_columns else ""
+                join = f"LEFT JOIN job_applications a ON a.id = m.application_id {deleted_filter}"
+                if "deleted_at" in application_columns:
+                    application_filter = "AND (m.application_id IS NULL OR a.id IS NOT NULL)"
+        if "jd_text" not in columns:
+            jd_expression = "a.jd_text" if join else "NULL"
+        score_expression = "m.match_score" if "match_score" in columns else "NULL"
+        analysis_expression = "m.analysis" if "analysis" in columns else "NULL"
+        created_expression = "m.created_at" if "created_at" in columns else "NULL"
+        rows = conn.execute(
+            f"""SELECT m.id, {score_expression} AS match_score,
+                       {analysis_expression} AS analysis, {jd_expression} AS jd_text,
+                       {created_expression} AS created_at
+                FROM job_matches m {join}
+                WHERE m.user_id = ? {application_filter}
+                ORDER BY {created_expression} DESC, m.id DESC LIMIT 20""",
+            (self.local_user_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _readiness_rows(
+        self, conn: sqlite3.Connection, table: str, timestamp_column: str
+    ) -> list[dict[str, Any]]:
+        if not self._table_exists(conn, table):
+            return []
+        columns = self._table_columns(conn, table)
+        if "score" not in columns:
+            return []
+        timestamp = timestamp_column if timestamp_column in columns else "NULL"
+        rows = conn.execute(
+            f"SELECT id, score, {timestamp} AS created_at FROM {table} "
+            f"WHERE user_id = ? ORDER BY {timestamp} DESC, id DESC LIMIT 20",
+            (self.local_user_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _readiness_opportunities(self, conn: sqlite3.Connection) -> list[dict[str, Any]]:
+        if not self._table_exists(conn, "job_applications"):
+            return []
+        columns = self._table_columns(conn, "job_applications")
+        deleted_filter = "AND deleted_at IS NULL" if "deleted_at" in columns else ""
+        selected = [name for name in ("id", "status", "next_action_at", "updated_at") if name in columns]
+        rows = conn.execute(
+            f"SELECT {', '.join(selected)} FROM job_applications "
+            f"WHERE user_id = ? {deleted_filter} ORDER BY id DESC LIMIT 50",
+            (self.local_user_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _score_resume_component(self, resume: dict[str, Any] | None) -> dict[str, Any]:
+        if not resume:
+            return self._component(0, [])
+        content = str(resume.get("content") or "")
+        completeness = min(45, len(content.strip()) // 4)
+        section_terms = ("summary", "experience", "education", "skills", "项目", "经历", "教育", "技能")
+        completeness += min(40, sum(10 for term in section_terms if term.lower() in content.lower()))
+        if any(character.isdigit() for character in content):
+            completeness += 8
+        completeness = self._clamp(completeness)
+        audit_score = self._extract_quality_score(resume.get("analysis_result"))
+        score = round(audit_score * 0.7 + completeness * 0.3) if audit_score is not None else completeness
+        score *= 0.85 + 0.15 * self._recency_factor(resume.get("updated_at") or resume.get("created_at"))
+        evidence = [self._evidence("主简历质量与完整度已评估", resume.get("id"), resume.get("updated_at") or resume.get("created_at"))]
+        return self._component(score, evidence)
+
+    def _score_alignment_component(self, matches: list[dict[str, Any]]) -> dict[str, Any]:
+        valid = [row for row in matches if self._has_real_jd(row) and self._valid_score(row.get("match_score"))]
+        if not valid:
+            return self._component(0, [])
+        recent = valid[:READINESS_RECENT_LIMIT]
+        scores = [float(row["match_score"]) for row in recent]
+        quality = self._mean(
+            [score * self._recency_factor(row.get("created_at")) for score, row in zip(scores, recent)]
+        )
+        confidence = min(4, max(0, len(recent) - 1)) if quality > 0 else 0
+        evidence = [
+            self._evidence(f"真实 JD 匹配得分 {round(float(row['match_score']))}", row.get("id"), row.get("created_at"))
+            for row in recent[:3]
+        ]
+        return self._component(round(quality + confidence), evidence)
+
+    def _score_interview_component(self, interviews: list[dict[str, Any]]) -> dict[str, Any]:
+        valid_rows = [row for row in interviews if self._valid_score(row.get("score"))]
+        if not valid_rows:
+            return self._component(0, [])
+        recent = valid_rows[:READINESS_RECENT_LIMIT]
+        scores = [float(row["score"]) for row in recent]
+        quality = self._mean(
+            [score * self._recency_factor(row.get("created_at")) for score, row in zip(scores, recent)]
+        )
+        trend = 0.0
+        if len(scores) >= 2:
+            trend = max(-8.0, min(8.0, (scores[0] - scores[-1]) * 0.25))
+        confidence = min(4, len(scores) - 1) if quality > 0 else 0
+        evidence = [
+            self._evidence(f"已完成面试得分 {round(float(row['score']))}", row.get("id"), row.get("created_at"))
+            for row in recent[:3]
+        ]
+        return self._component(round(quality + trend + confidence), evidence)
+
+    def _score_practice_component(
+        self, practices: list[dict[str, Any]], audios: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        practice_rows = [row for row in practices if self._valid_score(row.get("score"))][:READINESS_RECENT_LIMIT]
+        audio_rows = [row for row in audios if self._valid_score(row.get("score"))][:READINESS_RECENT_LIMIT]
+        if not practice_rows and not audio_rows:
+            return self._component(0, [])
+        practice_quality = self._mean(
+            [float(row["score"]) * self._recency_factor(row.get("created_at")) for row in practice_rows]
+        ) if practice_rows else 0
+        audio_quality = self._mean(
+            [float(row["score"]) * self._recency_factor(row.get("created_at")) for row in audio_rows]
+        ) if audio_rows else 0
+        if practice_rows and audio_rows:
+            quality = practice_quality * 0.65 + audio_quality * 0.35
+        else:
+            quality = (practice_quality or audio_quality) * 0.75
+        valid_count = len(practice_rows) + len(audio_rows)
+        confidence = min(4, max(0, valid_count - 1)) if quality > 0 else 0
+        evidence = [
+            *[self._evidence(f"练习得分 {round(float(row['score']))}", row.get("id"), row.get("created_at")) for row in practice_rows[:2]],
+            *[self._evidence(f"录音复盘得分 {round(float(row['score']))}", row.get("id"), row.get("created_at")) for row in audio_rows[:1]],
+        ]
+        return self._component(round(quality + confidence), evidence)
+
+    def _score_pipeline_component(self, opportunities: list[dict[str, Any]]) -> dict[str, Any]:
+        if not opportunities:
+            return self._component(0, [])
+        stage_indexes = []
+        hygienic = 0
+        recent = 0
+        evidence = []
+        active_max = max(1, len(_ACTIVE_PIPELINE) - 1)
+        for row in opportunities:
+            status = row.get("status")
+            if status == "Offer":
+                stage_indexes.append(100)
+            elif status in _ACTIVE_PIPELINE:
+                stage_indexes.append(min(APPLICATION_STATUSES.index(status), active_max) / active_max * 100)
+            elif status in APPLICATION_STATUSES:
+                stage_indexes.append(20)
+            if self._next_action_is_hygienic(row.get("next_action_at")):
+                hygienic += 1
+            age = self._age_days(row.get("updated_at"))
+            if age is not None and age <= 30:
+                recent += 1
+            if len(evidence) < 3:
+                evidence.append(self._evidence(f"投递阶段：{status or '未设置'}", row.get("id"), row.get("updated_at")))
+        progression = self._mean(stage_indexes) if stage_indexes else 0
+        hygiene = hygienic / len(opportunities) * 100
+        recency = recent / len(opportunities) * 100
+        score = round(progression * 0.55 + hygiene * 0.30 + recency * 0.15)
+        return self._component(score, evidence)
+
+    @staticmethod
+    def _component(score: float, evidence: list[dict[str, Any]]) -> dict[str, Any]:
+        return {"score": CareerService._clamp(score), "evidence": evidence}
+
+    @staticmethod
+    def _evidence(reason: str, entity_id: Any, timestamp: Any) -> dict[str, Any]:
+        return {"reason": reason, "entity_id": entity_id, "timestamp": timestamp}
+
+    @staticmethod
+    def _extract_quality_score(value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            parsed = json.loads(value) if isinstance(value, str) else value
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed = value
+        candidates: list[Any] = []
+        if isinstance(parsed, dict):
+            for key in ("score", "overall_score", "quality", "completeness"):
+                if key in parsed:
+                    candidates.append(parsed[key])
+            for nested in parsed.values():
+                if isinstance(nested, dict):
+                    candidates.extend(nested.get(key) for key in ("score", "overall_score") if key in nested)
+        elif isinstance(parsed, (int, float)):
+            candidates.append(parsed)
+        elif isinstance(parsed, str):
+            match = re.search(r"(?:score|得分|总分)\s*[:：]?\s*(\d{1,3})", parsed, re.IGNORECASE)
+            if match:
+                candidates.append(int(match.group(1)))
+        valid = [float(item) for item in candidates if CareerService._valid_score(item)]
+        return CareerService._mean(valid) if valid else None
+
+    @staticmethod
+    def _valid_score(value: Any) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 100
+
+    @classmethod
+    def _valid_scores(cls, rows: list[dict[str, Any]]) -> list[float]:
+        return [float(row["score"]) for row in rows if cls._valid_score(row.get("score"))]
+
+    @staticmethod
+    def _has_real_jd(row: dict[str, Any]) -> bool:
+        return len(str(row.get("jd_text") or "").strip()) >= REAL_JD_MIN_LENGTH
+
+    @staticmethod
+    def _mean(values: list[float]) -> float:
+        return sum(values) / len(values) if values else 0.0
+
+    @staticmethod
+    def _clamp(value: float) -> int:
+        return max(0, min(100, round(value)))
+
+    @staticmethod
+    def _age_days(value: Any) -> int | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return max(0, (datetime.now(timezone.utc) - parsed).days)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _recency_factor(cls, value: Any) -> float:
+        age = cls._age_days(value)
+        if age is None:
+            return 0.85
+        if age <= 30:
+            return 1.0
+        if age <= 90:
+            return 0.85
+        if age <= 180:
+            return 0.70
+        return 0.55
+
+    @staticmethod
+    def _next_action_is_hygienic(value: Any) -> bool:
+        if not value:
+            return False
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return (parsed - datetime.now(timezone.utc)).days >= -7
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+        return conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone() is not None
+
+    @staticmethod
+    def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+        return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
 
     def upsert_profile(
         self, user_id: int, values: dict[str, Any], source: str = "user"

@@ -2207,6 +2207,8 @@ def build_application_followup_plan(app_row: sqlite3.Row, resume_row: sqlite3.Ro
 
 @app.route("/api/dashboard/<int:user_id>")
 def dashboard(user_id):
+    if require_agent_user(user_id) is None:
+        return agent_access_denied()
     with get_db() as conn:
         resume_count = conn.execute("SELECT COUNT(*) FROM resumes WHERE user_id = ?", (user_id,)).fetchone()[0]
         interview_rows = conn.execute("SELECT score, created_at FROM interviews WHERE user_id = ? ORDER BY created_at", (user_id,)).fetchall()
@@ -2232,11 +2234,12 @@ def dashboard(user_id):
         "match_scores": [dict(row) for row in match_rows],
         "activities": [dict(row) for row in app_rows[:6]],
         "next_actions": build_next_actions(stats),
-        "career_pulse": build_career_pulse(stats, interview_rows, match_rows, app_rows),
+        "career_pulse": get_career_service().calculate_readiness(user_id),
     })
 
 
 def build_career_pulse(stats: dict, interview_rows: list[sqlite3.Row], match_rows: list[sqlite3.Row], app_rows: list[sqlite3.Row]) -> dict:
+    """Legacy compatibility helper; the dashboard uses CareerService readiness."""
     readiness = 10
     blockers = []
     weekly_plan = []
