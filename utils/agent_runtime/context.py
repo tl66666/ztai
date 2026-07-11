@@ -38,9 +38,11 @@ class RuntimeContext:
             f"{message['role']}: {message['content']}" for message in self.recent_messages
         )
         profile = "\n".join(f"- {fact}" for fact in self.profile_facts)
+        episodes = "\n".join(f"- {episode}" for episode in self.episodes)
         return (
             f"会话摘要：\n{self.conversation_summary or '暂无'}\n\n"
             f"已确认用户画像：\n{profile or '暂无'}\n\n"
+            f"相关历史任务：\n{episodes or '暂无'}\n\n"
             f"实时求职数据：\n{self.career_snapshot or '暂无'}\n\n"
             f"最近对话：\n{history or '暂无'}"
         )[:12000]
@@ -97,10 +99,28 @@ class ContextBuilder:
             reverse=True,
         )[:8]
         profile_facts = [f"{memory['memory_key']}：{memory['value']}" for memory in ranked]
+        episodes = self.store.list_memories(
+            user_id,
+            kind="episodic",
+            statuses=("confirmed",),
+        )
+        ranked_episodes = sorted(
+            episodes,
+            key=lambda memory: (
+                any(term in str(memory["value"]) for term in query_terms),
+                memory["confidence"],
+                memory["id"],
+            ),
+            reverse=True,
+        )[:3]
         return RuntimeContext(
             conversation_summary=conversation.summary,
             recent_messages=[{"role": message.role, "content": message.content} for message in messages],
             profile_facts=profile_facts,
+            episodes=[
+                f"{episode['value'].get('input', '')} -> {episode['value'].get('result', '')}"
+                for episode in ranked_episodes
+            ],
             career_snapshot=self._career_snapshot(user_id),
         )
 

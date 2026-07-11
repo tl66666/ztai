@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from utils.agent_runtime.models import AgentDecision
 
 
@@ -29,6 +31,14 @@ class LocalPolicy:
                 return AgentDecision("tool_call", "match_job", slots)
 
         message = state.user_message.lower().strip()
+        if "简历" in message and any(word in message for word in ("刚才", "这个岗位", "目标岗位", "岗位看看")):
+            remembered_role = re.search(r"target_role：([^\n]+)", state.context_prompt)
+            if remembered_role:
+                return AgentDecision(
+                    "tool_call",
+                    "match_job",
+                    {"job_title": remembered_role.group(1).strip()},
+                )
         if any(word in message for word in ("匹配岗位", "岗位匹配", "匹配度", "适合这个岗位")):
             return AgentDecision(
                 "needs_input",

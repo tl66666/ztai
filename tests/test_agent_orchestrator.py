@@ -121,6 +121,40 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual({item["memory_key"] for item in memories}, {"target_city", "target_role"})
         self.assertEqual(self.store.run_count(self.conversation.id, 1), 1)
 
+    def test_completed_run_becomes_retrievable_episodic_memory(self):
+        policy = QueuePolicy([
+            AgentDecision("tool_call", "get_dashboard", {}),
+            AgentDecision("final", message="你目前有 2 份简历。"),
+        ])
+        self.make_orchestrator(policy).run(1, self.conversation.id, "总结我的求职进度")
+
+        episodes = self.store.list_memories(
+            1, kind="episodic", statuses=("confirmed",)
+        )
+        fresh_conversation = self.store.create_conversation(1, "新会话")
+        context = self.context_builder.build(1, fresh_conversation.id, "求职进度")
+
+        self.assertEqual(len(episodes), 1)
+        self.assertEqual(episodes[0]["value"]["tools"], ["get_dashboard"])
+        self.assertIn("2 份简历", "\n".join(context.episodes))
+        self.assertIn("2 份简历", context.as_prompt())
+
+    def test_local_policy_reuses_remembered_role_for_resume_match(self):
+        orchestrator = self.make_orchestrator(LocalPolicy())
+        orchestrator.run(
+            1,
+            self.conversation.id,
+            "我想去杭州，目标岗位是 Python 测试工程师",
+        )
+
+        result = orchestrator.run(
+            1, self.conversation.id, "按刚才的岗位看看我的简历"
+        )
+
+        self.assertEqual(self.registry.calls[-1][0], "match_job")
+        self.assertEqual(self.registry.calls[-1][1]["job_title"], "Python 测试工程师")
+        self.assertIn("82", result.reply)
+
     def test_remote_policy_uses_native_tool_calls(self):
         client = FakeAIClient({
             "success": True,

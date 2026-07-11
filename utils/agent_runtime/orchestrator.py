@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import time
+import uuid
 
 from utils.agent_runtime.context import ContextBuilder, extract_explicit_facts
 from utils.agent_runtime.memory import MemoryStore
@@ -198,6 +199,24 @@ class AgentOrchestrator:
             conversation_id, user_id, "assistant", reply,
             {"status": status, "events": events, "tools_used": tools_used},
         )
+        if status in {"completed", "degraded"}:
+            recent = self.store.list_messages(conversation_id, user_id, limit=2)
+            source = next((item.content for item in recent if item.role == "user"), "")
+            self.store.upsert_memory(
+                user_id=user_id,
+                kind="episodic",
+                category="agent_task",
+                memory_key=f"episode_{uuid.uuid4().hex}",
+                value={
+                    "conversation_id": conversation_id,
+                    "input": source[:300],
+                    "result": reply[:600],
+                    "tools": list(tools_used),
+                    "status": status,
+                },
+                confidence=0.85,
+                status="confirmed",
+            )
         if self.context_builder.needs_summary(conversation_id, user_id):
             self.context_builder.summarize(conversation_id, user_id)
         self.store.record_run(

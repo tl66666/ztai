@@ -45,8 +45,9 @@ GitHub Pages 展示入口：[https://tl66666.github.io/ztai/static/showcase.html
 ## 核心亮点
 
 - **完整求职闭环**：从简历到 Offer，六步数据流转，每步结果沉淀到下一步，告别割裂工具拼凑。
-- **ReAct Agent 架构**：AI 教练不是固定流程的工作流，而是基于 ReAct 框架的真正 Agent。LLM 自主思考、自主选择 13 个工具、自主决定调几次、自主判断何时完成。11 个内部工具聚焦求职核心流程，2 个外部工具联网获取实时信息。有 API Key 时由大模型决策，无 Key 时降级为意图分类器。
-- **多模型 AI 网关 + 本地兜底**：接入智谱 GLM、DeepSeek、Kimi 三大供应商，API 可用时智能分析，无 Key 或网络异常时自动回落本地规则，核心功能不受影响。
+- **结构化 Agent Runtime**：AI 教练使用有界决策循环和原生 `tool_calls`，可选择 13 个工具；工具参数由 JSON Schema 校验，并具备用户隔离、重复调用检测、预算控制和运行审计。
+- **分层持久化记忆**：会话消息、滚动摘要、用户画像、待完成任务、历史任务结果和实时业务事实分层管理，服务重启或刷新页面后仍能继续。
+- **多模型 AI 网关 + 诚实降级**：接入智谱 GLM、DeepSeek、Kimi 三类 OpenAI-compatible 供应商；无 Key 时使用确定性本地任务策略，远端异常返回可诊断错误，不伪装成成功的模型回答。
 - **多专业求职画像**：不只为程序员服务，六大专业方向各自有专属题库、技能雷达和面试追问策略。
 - **语音表达深度分析**：不只是语音转文字，还结合语速、停顿、语气词、逻辑结构给出 11 维度表达评分和改进建议。
 - **面试幻觉控制**：识别"不知道、跳过、下一题"等回答，不强行编造反馈，给出合理跳过或参考答案。
@@ -112,11 +113,12 @@ GitHub Pages 展示入口：[https://tl66666.github.io/ztai/static/showcase.html
 - 支持生成跟进建议、风险提醒、沟通话术和复盘建议。
 - 薪资评估根据城市、经验、技能数量等信息给出参考区间。
 
-### 5. AI 求职教练（ReAct Agent）
+### 5. AI 求职教练（结构化 Agent Runtime）
 
-- 基于 ReAct 框架的真正 Agent，不是固定流程的工作流。
-- **13 个工具**：简历分析、岗位匹配、面试题获取、回答评估、JD 解析、薪资评估、简历查询、投递查询、追问用户、求职报告生成、看板统计、联网搜索、网页抓取。11 个内部工具聚焦求职核心流程，2 个外部工具联网获取实时面试经验和公司评价。知识类问题由 LLM 自身能力直接回答，实时信息通过外部搜索获取。
-- LLM 自主决定调不调工具、调哪个、调几次、何时结束。代码只做调度和执行，不规定步骤。
+- 使用 `tool_calls` 或严格 JSON 决策协议，不再依赖模型输出中文标签后用正则解析。
+- **13 个工具**：简历列表、简历全文读取、简历分析、岗位匹配、JD 解析、面试题获取、回答评估、薪资估算、投递查询、求职报告、看板统计、联网搜索、网页抓取。11 个内部工具聚焦求职流程，2 个外部工具读取公开实时信息。
+- 模型负责选择工具和整理答案，代码负责参数校验、用户权限、状态持久化、调用预算和错误恢复。
+- 支持多会话、刷新恢复、长对话摘要、用户画像和跨轮任务续接。
 - 支持生成阶段性求职作战报告。
 - 提醒用户补齐简历证据、练习薄弱题型、复盘投递结果。
 
@@ -156,19 +158,20 @@ GitHub Pages 展示入口：[https://tl66666.github.io/ztai/static/showcase.html
 - **DeepSeek**：支持 `deepseek-v4-flash`、`deepseek-v4-pro`、`deepseek-chat`、`deepseek-reasoner`。
 - **Kimi / Moonshot**：支持 `kimi-2.6`、`moonshot-v1-8k`、`moonshot-v1-32k`、`moonshot-v1-128k`。
 - **自定义模型 ID**：前端可以输入自定义模型名称，用于适配后续新增模型。
-- **本地规则兜底**：无 Key、网络失败或 API 异常时，系统仍能基于规则完成简历诊断、JD 匹配、面试反馈和展示流程。
+- **本地任务策略**：无 Key 时仍可查询简历、投递和看板，完成岗位匹配、面试题、薪资估算与求职报告等确定性任务；生成式质量受限时会明确标记为本地模式。
 
-### ReAct Agent 架构
+### Agent Runtime 与分层记忆
 
-AI 教练模块（`/api/agent/chat`）不是固定调用某个模型的工作流，而是基于 ReAct（Reasoning + Acting）框架的真正 Agent：
+AI 教练模块（`/api/agent/chat`）由会话服务、上下文构建器、有界编排器、工具注册表和记忆仓储组成：
 
-- **13 个工具**：简历分析、岗位匹配、面试题获取、回答评估、JD 解析、薪资评估、简历查询、投递查询、追问用户、求职报告生成、看板统计、联网搜索、网页抓取。11 个内部工具聚焦求职核心流程，2 个外部工具联网获取实时面试经验和公司评价。知识类问题由 LLM 自身能力直接回答，实时信息通过外部搜索获取。
-- LLM 自主决定调不调工具、调哪个、调几次、何时结束。代码只做调度和执行，不规定步骤。
-- **思考-行动-观察循环**：每轮 LLM 先思考，再选择工具执行，拿到观察结果后继续思考，直到信息足够输出最终回答。最多 5 轮。
-- **多轮对话记忆**：保存最近 20 条消息，Agent 能引用之前的对话上下文。
-- **工具错误恢复**：工具执行失败时，错误信息返回给 LLM，由 LLM 决定换工具还是告知用户。
-- **追问能力**：信息不足时，Agent 通过 `ask_user` 工具主动向用户提问，而不是瞎猜。
-- **降级模式**：无 API Key 时用意图分类器（同义词 + 模糊匹配）模拟工具选择，简单问题（日期、时间、闲聊、身份询问）直接回答。
+- **结构化决策**：优先使用供应商原生 `tool_calls`；兼容层只接受严格 JSON，不解析自由文本中的“思考/行动”。
+- **有界循环**：默认最多 4 轮，检测相同工具和参数的重复调用，达到预算后使用已有可靠结果结束。
+- **会话记忆**：按 `user_id + conversation_id` 持久化，支持多会话切换、刷新恢复和定向清空。
+- **摘要与画像**：长对话生成滚动摘要；用户明确表达的目标城市、岗位和薪资偏好保存为带来源的语义记忆。
+- **任务记忆**：信息不足时返回 `needs_input` 并保存任务槽位，用户下一条消息可从中断处继续。
+- **业务事实**：简历、面试、匹配和投递表仍是唯一事实来源，避免把过期业务数据复制成长期记忆。
+- **审计与安全**：每次运行保存状态、工具、耗时和错误码；模型不能指定其他用户 ID，网页抓取拒绝本机与内网地址。
+- **隐私友好的可解释性**：前端展示“读取简历”“完成岗位匹配”等工具事件，不展示模型私有思维链。
 
 ### 测试与质量
 
@@ -222,11 +225,10 @@ jobhunter/
 │   ├── css/style.css              # 主题和布局样式
 │   ├── js/app.js                  # 前端交互逻辑
 │   └── assets/                    # 图片、视频和提示词素材
-├── tests/
-│   └── test_core_features.py      # 核心功能测试
+├── tests/                         # 核心、记忆、工具、编排、API 与前端契约测试
 └── utils/
     ├── ai_client.py               # 多模型 AI 网关
-    ├── agent.py                   # ReAct Agent 执行器（13 工具 + 多轮记忆 + 意图分类降级）
+    ├── agent_runtime/             # 会话、记忆、工具、上下文、策略与编排器
     ├── resume_analyzer.py         # 兼容旧版简历分析工具
     ├── job_matcher.py             # 兼容旧版岗位匹配工具
     └── interview_engine.py        # 兼容旧版面试引擎
@@ -305,15 +307,18 @@ python app.py
 - `POST /api/applications`：新增投递记录。
 - `POST /api/applications/<application_id>/coach`：生成投递跟进建议。
 - `POST /api/career/report/<user_id>`：生成求职作战报告。
-- `POST /api/agent/chat`：ReAct Agent 对话（LLM 自主选择工具、多轮推理）。
-- `POST /api/agent/clear-memory`：清空 Agent 对话记忆。
+- `POST /api/agent/conversations`：创建 AI 教练会话。
+- `GET /api/agent/conversations/<user_id>`：列出当前用户会话。
+- `GET /api/agent/conversations/<conversation_id>/messages`：恢复会话消息。
+- `POST /api/agent/conversations/<conversation_id>/clear`：只清空指定会话。
+- `POST /api/agent/chat`：在指定会话中执行结构化 Agent 任务。
 - `POST /api/config/model`：保存模型配置。
 
 ## 测试
 
 ```powershell
-python -m py_compile app.py utils\ai_client.py
-python tests\test_core_features.py
+python -m compileall app.py utils tests
+python -m unittest discover -s tests -v
 node --check static\js\app.js
 ```
 
