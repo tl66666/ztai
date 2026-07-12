@@ -19,7 +19,10 @@ $HealthTimeoutSeconds = 60
 $flaskProcess = $null
 $script:LaunchMutex = $null
 $script:MutexAcquired = $false
-$BrowserBlockedPorts = @(6000, 6666, 6667)
+$BrowserBlockedPorts = @(
+    1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000,
+    6566, 6665, 6666, 6667, 6668, 6669, 6697, 10080
+)
 
 function Write-LauncherMessage {
     param(
@@ -210,7 +213,9 @@ try {
     }
 
     $selectedPort = Find-FreePort $Port
-    if ($selectedPort -ne $Port) {
+    if ($BrowserBlockedPorts -contains $Port) {
+        Write-LauncherMessage "Port $Port is blocked by browsers; safely selected port $selectedPort instead." Yellow
+    } elseif ($selectedPort -ne $Port) {
         Write-LauncherMessage "Port $Port is in use; safely selected port $selectedPort instead." Yellow
     } else {
         Write-LauncherMessage "Port $selectedPort is available." Green

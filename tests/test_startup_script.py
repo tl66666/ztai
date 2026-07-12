@@ -34,8 +34,13 @@ class StartupScriptContractTests(unittest.TestCase):
             self.assertNotIn(forbidden, self.launcher)
         self.assertRegex(self.launcher, r"(?i)Mutex")
         self.assertIn("Local\\JobHunter-", self.launcher)
-        self.assertIn("6000", self.launcher)
-        self.assertIn("6667", self.launcher)
+        blocked_ports = (
+            1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000,
+            6566, 6665, 6666, 6667, 6668, 6669, 6697, 10080,
+        )
+        for port in blocked_ports:
+            self.assertRegex(self.launcher, rf"\b{port}\b")
+        self.assertIn("blocked by browsers", self.launcher)
 
     def test_launcher_never_kills_a_port_owner_or_process_tree(self):
         self.assertNotRegex(self.launcher, r"(?i)\btaskkill\b")
@@ -74,6 +79,7 @@ class StartupScriptContractTests(unittest.TestCase):
         self.assertRegex(self.launcher, r"(?i)wrap|回绕")
         self.assertRegex(self.launcher, r"(?i)1024")
         self.assertIn("BoundaryPort", SMOKE_SCRIPT.read_text(encoding="utf-8-sig"))
+        self.assertIn("BlockedPort", SMOKE_SCRIPT.read_text(encoding="utf-8-sig"))
 
     def test_batch_launcher_forwards_arguments_and_exit_code(self):
         self.assertIn('%~dp0start-jobhunter.ps1', self.batch)
@@ -96,6 +102,8 @@ class StartupScriptContractTests(unittest.TestCase):
         self.assertIn("Preferred port owner was disturbed", smoke)
         self.assertRegex(smoke, r"(?i)strict|match.*\^\\d\+|\^\\d\+\$")
         self.assertIn("Get-Process", smoke)
+        self.assertIn("WaitForExit(5000)", smoke)
+        self.assertIn("-Force", smoke)
 
 
 @unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "requires Windows PowerShell")

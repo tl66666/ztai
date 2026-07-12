@@ -1,5 +1,9 @@
 [CmdletBinding()]
-param([switch]$BoundaryPort)
+param(
+    [switch]$BoundaryPort,
+    [ValidateSet(0, 5060, 6000, 6665, 6668, 10080)]
+    [int]$BlockedPort = 0
+)
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -33,7 +37,10 @@ try {
         Copy-Item -LiteralPath $source -Destination $destination
     }
 
-    $sentinelCandidate = if ($BoundaryPort) { 65535 } else { 0 }
+    if ($BoundaryPort -and $BlockedPort) {
+        throw "BoundaryPort and BlockedPort cannot be used together."
+    }
+    $sentinelCandidate = if ($BoundaryPort) { 65535 } elseif ($BlockedPort) { $BlockedPort } else { 0 }
     $sentinelListener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $sentinelCandidate)
     $sentinelListener.Start()
     $preferredPort = ([System.Net.IPEndPoint]$sentinelListener.LocalEndpoint).Port
@@ -120,11 +127,25 @@ try {
     if ($launcherProcess -and -not $launcherProcess.HasExited) {
         Stop-Process -Id $launcherProcess.Id -ErrorAction SilentlyContinue
         try { $launcherProcess.WaitForExit(5000) | Out-Null } catch {}
+        $launcherProcess.Refresh()
+        if (-not $launcherProcess.HasExited) {
+            Stop-Process -Id $launcherProcess.Id -Force -ErrorAction SilentlyContinue
+            try { $launcherProcess.WaitForExit(5000) | Out-Null } catch {}
+        }
     }
     if ($serverPid) {
         $ownedProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $serverPid" -ErrorAction SilentlyContinue
         if ($ownedProcess -and $ownedProcess.CommandLine -match "import app" -and $ownedProcess.CommandLine -match "JOBHUNTER_PORT") {
-            Stop-Process -Id $serverPid -ErrorAction SilentlyContinue
+            $ownedHandle = Get-Process -Id $serverPid -ErrorAction SilentlyContinue
+            if ($ownedHandle) {
+                Stop-Process -Id $serverPid -ErrorAction SilentlyContinue
+                try { $ownedHandle.WaitForExit(5000) | Out-Null } catch {}
+                $ownedHandle.Refresh()
+                if (-not $ownedHandle.HasExited) {
+                    Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
+                    try { $ownedHandle.WaitForExit(5000) | Out-Null } catch {}
+                }
+            }
         }
     }
     if ($sentinelListener) {
