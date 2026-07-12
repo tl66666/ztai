@@ -14,6 +14,7 @@ const state = {
   currentInterviewSession: null,
   skillChart: null,
   recognition: null,
+  speechController: null,
   recognizing: false,
   currentPracticeCategory: "general",
   theme: localStorage.getItem("jobhunter_theme") || "glass",
@@ -29,12 +30,9 @@ const state = {
   opportunityOpener: null,
   applications: [],
   mediaRecorder: null,
-  audioChunks: [],
   audioBlob: null,
   audioMetrics: null,
-  audioStartedAt: 0,
-  recordingTarget: "answer",
-  recorderFormat: null,
+  recordingSessionToken: 0,
   soundEnabled: localStorage.getItem("jobhunter_sound") !== "off",
   audioContext: null,
   agentConversationId: localStorage.getItem(JOBHUNTER_AGENT_CONVERSATION) || "",
@@ -330,7 +328,7 @@ async function loadCareerProfiles() {
 }
 
 function listInputValue(id) {
-  return $(id).value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+  return CareerForm.parseList($(id).value);
 }
 
 function optionalNumberValue(id) {
@@ -342,12 +340,19 @@ async function loadCareerGoal() {
   const data = await api("/profile");
   const profile = data.success ? data.data : null;
   if (!profile) return;
-  $("careerGoalRole").value = profile.target_role || "";
-  $("careerGoalCities").value = (profile.cities || []).join("、");
-  $("careerGoalSalaryMin").value = profile.salary?.min ?? "";
-  $("careerGoalSalaryMax").value = profile.salary?.max ?? "";
-  $("careerGoalSkills").value = (profile.confirmed_skills || []).join("、");
-  $("careerGoalStatus").textContent = `已载入目标档案：${profile.target_role || "未设置目标岗位"}`;
+  const restored = CareerForm.hydrateProfile(profile, {
+    role: $("careerGoalRole"),
+    cities: $("careerGoalCities"),
+    salaryMin: $("careerGoalSalaryMin"),
+    salaryMax: $("careerGoalSalaryMax"),
+    skills: $("careerGoalSkills"),
+    direction: $("careerProfileSelect"),
+    status: $("careerGoalStatus"),
+  }, state);
+  if (restored.direction.matched) {
+    localStorage.setItem("jobhunter_career_profile", state.careerProfile);
+    syncCareerProfileToForms();
+  }
 }
 
 async function saveCareerGoal(event) {
@@ -785,8 +790,7 @@ function audioDownloadBase(filename = "interview-answer") {
 async function blobToWav(blob) {
   const AudioContext = window.AudioContext || window.webkitAudioContext;
   if (!AudioContext) throw new Error("当前浏览器不支持音频解码");
-  const ctx = new AudioContext();
-  const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
+  const buffer = await InterviewMedia.decodeAudioBlob(blob, AudioContext);
   const channels = Math.min(2, buffer.numberOfChannels);
   const sampleRate = buffer.sampleRate;
   const samples = buffer.length;
@@ -820,7 +824,6 @@ async function blobToWav(blob) {
       offset += 2;
     }
   }
-  ctx.close?.();
   return new Blob([wav], { type: "audio/wav" });
 }
 
@@ -1316,28 +1319,33 @@ async function startAudioRecording(target = "answer") {
   let stream = null;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    state.audioChunks = [];
-    state.recordingTarget = target;
-    state.audioStartedAt = Date.now();
-    state.recorderFormat = plan.recorderFormat;
-    const options = plan.recorderFormat ? { mimeType: plan.recorderFormat.mimeType } : undefined;
-    state.mediaRecorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
-    state.mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) state.audioChunks.push(event.data);
-    };
-    state.mediaRecorder.onerror = () => {
-      stream.getTracks().forEach((track) => track.stop());
-      toast("录音发生错误，请上传音频或使用文字回答");
-    };
-    state.mediaRecorder.onstop = async () => {
-      stream.getTracks().forEach((track) => track.stop());
-      const mimeType = state.mediaRecorder.mimeType || state.recorderFormat?.mimeType || "";
-      state.audioBlob = new Blob(state.audioChunks, { type: mimeType });
-      state.audioMetrics = await computeAudioMetrics(state.audioBlob);
-      renderAudioPreview(target);
-      toast("录音已生成，可以回放或分析");
-    };
-    state.mediaRecorder.start();
+    const startedAt = Date.now();
+    const recorderFormat = plan.recorderFormat;
+    const options = recorderFormat ? { mimeType: recorderFormat.mimeType } : undefined;
+    const recorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
+    const token = state.recordingSessionToken + 1;
+    state.recordingSessionToken = token;
+    state.mediaRecorder = recorder;
+    InterviewMedia.bindRecorderSession({
+      recorder,
+      stream,
+      token,
+      format: recorderFormat,
+      isCurrent: (candidate) => candidate === state.recordingSessionToken,
+      createBlob: (chunks, blobOptions) => new Blob(chunks, blobOptions),
+      computeMetrics: (blob) => computeAudioMetrics(blob, "recording", startedAt),
+      publish: ({ blob, metrics }) => {
+        state.audioBlob = blob;
+        state.audioMetrics = metrics;
+        renderAudioPreview(target);
+        toast("录音已生成，可以回放或分析");
+      },
+      onError: () => {
+        if (state.mediaRecorder === recorder) state.mediaRecorder = null;
+        toast("录音发生错误，请上传音频或使用文字回答");
+      },
+    });
+    recorder.start();
     toast(target === "room" ? "模拟面试录音开始" : "真实录音开始");
   } catch (error) {
     stream?.getTracks().forEach((track) => track.stop());
@@ -1357,63 +1365,17 @@ async function handleAudioUpload() {
   const file = $("audioFileInput").files[0];
   if (!file) return;
   state.audioBlob = file;
-  state.recordingTarget = "answer";
-  state.audioMetrics = await computeAudioMetrics(file);
+  state.audioMetrics = await computeAudioMetrics(file, "upload");
   renderAudioPreview("answer");
   toast("已载入上传音频，可以回放或分析");
 }
 
-async function computeAudioMetrics(blob) {
-  const fallback = {
-    duration_seconds: Math.max(1, Math.round((Date.now() - state.audioStartedAt) / 1000)),
-    peak: 0,
-    average_volume: 0,
-    silence_ratio: 0,
-    pause_count: 0,
-    clipping_ratio: 0,
-  };
-  try {
-    const arrayBuffer = await blob.arrayBuffer();
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return fallback;
-    const ctx = new AudioContext();
-    const audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
-    const data = audioBuffer.getChannelData(0);
-    const step = Math.max(1, Math.floor(data.length / 24000));
-    let sum = 0;
-    let peak = 0;
-    let silent = 0;
-    let clipped = 0;
-    let pauseCount = 0;
-    let inPause = false;
-    for (let i = 0; i < data.length; i += step) {
-      const value = Math.abs(data[i]);
-      sum += value * value;
-      peak = Math.max(peak, value);
-      if (value < 0.018) {
-        silent += 1;
-        if (!inPause) {
-          pauseCount += 1;
-          inPause = true;
-        }
-      } else {
-        inPause = false;
-      }
-      if (value > 0.96) clipped += 1;
-    }
-    const samples = Math.ceil(data.length / step);
-    await ctx.close?.();
-    return {
-      duration_seconds: Math.round(audioBuffer.duration),
-      peak: Number(peak.toFixed(3)),
-      average_volume: Number(Math.sqrt(sum / Math.max(1, samples)).toFixed(3)),
-      silence_ratio: Number((silent / Math.max(1, samples)).toFixed(2)),
-      pause_count: pauseCount,
-      clipping_ratio: Number((clipped / Math.max(1, samples)).toFixed(3)),
-    };
-  } catch (error) {
-    return fallback;
-  }
+async function computeAudioMetrics(blob, source = "upload", startedAt = 0) {
+  return InterviewMedia.computeAudioMetrics(blob, {
+    source,
+    startedAt,
+    AudioContext: window.AudioContext || window.webkitAudioContext || null,
+  });
 }
 
 function renderAudioPreview(target = "answer") {
@@ -1446,9 +1408,10 @@ function renderAudioPreview(target = "answer") {
     };
   }
   const metrics = state.audioMetrics || {};
+  const duration = metrics.duration_seconds == null ? "未知" : `${metrics.duration_seconds}s`;
   preview.classList.remove("hidden");
   preview.innerHTML = `
-    <span>时长 ${metrics.duration_seconds || 0}s</span>
+    <span>时长 ${duration}</span>
     <span>音量 ${metrics.average_volume || 0}</span>
     <span>停顿 ${(metrics.silence_ratio || 0) * 100}%</span>
     <span>爆音 ${(metrics.clipping_ratio || 0) * 100}%</span>
@@ -1464,7 +1427,9 @@ async function analyzeRecordedAudio(target = "answer") {
   form.append("audio", state.audioBlob, descriptor.filename);
   form.append("user_id", USER_ID);
   form.append("transcript", transcript);
-  form.append("duration_seconds", String(state.audioMetrics?.duration_seconds || 0));
+  if (Number.isFinite(state.audioMetrics?.duration_seconds)) {
+    form.append("duration_seconds", String(state.audioMetrics.duration_seconds));
+  }
   form.append("metrics", JSON.stringify(state.audioMetrics || {}));
   const data = await withLoading(
     () => api("/interview/analyze-audio", { method: "POST", body: form }),
@@ -1777,11 +1742,6 @@ function applyBrowserCapabilities() {
   BrowserCapabilities.applyCapabilityUI(document, { speech, audio });
 }
 
-function resetSpeechRecognitionState() {
-  state.recognizing = false;
-  $("voiceBtn").classList.remove("recording");
-}
-
 function setupSpeechRecognition() {
   const speech = BrowserCapabilities.speechRecognition(window);
   if (!speech.Recognition) return;
@@ -1789,23 +1749,20 @@ function setupSpeechRecognition() {
   state.recognition.lang = "zh-CN";
   state.recognition.continuous = true;
   state.recognition.interimResults = true;
-  state.recognition.onresult = (event) => {
-    let text = "";
-    for (let i = event.resultIndex; i < event.results.length; i += 1) {
-      text += event.results[i][0].transcript;
-    }
-    $("answerInput").value = `${$("answerInput").value.replace(/\s*$/, "")}${text}`;
-  };
-  state.recognition.onend = () => {
-    resetSpeechRecognitionState();
-  };
-  state.recognition.onerror = (event) => {
-    resetSpeechRecognitionState();
-    const denied = event?.error === "not-allowed" || event?.error === "service-not-allowed";
-    toast(denied
-      ? "未获得语音识别权限，请直接使用文字回答"
-      : "语音识别暂时不可用，请直接使用文字回答");
-  };
+  state.speechController = InterviewMedia.bindSpeechRecognition(state.recognition, {
+    getText: () => $("answerInput").value.replace(/\s*$/, ""),
+    setText: (value) => { $("answerInput").value = value; },
+    setActive: (active) => {
+      state.recognizing = active;
+      $("voiceBtn").classList.toggle("recording", active);
+    },
+    onError: (event) => {
+      const denied = event?.error === "not-allowed" || event?.error === "service-not-allowed";
+      toast(denied
+        ? "未获得语音识别权限，请直接使用文字回答"
+        : "语音识别暂时不可用，请直接使用文字回答");
+    },
+  });
 }
 
 function toggleVoiceInput() {
@@ -1814,15 +1771,14 @@ function toggleVoiceInput() {
     try {
       state.recognition.stop();
     } catch (error) {
-      resetSpeechRecognitionState();
+      state.speechController?.finish();
     }
     return;
   }
-  state.recognizing = true;
-  $("voiceBtn").classList.add("recording");
+  state.speechController?.begin();
   const result = BrowserCapabilities.startSpeechSafely(state.recognition);
   if (!result.ok) {
-    resetSpeechRecognitionState();
+    state.speechController?.finish();
     return toast("无法启动语音识别，请直接使用文字回答");
   }
   toast("正在语音录入");

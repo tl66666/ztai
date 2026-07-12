@@ -6,17 +6,31 @@ async function endStream(stream) {
 }
 
 async function stopChild(child) {
-  return new Promise((resolve) => {
+  if (!child) return;
+  if (child.exitCode !== null) return;
+  return new Promise((resolve, reject) => {
     let settled = false;
-    const finish = (stopped) => {
+    const finish = (error = null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve(stopped);
+      child.removeListener("exit", onExit);
+      if (error) reject(error);
+      else resolve();
     };
-    const timer = setTimeout(() => finish(false), 5_000);
-    child.once("exit", () => finish(true));
-    child.kill();
+    const onExit = () => finish();
+    const timer = setTimeout(() => {
+      finish(new Error("Timed out after 5000ms waiting for isolated Flask service to stop on Windows"));
+    }, 5_000);
+    child.once("exit", onExit);
+    try {
+      const signaled = child.kill();
+      if (signaled === false && child.exitCode === null) {
+        finish(new Error("Windows could not signal the isolated Flask service to stop"));
+      }
+    } catch (error) {
+      finish(error);
+    }
   });
 }
 
@@ -31,21 +45,53 @@ async function startIsolatedServer(options) {
   } = options;
   const log = createLogStream();
   let child = null;
-  let cleaned = false;
+  const completed = {
+    child: false,
+    stdout: false,
+    stderr: false,
+    log: false,
+    temp: false,
+  };
 
   async function cleanup() {
-    if (cleaned) return;
-    cleaned = true;
-    if (child && child.exitCode === null) {
-      const stopped = await stopChild(child);
-      if (!stopped && child.exitCode === null) {
-        throw new Error(`Isolated Flask service did not stop: ${tempDirectory}`);
+    const errors = [];
+    if (!completed.child) {
+      try {
+        await stopChild(child);
+        completed.child = true;
+      } catch (error) {
+        errors.push(error);
       }
     }
-    child?.stdout?.destroy();
-    child?.stderr?.destroy();
-    await endStream(log);
-    removeTempDirectory(tempDirectory);
+    for (const [stage, stream] of [["stdout", child?.stdout], ["stderr", child?.stderr]]) {
+      if (completed[stage]) continue;
+      try {
+        stream?.destroy();
+        completed[stage] = true;
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (!completed.log) {
+      try {
+        await endStream(log);
+        completed.log = true;
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (!completed.temp) {
+      try {
+        removeTempDirectory(tempDirectory);
+        completed.temp = true;
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length) {
+      const details = errors.map((error) => error?.message || String(error)).join("; ");
+      throw new AggregateError(errors, `Isolated Flask cleanup incomplete: ${details} (${tempDirectory})`);
+    }
   }
 
   try {
@@ -60,8 +106,15 @@ async function startIsolatedServer(options) {
     try {
       await cleanup();
     } catch (cleanupError) {
-      error.cause = cleanupError;
+      const combined = new AggregateError(
+        [error, cleanupError],
+        `Isolated server startup failed: ${error.message}`,
+        { cause: error },
+      );
+      combined.retryCleanup = cleanup;
+      throw combined;
     }
+    error.retryCleanup = cleanup;
     throw error;
   }
 }

@@ -1721,7 +1721,9 @@ canvas { max-width: 100%; }
   .nav-item { width: 46px; padding: 0; justify-content: center; }
   .nav-item span, .provider-mini, .brand span { display: none; }
   .shell { margin-left: 0; padding: 8px 14px 30px; }
-  .agent-launcher { top: 24px; right: 24px; bottom: auto; }
+  .agent-launcher { top: 24px; right: 24px; bottom: auto; min-width: 52px; width: 52px; padding: 0; }
+  .agent-launcher > span { display: none; }
+  .agent-launcher b { position: absolute; top: -7px; right: -4px; }
   .topbar { position: relative; align-items: flex-start; flex-direction: column; }
   .top-actions { width: 100%; justify-content: stretch; }
   .theme-block, .config-button { flex: 1 1 240px; justify-content: center; }
@@ -1765,9 +1767,7 @@ canvas { max-width: 100%; }
   .agent-command-head { align-items: stretch; flex-direction: column; gap: 12px; }
   .agent-command-head .primary { width: 100%; }
   .agent-command-grid { grid-template-columns: minmax(0, 1fr); }
-  .agent-launcher { top: max(18px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right)); bottom: auto; min-width: 52px; width: 52px; padding: 0; }
-  .agent-launcher > span { display: none; }
-  .agent-launcher b { position: absolute; top: -7px; right: -4px; }
+  .agent-launcher { top: max(18px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right)); bottom: auto; }
   .agent-drawer {
     inset: auto 0 0;
     width: 100%;

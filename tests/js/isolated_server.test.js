@@ -66,3 +66,74 @@ test("spawn errors are handled and cleaned without an unhandled error event", as
   assert.equal(log.writableEnded, true);
   assert.equal(removed, 1);
 });
+
+test("failed cleanup stages remain retryable until every stage succeeds", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.exitCode = null;
+  let kills = 0;
+  child.kill = () => {
+    kills += 1;
+    if (kills === 1) throw new Error("kill denied");
+    child.exitCode = 0;
+    queueMicrotask(() => child.emit("exit", 0));
+    return true;
+  };
+  const log = new PassThrough();
+  let removes = 0;
+  let tempExists = true;
+  const service = await startIsolatedServer({
+    baseURL: "http://127.0.0.1:59997",
+    tempDirectory: "C:\\Temp\\jobhunter-e2e-retry",
+    spawnProcess: () => child,
+    waitUntilReady: async () => {},
+    createLogStream: () => log,
+    removeTempDirectory: () => {
+      removes += 1;
+      if (removes === 1) throw new Error("directory busy");
+      tempExists = false;
+    },
+  });
+
+  await assert.rejects(service.close(), /kill denied|directory busy/);
+  await service.close();
+  assert.equal(kills, 2);
+  assert.equal(removes, 2);
+  assert.equal(log.writableEnded, true);
+  assert.equal(tempExists, false);
+  await service.close();
+  assert.equal(kills, 2);
+  assert.equal(removes, 2);
+});
+
+test("startup cleanup preserves startup cause and exposes retry after partial failure", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.exitCode = 1;
+  child.kill = () => true;
+  const log = new PassThrough();
+  let removes = 0;
+  let thrown;
+  try {
+    await startIsolatedServer({
+      baseURL: "http://127.0.0.1:59996",
+      tempDirectory: "C:\\Temp\\jobhunter-e2e-startup-retry",
+      spawnProcess: () => child,
+      waitUntilReady: async () => { throw new Error("startup root cause"); },
+      createLogStream: () => log,
+      removeTempDirectory: () => {
+        removes += 1;
+        if (removes === 1) throw new Error("directory locked");
+      },
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.match(String(thrown), /startup root cause/);
+  assert.equal(typeof thrown.retryCleanup, "function");
+  await thrown.retryCleanup();
+  assert.equal(removes, 2);
+});

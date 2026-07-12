@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const { cleanupArtifacts } = require("./artifacts.js");
 const { startIsolatedServer: startManagedServer } = require("./isolated_server.js");
 
 let playwright;
@@ -25,6 +26,30 @@ const VIEWPORTS = {
   desktop: { width: 1440, height: 900 },
   mobile: { width: 390, height: 844 },
 };
+const TABLET_VIEWPORTS = {
+  "tablet-900": { width: 900, height: 900 },
+  "tablet-768": { width: 768, height: 900 },
+};
+
+function pcmWavBuffer(durationSeconds = 1, sampleRate = 8000) {
+  const samples = durationSeconds * sampleRate;
+  const dataSize = samples * 2;
+  const buffer = Buffer.alloc(44 + dataSize);
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write("WAVE", 8);
+  buffer.write("fmt ", 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  return buffer;
+}
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -246,11 +271,26 @@ async function assertViewportIntegrity(page, viewport, label) {
       && drawerBox.y + drawerBox.height >= viewport.height - 2,
       `${label}: Agent should be a mobile bottom sheet`);
   } else {
-    assert.ok(drawerBox.x >= viewport.width * 0.55 && drawerBox.height >= viewport.height * 0.9,
+    assert.ok(drawerBox.x >= -1
+      && drawerBox.x + drawerBox.width >= viewport.width - 2
+      && drawerBox.width <= Math.min(522, viewport.width - 38)
+      && drawerBox.height >= viewport.height * 0.9,
       `${label}: Agent should be a desktop right drawer`);
   }
   await assertKeyGeometry(page, `${label}-agent-surface`);
   await page.locator("#closeAgentDrawer").click();
+  await waitForAgentDrawerClosed(page);
+}
+
+async function waitForAgentDrawerClosed(page) {
+  await page.waitForFunction(() => {
+    const launcher = document.querySelector("#agentLauncher");
+    const drawer = document.querySelector("#agentDrawer");
+    if (!launcher || !drawer) return true;
+    return launcher.getAttribute("aria-expanded") === "false"
+      && drawer.getAttribute("aria-hidden") === "true"
+      && getComputedStyle(drawer).visibility === "hidden";
+  });
 }
 
 async function runCareerWorkflow(browser, browserName, viewportName, viewport, baseURL) {
@@ -306,19 +346,32 @@ async function runCareerWorkflow(browser, browserName, viewportName, viewport, b
   await assertViewportIntegrity(page, viewport, suffix);
 
   await page.locator("#careerGoalRole").fill("AI 应用测试工程师");
-  await page.locator("#careerGoalCities").fill("杭州");
+  await page.locator("#careerProfileSelect").selectOption("ops");
+  await page.locator("#careerGoalCities").fill(" 杭州,上海；杭州、苏州 ");
   await page.locator("#careerGoalSalaryMin").fill("15");
   await page.locator("#careerGoalSalaryMax").fill("25");
-  await page.locator("#careerGoalSkills").fill("Python、接口测试、Playwright");
+  await page.locator("#careerGoalSkills").fill(" Python、接口测试; Playwright，Python ");
   const profileResult = jsonFrom(page.waitForResponse((response) => (
     response.url().endsWith("/api/profile") && response.request().method() === "PUT"
   )));
   await page.locator("#saveCareerGoalBtn").click();
   const { body: profileBody } = await profileResult;
   assert.equal(profileBody.data.target_role, "AI 应用测试工程师");
+  assert.equal(profileBody.data.career_direction, "ops");
+  assert.deepEqual(profileBody.data.cities, ["杭州", "上海", "苏州"]);
+  assert.deepEqual(profileBody.data.confirmed_skills, ["Python", "接口测试", "Playwright"]);
+  assert.deepEqual(profileBody.data.salary, { min: 15, max: 25 });
   await assert.doesNotReject(async () => {
     await page.locator("#careerGoalStatus").getByText("目标档案已保存", { exact: false }).waitFor();
   });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.querySelector("#providerSelect")?.options.length > 0);
+  assert.equal(await page.locator("#careerGoalRole").inputValue(), "AI 应用测试工程师");
+  assert.equal(await page.locator("#careerGoalCities").inputValue(), "杭州；上海；苏州");
+  assert.equal(await page.locator("#careerGoalSalaryMin").inputValue(), "15");
+  assert.equal(await page.locator("#careerGoalSalaryMax").inputValue(), "25");
+  assert.equal(await page.locator("#careerGoalSkills").inputValue(), "Python；接口测试；Playwright");
+  assert.equal(await page.locator("#careerProfileSelect").inputValue(), "ops");
 
   await page.evaluate(() => navigateToRoute("resume", "input"));
   await page.locator("#resumeTitle").fill(`跨浏览器简历-${suffix}`);
@@ -368,6 +421,7 @@ async function runCareerWorkflow(browser, browserName, viewportName, viewport, b
   const opportunityAfter = await fetchJson(page, `/api/opportunities/${opportunityId}`);
   assert.equal(opportunityAfter.body.data.status, "简历筛选", `${suffix}: confirmed Agent action did not change business state`);
   await page.locator("#closeAgentDrawer").click();
+  await waitForAgentDrawerClosed(page);
 
   await page.evaluate(() => prepareInterviewFromOpportunity(null));
   await page.locator("#page-interview").waitFor({ state: "visible" });
@@ -385,13 +439,39 @@ async function runCareerWorkflow(browser, browserName, viewportName, viewport, b
   assert.equal(await page.locator("#answerInput").isEnabled(), true);
   await assertKeyGeometry(page, `${suffix}-interview-fallback`);
   await page.locator("#audioFileInput").setInputFiles({
-    name: "fallback-answer.wav",
-    mimeType: "",
+    name: "valid-answer.wav",
+    mimeType: "audio/wav",
+    buffer: pcmWavBuffer(),
+  });
+  await page.locator("#audioDownloadLink").waitFor({ state: "visible" });
+  await page.locator("#audioPlayback").evaluate((audio) => (
+    audio.readyState >= 2
+      ? true
+      : new Promise((resolve, reject) => {
+        audio.addEventListener("canplay", () => resolve(true), { once: true });
+        audio.addEventListener("error", () => reject(new Error("valid WAV failed playback")), { once: true });
+      })
+  ));
+  assert.equal(await page.locator("#audioDownloadLink").getAttribute("download"), "valid-answer.wav");
+  assert.doesNotMatch(await page.locator("#audioPlaybackStatus").textContent(), /无法播放/);
+  await page.locator("#answerInput").fill("我会结合真实录音分析表达，再继续完成文字回答。");
+  const validAudioAnalysis = jsonFrom(page.waitForResponse((response) => (
+    response.url().endsWith("/api/interview/analyze-audio") && response.request().method() === "POST"
+  )));
+  await page.locator("#analyzeAudioBtn").click();
+  const { body: validAudioBody } = await validAudioAnalysis;
+  assert.ok(validAudioBody.audio_metrics.duration_seconds > 0
+    && validAudioBody.audio_metrics.duration_seconds <= 2,
+  `${suffix}: valid WAV duration is unreasonable`);
+
+  await page.locator("#audioFileInput").setInputFiles({
+    name: "invalid-answer.wav",
+    mimeType: "audio/wav",
     buffer: Buffer.from("not-a-decodable-wave-file"),
   });
-  assert.match(await page.locator("#audioFileInput").inputValue(), /fallback-answer\.wav$/);
+  assert.match(await page.locator("#audioFileInput").inputValue(), /invalid-answer\.wav$/);
   await page.locator("#audioDownloadLink").waitFor({ state: "visible" });
-  assert.equal(await page.locator("#audioDownloadLink").getAttribute("download"), "fallback-answer.wav");
+  assert.equal(await page.locator("#audioDownloadLink").getAttribute("download"), "invalid-answer.wav");
   await page.locator("#audioPlayback").dispatchEvent("error");
   assert.match(await page.locator("#audioPlaybackStatus").textContent(), /下载原文件.*文字回答/);
   await page.locator("#answerInput").fill("我会继续使用文字回答，并保留上传音频供表达分析。");
@@ -401,6 +481,10 @@ async function runCareerWorkflow(browser, browserName, viewportName, viewport, b
   await page.locator("#analyzeAudioBtn").click();
   const { body: audioAnalysisBody } = await audioAnalysis;
   assert.equal(audioAnalysisBody.success, true, `${suffix}: uploaded audio was not submittable`);
+  assert.ok(audioAnalysisBody.audio_metrics.duration_seconds === null
+    || (audioAnalysisBody.audio_metrics.duration_seconds >= 0
+      && audioAnalysisBody.audio_metrics.duration_seconds <= 4 * 60 * 60),
+  `${suffix}: invalid upload inherited an unreasonable recording duration`);
   await page.locator("#interviewResumeSelect").selectOption(String(resumeId));
   const startResponsePromise = page.waitForResponse((response) => response.url().endsWith("/api/interview/sessions") && response.request().method() === "POST");
   await page.locator("#startInterviewBtn").click();
@@ -458,22 +542,28 @@ async function runCareerWorkflow(browser, browserName, viewportName, viewport, b
   assert.deepEqual(pageErrors, [], `${suffix}: unhandled page errors`);
   assert.deepEqual(consoleErrors, [], `${suffix}: console errors`);
   } finally {
+    if (await page.locator("#agentLauncher").getAttribute("aria-expanded").catch(() => null) === "true") {
+      await page.locator("#closeAgentDrawer").click().catch(() => {});
+    }
+    await waitForAgentDrawerClosed(page).catch(() => {});
     await page.screenshot({ path: screenshotPath, fullPage: false }).catch(() => {});
     await context.tracing.stop({ path: tracePath }).catch(() => {});
     await context.close().catch(() => {});
   }
 }
 
-for (const browserConfig of browserMatrix()) {
+const MATRIX = browserMatrix();
+cleanupArtifacts({
+  directory: ARTIFACT_DIR,
+  browsers: MATRIX.map((browser) => browser.name),
+  viewports: [...Object.keys(VIEWPORTS), ...Object.keys(TABLET_VIEWPORTS)],
+});
+
+for (const browserConfig of MATRIX) {
   for (const [viewportName, viewport] of Object.entries(VIEWPORTS)) {
     const name = `${browserConfig.name} ${viewportName} career workflow`;
     test(name, { timeout: 150_000, skip: browserConfig.skip || undefined }, async () => {
       const artifactBase = `${browserConfig.name}-${viewportName}`;
-      for (const filename of [
-        `${artifactBase}.png`, `${artifactBase}-trace.zip`, `${artifactBase}-server.log`,
-      ]) {
-        fs.rmSync(path.join(ARTIFACT_DIR, filename), { force: true });
-      }
       const service = await createIsolatedServer(artifactBase);
       let browser;
       try {
@@ -488,3 +578,63 @@ for (const browserConfig of browserMatrix()) {
     });
   }
 }
+
+const chromiumConfig = MATRIX.find((browser) => browser.name === "chromium");
+for (const [viewportName, viewport] of Object.entries(TABLET_VIEWPORTS)) {
+  test(`chromium ${viewportName} agent geometry`, {
+    timeout: 60_000,
+    skip: chromiumConfig.skip || undefined,
+  }, async () => {
+    const artifactBase = `chromium-${viewportName}`;
+    const service = await createIsolatedServer(artifactBase);
+    let browser;
+    let context;
+    let page;
+    try {
+      browser = await chromiumConfig.type.launch({ headless: true, ...chromiumConfig.launch });
+      context = await browser.newContext({ viewport, locale: "zh-CN" });
+      await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
+      page = await context.newPage();
+      await page.route("https://unpkg.com/**", (route) => route.fulfill({
+        contentType: "application/javascript", body: "window.lucide={createIcons:function(){}};",
+      }));
+      await page.route("https://cdn.jsdelivr.net/**", (route) => route.fulfill({
+        contentType: "application/javascript", body: "window.Chart=class Chart{destroy(){}};",
+      }));
+      await page.goto(service.baseURL, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => document.querySelector("#providerSelect")?.options.length > 0);
+      const overlaps = await page.evaluate(() => {
+        const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect();
+        const launcher = rect("#agentLauncher");
+        const intersects = (target) => target && launcher
+          && Math.min(launcher.right, target.right) - Math.max(launcher.left, target.left) > 1
+          && Math.min(launcher.bottom, target.bottom) - Math.max(launcher.top, target.top) > 1;
+        return [".brand", ".nav", ".top-actions", "#careerGoalForm"]
+          .filter((selector) => intersects(rect(selector)));
+      });
+      assert.deepEqual(overlaps, [], `${viewportName}: launcher overlaps navigation or controls`);
+      const launcherBox = await page.locator("#agentLauncher").boundingBox();
+      assert.ok(launcherBox && launcherBox.width <= 54, `${viewportName}: launcher is not tablet-sized`);
+      await assertViewportIntegrity(page, viewport, viewportName);
+    } finally {
+      await waitForAgentDrawerClosed(page).catch(() => {});
+      await page?.screenshot({ path: path.join(ARTIFACT_DIR, `${artifactBase}.png`) }).catch(() => {});
+      await context?.tracing.stop({
+        path: path.join(ARTIFACT_DIR, `${artifactBase}-trace.zip`),
+      }).catch(() => {});
+      await context?.close().catch(() => {});
+      await browser?.close().catch(() => {});
+      await service.close();
+    }
+  });
+}
+
+test("skipped browser artifacts were cleared before registration", () => {
+  for (const browser of MATRIX.filter((item) => item.skip)) {
+    for (const viewportName of Object.keys(VIEWPORTS)) {
+      for (const suffix of [".png", "-trace.zip", "-server.log"]) {
+        assert.equal(fs.existsSync(path.join(ARTIFACT_DIR, `${browser.name}-${viewportName}${suffix}`)), false);
+      }
+    }
+  }
+});
