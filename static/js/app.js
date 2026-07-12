@@ -2759,7 +2759,7 @@ function renderAgentWelcome() {
   state.agentConversationProposalIds = new Set();
   $("chatLog").innerHTML = "";
   appendMessage(
-    "你好，我是你的 AI 求职教练。把目标岗位、简历问题或面试难点发给我，我会结合已保存数据继续推进。",
+    "你好，我是你的求职 Agent。无需 API Key 也能读取本地求职数据、诊断当前进度并安排下一步；配置模型后还可以处理更开放的问题。",
     "bot"
   );
 }
@@ -2776,6 +2776,9 @@ function renderAgentEvents(events, status = "completed") {
     evaluate_answer: "评估面试回答",
     list_applications: "读取投递记录",
     get_dashboard: "读取求职看板",
+    get_career_profile: "读取职业目标",
+    list_action_items: "读取行动项",
+    get_training_insights: "汇总训练记录",
     generate_career_report: "汇总求职报告",
     web_search: "搜索公开信息",
     fetch_webpage: "读取公开网页",

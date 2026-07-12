@@ -23,11 +23,10 @@ class LocalPolicy:
     model = "local-policy"
 
     def decide(self, state, tool_schemas) -> AgentDecision:
+        message = state.user_message.strip()
+        intent = self._read_intent(message)
         if state.observations:
-            latest = state.observations[-1]
-            return AgentDecision(
-                "final", message=f"本地规则模式：{latest['display_text']}"
-            )
+            return self._continue_read_intent(intent, state.observations)
 
         if state.active_task:
             task_type = state.active_task["task_type"]
@@ -46,11 +45,21 @@ class LocalPolicy:
                 slots = {**state.active_task["slots"], "job_title": job_title}
                 return AgentDecision("tool_call", "match_job", slots)
 
-        message = state.user_message.strip()
         lowered = message.lower()
         action_type = self._explicit_action_type(message)
         if action_type:
             return self._start_career_action(action_type, message)
+
+        if intent == "career_diagnosis":
+            return AgentDecision("tool_call", "get_dashboard", {})
+        if intent == "capabilities":
+            return AgentDecision("final", message=self._capability_message())
+        if intent == "opportunities":
+            return AgentDecision("tool_call", "list_applications", {})
+        if intent == "interview_readiness":
+            return AgentDecision("tool_call", "get_dashboard", {})
+        if intent == "resume_improvement":
+            return AgentDecision("tool_call", "analyze_resume", {})
 
         if "简历" in message and any(
             word in message for word in ("刚才", "这个岗位", "目标岗位", "岗位看看")
@@ -93,10 +102,219 @@ class LocalPolicy:
             )
         return AgentDecision(
             "final",
-            message=(
-                "当前未配置大模型 API，正在使用本地模板和规则模式，不会进行模型生成。"
-                "我可以执行简历查询、岗位匹配、面试题、投递看板和求职报告等本地任务。"
+            message=self._fallback_message(),
+        )
+
+    @staticmethod
+    def _read_intent(message: str) -> str:
+        if any(
+            phrase in message
+            for phrase in (
+                "你能做什么", "可以做什么", "能帮我什么", "有哪些能力",
+                "功能介绍", "怎么使用", "如何使用",
+            )
+        ):
+            return "capabilities"
+        if any(
+            phrase in message
+            for phrase in (
+                "下一步该做什么", "下一步做什么", "下一步怎么办",
+                "分析现在的求职", "分析我的求职", "求职情况",
+                "求职诊断", "整体分析", "现在该做什么",
+            )
+        ):
+            return "career_diagnosis"
+        if (
+            any(word in message for word in ("机会", "申请", "投递"))
+            and any(
+                word in message
+                for word in ("看看", "哪些", "现在", "进展", "情况", "状态", "盘点")
+            )
+        ):
+            return "opportunities"
+        if (
+            "面试" in message
+            and any(
+                word in message
+                for word in ("准备", "怎么样", "如何", "状态", "进度", "复盘", "水平")
+            )
+        ):
+            return "interview_readiness"
+        if (
+            "简历" in message
+            and any(
+                word in message
+                for word in ("优化", "改进", "修改", "完善", "提升", "问题", "诊断", "分析")
+            )
+        ):
+            return "resume_improvement"
+        return ""
+
+    def _continue_read_intent(
+        self, intent: str, observations: list[dict]
+    ) -> AgentDecision:
+        observed = {item.get("tool") for item in observations}
+        plans = {
+            "career_diagnosis": (
+                "get_dashboard",
+                "get_career_profile",
+                "list_action_items",
+                "get_training_insights",
             ),
+            "interview_readiness": ("get_dashboard", "get_training_insights"),
+            "opportunities": ("list_applications",),
+            "resume_improvement": ("analyze_resume",),
+        }
+        plan = plans.get(intent, ())
+        next_tool = next((tool for tool in plan if tool not in observed), "")
+        if next_tool:
+            return AgentDecision("tool_call", next_tool, {})
+        if intent == "career_diagnosis":
+            return AgentDecision(
+                "final", message=self._synthesize_career_diagnosis(observations)
+            )
+        if intent == "interview_readiness":
+            return AgentDecision(
+                "final", message=self._synthesize_interview_readiness(observations)
+            )
+        if intent == "opportunities":
+            return AgentDecision(
+                "final", message=self._synthesize_opportunities(observations)
+            )
+        if intent == "resume_improvement":
+            return AgentDecision(
+                "final", message=self._synthesize_resume_advice(observations)
+            )
+        latest = observations[-1]
+        return AgentDecision(
+            "final", message=f"本地规则模式：{latest.get('display_text') or '任务已处理。'}"
+        )
+
+    @staticmethod
+    def _observation_data(observations: list[dict], tool: str, default):
+        item = next((row for row in observations if row.get("tool") == tool), None)
+        if not item or not item.get("ok"):
+            return default
+        return item.get("data") if item.get("data") is not None else default
+
+    def _synthesize_career_diagnosis(self, observations: list[dict]) -> str:
+        dashboard = self._observation_data(observations, "get_dashboard", {})
+        profile = self._observation_data(observations, "get_career_profile", {})
+        actions = self._observation_data(observations, "list_action_items", [])
+        training = self._observation_data(observations, "get_training_insights", {})
+        readiness = dashboard.get("readiness") or {}
+        target = profile.get("target_role") or "尚未设置目标岗位"
+        cities = profile.get("cities") if isinstance(profile.get("cities"), list) else []
+        city = "、".join(str(item) for item in cities[:3] if item) or "城市未设置"
+        interview_count = (training.get("interviews") or {}).get("completed_count", 0)
+        first_action = next(
+            (item.get("title") for item in actions if item.get("status") != "done"), ""
+        )
+        priorities = []
+        if not profile.get("target_role"):
+            priorities.append("先明确一个目标岗位和目标城市，后续匹配与建议才有统一基准。")
+        if dashboard.get("resumes", 0) == 0:
+            priorities.append("先保存一份可投递简历，再做岗位匹配和针对性优化。")
+        elif dashboard.get("matches", 0) == 0:
+            priorities.append("选择一个真实 JD 做匹配，补齐简历中的核心技能与项目证据。")
+        if interview_count == 0:
+            priorities.append("完成一次面试训练并记录复盘，先建立可追踪的表达基线。")
+        if first_action:
+            priorities.append(f"推进现有行动项“{first_action}”，完成后再新增任务。")
+        if dashboard.get("applications", 0) == 0:
+            priorities.append("建立首个求职机会，记录岗位、阶段和下一次跟进时间。")
+        else:
+            priorities.append("检查已投递机会的停留阶段，为超过预期未推进的机会安排跟进。")
+        priorities = priorities[:3] or ["保持当前节奏，并在每次投递或面试后更新记录与复盘。"]
+        priority_text = "\n".join(
+            f"优先级 {index}：{text}" for index, text in enumerate(priorities, 1)
+        )
+        return (
+            "本地求职 Agent（无需 API Key）已读取你的业务数据并完成诊断。\n"
+            f"现状：准备度 {readiness.get('score', 0)}（{readiness.get('label', '待评估')}），"
+            f"简历 {dashboard.get('resumes', 0)} 份，匹配 {dashboard.get('matches', 0)} 次，"
+            f"投递 {dashboard.get('applications', 0)} 个，面试训练 {interview_count} 次。\n"
+            f"目标：{target} / {city}。\n{priority_text}\n"
+            "说明：这是基于本地数据和确定性规则生成的行动排序，不会冒充大模型推理。"
+        )
+
+    def _synthesize_interview_readiness(self, observations: list[dict]) -> str:
+        dashboard = self._observation_data(observations, "get_dashboard", {})
+        training = self._observation_data(observations, "get_training_insights", {})
+        interviews = (training.get("interviews") or {}).get("completed_count", 0)
+        practice = (training.get("practice") or {}).get("completed_count", 0)
+        audio = (training.get("audio") or {}).get("completed_count", 0)
+        if interviews == 0:
+            advice = "当前缺少完整面试训练记录。先完成一次模拟面试，再针对低分问题做二次回答。"
+        elif audio == 0:
+            advice = "已有训练记录，但缺少语音表达证据。下一步补一次限时语音回答，检查结构和节奏。"
+        else:
+            advice = "已有多类训练证据。下一步围绕目标岗位做专项题，并复盘最近一次薄弱项。"
+        return (
+            "本地求职 Agent 面试准备诊断："
+            f"完整面试训练 {interviews} 次，题库训练 {practice} 次，语音训练 {audio} 次；"
+            f"系统累计面试记录 {dashboard.get('interviews', 0)} 条。\n下一步：{advice}"
+        )
+
+    def _synthesize_opportunities(self, observations: list[dict]) -> str:
+        applications = self._observation_data(observations, "list_applications", [])
+        if not applications:
+            return (
+                "本地求职 Agent 机会盘点：当前还没有投递记录。"
+                "建议先录入 1 个真实岗位，至少填写公司、岗位和当前阶段，再安排下一次跟进。"
+            )
+        stage_counts = {}
+        for item in applications:
+            status = item.get("status") or "未标记"
+            stage_counts[status] = stage_counts.get(status, 0) + 1
+        stages = "、".join(f"{name} {count} 个" for name, count in stage_counts.items())
+        recent = applications[0]
+        return (
+            f"本地求职 Agent 机会盘点：共 {len(applications)} 个机会，{stages}。\n"
+            f"最近机会：{recent.get('company', '未知公司')} / "
+            f"{recent.get('job_title', '未知岗位')} / {recent.get('status', '未标记')}。\n"
+            "下一步：优先处理临近面试或长期未推进的机会，并为每个活跃机会设置明确跟进动作。"
+        )
+
+    @staticmethod
+    def _synthesize_resume_advice(observations: list[dict]) -> str:
+        item = next(
+            (row for row in observations if row.get("tool") == "analyze_resume"), {}
+        )
+        if item.get("ok") and item.get("display_text"):
+            return (
+                "本地求职 Agent 简历诊断：\n"
+                f"{item['display_text']}\n"
+                "建议按“目标岗位关键词 → 项目职责 → 可量化结果”顺序修改，并另存为新版本。"
+            )
+        return (
+            "本地求职 Agent 暂未找到可分析的简历。先保存一份简历，然后重点检查："
+            "目标岗位关键词是否出现、项目职责是否具体、结果是否有数字或可验证证据。"
+        )
+
+    @staticmethod
+    def _capability_message() -> str:
+        return (
+            "我是本地求职 Agent，无需 API Key 也能执行这些确定性任务：\n"
+            "1. 求职诊断：读取准备度、职业目标、行动项和训练记录，给出下一步优先级。\n"
+            "2. 简历与岗位：查询或诊断简历、做岗位匹配、分析 JD。\n"
+            "3. 面试训练：出题、评估回答、汇总面试与语音训练进度。\n"
+            "4. 投递管理：盘点机会阶段、生成求职报告和跟进建议。\n"
+            "5. 安全行动：所有写入操作只生成预览，必须由你在操作卡片中确认。\n"
+            "配置大模型 API 后可处理更开放的表达；未配置时不会伪装成模型生成。"
+        )
+
+    @staticmethod
+    def _fallback_message() -> str:
+        return (
+            "我现在使用本地求职 Agent 模式。这个模式不做开放式大模型生成，"
+            "但能读取你的本地求职数据并完成固定任务。\n"
+            "可以直接这样问：\n"
+            "- 帮我分析现在的求职情况，下一步做什么\n"
+            "- 看看我的机会和投递进展\n"
+            "- 面试准备得怎么样\n"
+            "- 帮我优化简历\n"
+            "- 给我一道人岗匹配或面试训练任务"
         )
 
     def _start_career_action(self, action_type: str, message: str) -> AgentDecision:

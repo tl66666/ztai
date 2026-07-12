@@ -28,6 +28,14 @@ class AgentFrontendContractTests(unittest.TestCase):
         self.assertNotIn("Agent 自主决策过程", javascript)
         self.assertIn("renderAgentEvents", javascript)
 
+    def test_local_agent_welcome_and_business_tool_labels_are_user_facing(self):
+        javascript = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("无需 API Key", javascript)
+        self.assertIn('get_career_profile: "读取职业目标"', javascript)
+        self.assertIn('list_action_items: "读取行动项"', javascript)
+        self.assertIn('get_training_insights: "汇总训练记录"', javascript)
+
 
 if __name__ == "__main__":
     unittest.main()

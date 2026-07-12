@@ -403,17 +403,17 @@
       <div class="shell">
         <div class="section-intro">
           <div><p class="kicker">Contextual career agent</p><h2>Agent 在业务里，不在业务旁边</h2></div>
-          <p>每个页面都能打开同一个 Agent 工作台。当前模块、选中的简历或机会会成为可见的本轮上下文；你可以移除上下文、切换会话，也可以回到独立的行动指挥中心查看待确认操作和活跃机会。</p>
+          <p>每个页面都能打开同一个 Agent 工作台。当前模块、选中的简历或机会会成为可见上下文；无 API Key 时，本地策略也能连续读取看板、职业目标、行动项和训练记录，再综合给出下一步优先级。</p>
         </div>
         <div class="feature-grid">
           <figure class="product-frame">
-            <img src="assets/showcase/agent-mobile.webp" alt="JobHunter 移动端上下文求职 Agent 底部工作台真实截图" width="390" height="844" loading="lazy" decoding="async">
-            <figcaption>390 × 844 响应式实测：移动端使用底部工作台，不遮住输入和关闭控件。</figcaption>
+            <img src="assets/showcase/agent-local-desktop.webp" alt="JobHunter 桌面 Web 端无 API Key 求职 Agent 连续调用四个业务工具并生成行动优先级的真实截图" width="1440" height="900" loading="lazy" decoding="async">
+            <figcaption>1440 × 900 桌面实测：无 API Key，本地 Agent 读取四类业务数据，输出行动排序并展示工具轨迹。</figcaption>
           </figure>
           <div class="feature-notes">
-            <div class="feature-note"><h3>读取真实状态</h3><p>Agent 通过工具读取职业画像、简历、JD 匹配、面试记录、机会与看板，不依赖用户反复粘贴背景。</p></div>
-            <div class="feature-note"><h3>持续完成任务</h3><p>信息不足时保存任务槽位并追问；刷新或下一轮会话后仍可继续，而不是把聊天当成一次性输出。</p></div>
-            <div class="feature-note"><h3>结果回到业务</h3><p>建议可定位到对应简历、机会、行动项或报告；页面操作也会更新 Agent 的业务上下文。</p></div>
+            <div class="feature-note"><h3>19 个结构化工具</h3><p>覆盖职业画像、简历、JD、面试、训练、机会、行动项、报告和受限网页读取；参数、所有权与超时都由服务端控制。</p></div>
+            <div class="feature-note"><h3>无 Key 也会规划</h3><p>本地模式通过意图识别和确定性多工具规划完成求职诊断、机会盘点、面试准备与简历建议，不把最后一个工具结果直接当答案。</p></div>
+            <div class="feature-note"><h3>记忆与业务闭环</h3><p>工作、语义、情景和任务记忆分别保存会话、确认事实、历史结果与缺失信息；建议可回到简历、机会、行动项或报告。</p></div>
           </div>
         </div>
       </div>
@@ -472,7 +472,7 @@
       <div class="shell">
         <div class="section-intro">
           <div><p class="kicker">Architecture</p><h2>Agent Runtime、工具与领域数据分层</h2></div>
-          <p>HTTP 页面和 Agent 工具不各自复制业务逻辑。它们共同调用领域服务，由领域服务负责所有权、校验、状态迁移、事务和事件；Agent Runtime 负责模型策略、工具循环、任务预算与可审计运行。</p>
+          <p>当前没有引入 LangChain 或 LangGraph，而是基于 Flask、SQLite 和 JSON Schema 实现轻量 Agent Runtime。它已具备策略切换、工具循环、任务预算、分层记忆和审计边界，避免为已有能力增加重复框架层。</p>
         </div>
         <div class="architecture-grid">
           <div>
@@ -480,7 +480,7 @@
             <div class="layer-stack">
               <div class="layer"><b>页面 / Agent 工作台</b><span>呈现数据、上下文标签、提议差异与执行结果。</span></div>
               <div class="layer"><b>Flask HTTP</b><span>解析请求、固定本地用户、序列化响应。</span></div>
-              <div class="layer"><b>Agent Runtime + 工具</b><span>结构化工具调用、参数 Schema、任务续接、时限与次数预算。</span></div>
+              <div class="layer"><b>Agent Runtime + 工具</b><span>19 个结构化工具、远程模型/本地策略切换、任务续接、时限与次数预算。</span></div>
               <div class="layer"><b>领域服务</b><span>简历、机会、面试、准备度和行动提议共用一致规则。</span></div>
               <div class="layer"><b>SQLite</b><span>本地持久化业务数据、Agent 记忆、运行记录与审计状态。</span></div>
             </div>
@@ -515,13 +515,13 @@
         <div>
           <p class="kicker">Local mode & compatibility</p>
           <h3>无需 API Key，也能完成基础闭环</h3>
-          <p>没有配置远程模型时，界面会明确显示“本地规则模式”。确定性策略可完成简历查询、岗位匹配、面试题、看板查询和固定模板行动等本地任务；它不会伪装成大模型推理。</p>
+          <p>没有配置远程模型时，界面会明确显示“本地规则模式”。确定性策略能识别常见自然问法，连续调用多个业务工具并综合行动优先级，也能完成简历诊断、机会盘点和面试准备；它不会伪装成大模型推理。</p>
           <div class="compat-list" aria-label="浏览器兼容范围">
             <div class="compat-row"><b>Microsoft Edge</b><span>核心文字流程与响应式界面验证。</span></div>
             <div class="compat-row"><b>Google Chrome</b><span>核心流程、桌面/平板/移动视口验证。</span></div>
             <div class="compat-row"><b>Mozilla Firefox</b><span>核心文字流程；语音与录音按能力降级。</span></div>
           </div>
-          <p class="verification-note"><b>本版本验收证据：</b>Python 281/281、Node 40/40；浏览器矩阵 7 PASS / 2 Firefox SKIP（本机缺少 Firefox 可执行文件，SKIP 不是通过）。</p>
+          <p class="verification-note"><b>本版本验收证据：</b>Python 288/288、Node 40/40；浏览器矩阵 7 PASS / 2 Firefox SKIP（本机缺少 Firefox 可执行文件，SKIP 不是通过）。</p>
           <p class="privacy-note"><b>隐私边界：</b>当前版本定位为本地单用户应用，SQLite 数据库、上传文件、导出文件、日志和 API Key 不提交到 Git。它不是带登录、云同步和多租户隔离的公开服务；如需公网部署，必须另行补齐认证、授权和加密设计。</p>
         </div>
       </div>

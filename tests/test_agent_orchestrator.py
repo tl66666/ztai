@@ -45,7 +45,51 @@ class FakeRegistry:
     def execute(self, name, arguments, user_id, timeout_seconds=None):
         self.calls.append((name, arguments, user_id))
         if name == "get_dashboard":
-            return ToolResult(True, {"resumes": 2}, "你目前有 2 份简历")
+            return ToolResult(
+                True,
+                {
+                    "resumes": 2,
+                    "matches": 1,
+                    "interviews": 0,
+                    "applications": 1,
+                    "readiness": {"score": 46, "label": "起步期"},
+                },
+                "简历=2；匹配=1；面试=0；投递=1；求职准备度=46（起步期）",
+            )
+        if name == "get_career_profile":
+            return ToolResult(
+                True,
+                {"target_role": "Python 测试工程师", "cities": ["杭州"]},
+                '{"target_role": "Python 测试工程师", "cities": ["杭州"]}',
+            )
+        if name == "list_action_items":
+            return ToolResult(
+                True,
+                [{"id": 3, "title": "补充接口自动化项目", "status": "todo"}],
+                "#3 补充接口自动化项目 / todo",
+            )
+        if name == "get_training_insights":
+            return ToolResult(
+                True,
+                {
+                    "interviews": {"completed_count": 0},
+                    "practice": {"completed_count": 2},
+                    "audio": {"completed_count": 0},
+                },
+                "最近完成训练：面试 0 次，题库 2 次，语音 0 次",
+            )
+        if name == "list_applications":
+            return ToolResult(
+                True,
+                [{"company": "星河科技", "job_title": "测试工程师", "status": "已投递"}],
+                "星河科技 / 测试工程师 / 已投递",
+            )
+        if name == "analyze_resume":
+            return ToolResult(
+                True,
+                {"analysis": "建议补充量化结果、技术关键词和项目职责。"},
+                "建议补充量化结果、技术关键词和项目职责。",
+            )
         if name == "match_job":
             return ToolResult(True, {"score": 82}, "岗位匹配度 82 分")
         return ToolResult(False, display_text="未知工具", error_code="unknown_tool")
@@ -189,6 +233,70 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(self.registry.calls[-1][0], "match_job")
         self.assertEqual(self.registry.calls[-1][1]["job_title"], "Python 测试工程师")
         self.assertIn("82", result.reply)
+
+    def test_local_policy_chains_business_tools_and_synthesizes_next_steps(self):
+        result = self.make_orchestrator(LocalPolicy()).run(
+            1,
+            self.conversation.id,
+            "帮我分析现在的求职情况，我下一步该做什么？",
+        )
+
+        self.assertEqual(
+            result.tools_used,
+            [
+                "get_dashboard",
+                "get_career_profile",
+                "list_action_items",
+                "get_training_insights",
+            ],
+        )
+        self.assertIn("本地求职 Agent", result.reply)
+        self.assertIn("Python 测试工程师", result.reply)
+        self.assertIn("杭州", result.reply)
+        self.assertIn("优先级 1", result.reply)
+        self.assertIn("面试训练", result.reply)
+        self.assertNotIn("当前未配置大模型 API", result.reply)
+
+    def test_local_policy_explains_capabilities_without_api_key(self):
+        result = self.make_orchestrator(LocalPolicy()).run(
+            1, self.conversation.id, "你能做什么？"
+        )
+
+        self.assertEqual(result.tools_used, [])
+        self.assertIn("本地求职 Agent", result.reply)
+        self.assertIn("求职诊断", result.reply)
+        self.assertIn("简历", result.reply)
+        self.assertIn("投递", result.reply)
+        self.assertIn("写入操作", result.reply)
+
+    def test_local_policy_routes_common_career_paraphrases(self):
+        cases = (
+            ("帮我看看现在有哪些机会", ["list_applications"], "星河科技"),
+            ("面试准备得怎么样", ["get_dashboard", "get_training_insights"], "面试训练"),
+            ("帮我优化一下简历", ["analyze_resume"], "量化结果"),
+        )
+
+        for index, (message, expected_tools, expected_text) in enumerate(cases):
+            with self.subTest(message=message):
+                conversation = self.store.create_conversation(1, f"paraphrase-{index}")
+                result = self.make_orchestrator(LocalPolicy()).run(
+                    1, conversation.id, message
+                )
+                self.assertEqual(result.tools_used, expected_tools)
+                self.assertIn(expected_text, result.reply)
+
+    def test_local_policy_unknown_request_returns_actionable_examples(self):
+        result = self.make_orchestrator(LocalPolicy()).run(
+            1, self.conversation.id, "我最近有点迷茫，不知道从哪里开始"
+        )
+
+        self.assertEqual(result.tools_used, [])
+        self.assertIn("可以直接这样问", result.reply)
+        self.assertIn("下一步", result.reply)
+        self.assertNotEqual(
+            result.reply,
+            "当前未配置大模型 API，正在使用本地模板和规则模式，不会进行模型生成。",
+        )
 
     def test_remote_policy_uses_native_tool_calls(self):
         client = FakeAIClient({

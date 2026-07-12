@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 SHOWCASE = ROOT / "static" / "showcase.html"
 ASSET_AUDIT = ROOT / "docs" / "SHOWCASE_ASSETS.md"
+RESUME_ENTRY = ROOT / "docs" / "RESUME_PROJECT_ENTRY.md"
 
 
 class _ReferenceParser(HTMLParser):
@@ -66,6 +67,9 @@ class ShowcaseContractTests(unittest.TestCase):
         for phrase in (
             "领域服务",
             "Agent Runtime",
+            "19 个结构化工具",
+            "确定性多工具规划",
+            "没有引入 LangChain",
             "工具",
             "工作记忆",
             "语义记忆",
@@ -75,6 +79,21 @@ class ShowcaseContractTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, self.html)
+
+    def test_agent_feature_uses_desktop_web_evidence_as_its_primary_visual(self):
+        agent_section = self.html.split('id="agent"', 1)[1].split("</section>", 1)[0]
+
+        self.assertIn("agent-local-desktop.webp", agent_section)
+        self.assertIn('width="1440"', agent_section)
+        self.assertIn('height="900"', agent_section)
+        self.assertNotIn("agent-mobile.webp", agent_section)
+
+    def test_resume_project_entry_is_ready_for_customization(self):
+        self.assertTrue(RESUME_ENTRY.exists())
+        text = RESUME_ENTRY.read_text(encoding="utf-8")
+        for phrase in ("项目标题", "项目概述", "技术栈", "核心亮点", "简历成稿", "Agent"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
 
     def test_local_mode_privacy_startup_and_browser_support_are_explicit(self):
         for phrase in (
@@ -127,7 +146,7 @@ class ShowcaseContractTests(unittest.TestCase):
             "GitHub Pages",
             "静态项目展示",
             "不能在此直接使用 Agent",
-            "Python 281/281",
+            "Python 288/288",
             "本机缺少 Firefox",
             "PASS",
             "SKIP",
