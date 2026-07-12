@@ -11,6 +11,7 @@ from utils.agent_runtime.models import Conversation, Message
 
 MAX_SEARCH_CANDIDATES = 500
 MAX_EXACT_QUERY_TOKENS = 24
+MAX_SEARCH_TERMS = 24
 
 
 AGENT_SCHEMA = """
@@ -103,7 +104,27 @@ def _search_terms(text: str) -> list[str]:
         terms.append(token)
         if re.fullmatch(r"[\u4e00-\u9fff]+", token) and len(token) > 2:
             terms.extend(token[index : index + 2] for index in range(len(token) - 1))
-    return list(dict.fromkeys(terms))
+    terms = list(dict.fromkeys(terms))
+    if len(terms) <= MAX_SEARCH_TERMS:
+        return terms
+
+    selected = {0, len(terms) - 1}
+    latin_indexes = [
+        index for index, term in enumerate(terms)
+        if re.fullmatch(r"[a-z0-9]+", term)
+    ]
+    for index in [*latin_indexes[:4], *latin_indexes[-4:]]:
+        selected.add(index)
+    for index in range(min(6, len(terms))):
+        selected.add(index)
+    for index in range(max(0, len(terms) - 6), len(terms)):
+        selected.add(index)
+    remaining = MAX_SEARCH_TERMS - len(selected)
+    if remaining > 0:
+        step = (len(terms) - 1) / (remaining + 1)
+        for offset in range(1, remaining + 1):
+            selected.add(round(step * offset))
+    return [terms[index] for index in sorted(selected)[:MAX_SEARCH_TERMS]]
 
 
 def _normalized_value(value) -> str:
@@ -220,6 +241,7 @@ class MemoryStore:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._last_search_candidate_count = 0
+        self._last_fallback_scan_count = 0
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, factory=ClosingConnection)
@@ -582,6 +604,7 @@ class MemoryStore:
         normalized = " ".join((query or "").casefold().split())
         terms = _search_terms(normalized)
         candidate_cap = max(50, min(MAX_SEARCH_CANDIDATES, limit * 20))
+        self._last_fallback_scan_count = 0
         entity_budget = max(8, candidate_cap // 5)
         key_budget = max(6, candidate_cap // 10)
         category_budget = max(6, candidate_cap // 10)
@@ -644,28 +667,45 @@ class MemoryStore:
                 if normalized:
                     patterns.append(normalized)
                 patterns.extend(sorted(terms, key=len, reverse=True))
+                escaped_patterns = []
                 for term in dict.fromkeys(patterns):
-                    if len(query_value_ids) >= primary_budget:
-                        break
                     escaped = (
                         term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
                     )
-                    pattern = f"%{escaped}%"
-                    remaining = primary_budget - len(query_value_ids)
-                    matched = connection.execute(
-                        f"""
+                    escaped_patterns.append(f"%{escaped}%")
+                if escaped_patterns:
+                    match_expression = (
+                        "(lower(value_json) LIKE ? ESCAPE '\\' "
+                        "OR lower(memory_key) LIKE ? ESCAPE '\\' "
+                        "OR lower(category) LIKE ? ESCAPE '\\')"
+                    )
+                    where_matches = " OR ".join(
+                        match_expression for _ in escaped_patterns
+                    )
+                    order_matches = " ".join(
+                        f"WHEN {match_expression} THEN {index}"
+                        for index, _pattern in enumerate(escaped_patterns)
+                    )
+                    pattern_params = [
+                        value
+                        for pattern in escaped_patterns
+                        for value in (pattern, pattern, pattern)
+                    ]
+                    self._last_fallback_scan_count = 1
+                    query_value_ids = [
+                        row[0] for row in connection.execute(
+                            f"""
                         SELECT id FROM agent_memories
-                        WHERE {' AND '.join(clauses)} AND (
-                            lower(value_json) LIKE ? ESCAPE '\\'
-                            OR lower(memory_key) LIKE ? ESCAPE '\\'
-                            OR lower(category) LIKE ? ESCAPE '\\'
-                        )
-                        ORDER BY updated_at DESC, id DESC LIMIT ?
-                        """,
-                        [*params, pattern, pattern, pattern, remaining],
-                    ).fetchall()
-                    query_value_ids.extend(row[0] for row in matched)
-                    query_value_ids = list(dict.fromkeys(query_value_ids))
+                        WHERE {' AND '.join(clauses)} AND ({where_matches})
+                        ORDER BY CASE {order_matches} ELSE {len(escaped_patterns)} END,
+                                 updated_at DESC, id DESC LIMIT ?
+                            """,
+                            [
+                                *params, *pattern_params, *pattern_params,
+                                primary_budget,
+                            ],
+                        ).fetchall()
+                    ]
 
             confirmed_fill = " AND status = 'confirmed'" if fts_enabled else ""
             recent_ids = [

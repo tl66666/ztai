@@ -1,6 +1,8 @@
 import os
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from unittest.mock import patch
 
 import app as app_module
@@ -50,6 +52,29 @@ class AgentAPITests(unittest.TestCase):
         self.assertTrue(first["success"])
         self.assertEqual(second["conversation_id"], first["conversation_id"])
         self.assertEqual(len(self.messages(first["conversation_id"]).get_json()["messages"]), 4)
+
+    def test_chat_rejects_invalid_message_lengths_before_writes(self):
+        def counts():
+            with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+                return tuple(
+                    conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    for table in ("agent_runs", "agent_memories", "agent_messages")
+                )
+
+        before = counts()
+        for message in ("", "   ", {"not": "text"}, "x" * 12001):
+            with self.subTest(kind=type(message).__name__, length=len(message)):
+                response = self.client.post(
+                    "/api/agent/chat", json={"user_id": 1, "message": message}
+                )
+                payload = response.get_json()
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(
+                    payload,
+                    {"success": False, "message": "消息必须是 1 到 12000 个字符"},
+                )
+                self.assertNotIn("x" * 100, response.get_data(as_text=True))
+        self.assertEqual(counts(), before)
 
     def test_first_message_names_a_precreated_conversation(self):
         conversation_id = self.create_conversation(title="新对话")

@@ -2014,10 +2014,15 @@ def clear_agent_conversation(conversation_id):
 
 @app.route("/api/agent/chat", methods=["POST"])
 def agent_chat():
-    data = request.get_json() or {}
-    message = str(data.get("message", "")).strip()
-    if not message:
-        return jsonify({"success": False, "message": "请输入问题"}), 400
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"success": False, "message": "消息必须是 1 到 12000 个字符"}), 400
+    raw_message = data.get("message")
+    if not isinstance(raw_message, str):
+        return jsonify({"success": False, "message": "消息必须是 1 到 12000 个字符"}), 400
+    message = raw_message.strip()
+    if not message or len(message) > 12000:
+        return jsonify({"success": False, "message": "消息必须是 1 到 12000 个字符"}), 400
     user_id = require_agent_user(data.get("user_id", AGENT_USER_ID))
     if user_id is None:
         return agent_access_denied()

@@ -258,6 +258,39 @@ class AgentBusinessMemoryTests(unittest.TestCase):
         self.assertIn(needle_id, [row["id"] for row in fallback])
         self.assertLessEqual(self.store._last_search_candidate_count, 500)
 
+    def test_long_chinese_fallback_uses_fixed_scan_count_and_representative_terms(self):
+        long_query = "".join(chr(0x4E00 + index) for index in range(360))
+        retained_tail = long_query[-2:]
+        old_time = "2020-01-01T00:00:00+00:00"
+        new_time = "2026-01-01T00:00:00+00:00"
+        with connect(self.db_path) as conn:
+            conn.executemany(
+                """
+                INSERT INTO agent_memories
+                    (user_id,kind,category,memory_key,value_json,confidence,status,created_at,updated_at)
+                VALUES (1,'semantic','noise',?, ?,0.5,'confirmed',?,?)
+                """,
+                [
+                    (f"noise-{index}", json.dumps(f"unrelated {index}"), new_time, new_time)
+                    for index in range(400)
+                ],
+            )
+            target_id = conn.execute(
+                """
+                INSERT INTO agent_memories
+                    (user_id,kind,category,memory_key,value_json,confidence,status,created_at,updated_at)
+                VALUES (1,'semantic','archive','tail-target',?,0.8,'confirmed',?,?)
+                """,
+                (json.dumps(f"older {retained_tail} target", ensure_ascii=False), old_time, old_time),
+            ).lastrowid
+        with patch.object(
+            self.store, "_fts_matches", side_effect=sqlite3.OperationalError("fallback")
+        ):
+            results = self.store.search_memories(1, long_query, kind="semantic", limit=8)
+        self.assertIn(target_id, [row["id"] for row in results])
+        self.assertLessEqual(self.store._last_fallback_scan_count, 2)
+        self.assertLessEqual(self.store._last_search_candidate_count, 500)
+
     def test_context_snapshot_is_private_ranked_bounded_and_corruption_tolerant(self):
         career = CareerService(self.db_path)
         career.upsert_profile(
