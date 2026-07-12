@@ -32,6 +32,10 @@ class StartupScriptContractTests(unittest.TestCase):
         )
         for forbidden in forbidden_paths:
             self.assertNotIn(forbidden, self.launcher)
+        self.assertRegex(self.launcher, r"(?i)Mutex")
+        self.assertIn("Local\\JobHunter-", self.launcher)
+        self.assertIn("6000", self.launcher)
+        self.assertIn("6667", self.launcher)
 
     def test_launcher_never_kills_a_port_owner_or_process_tree(self):
         self.assertNotRegex(self.launcher, r"(?i)\btaskkill\b")
@@ -46,6 +50,7 @@ class StartupScriptContractTests(unittest.TestCase):
             r'if \(\$script:flaskProcess -and "\$recordedPid" -eq '
             r'"\$\(\$script:flaskProcess\.Id\)"\)',
         )
+        self.assertIn("MutexAcquired", self.launcher)
 
     def test_launcher_uses_runtime_directory_for_logs_and_pid_receipt(self):
         self.assertRegex(self.launcher, r'Join-Path\s+\$ProjectPath\s+["\']output["\']')
@@ -62,6 +67,7 @@ class StartupScriptContractTests(unittest.TestCase):
         self.assertIn("/api/config/ai-status", self.launcher)
         self.assertIn("JOBHUNTER_PORT", self.launcher)
         self.assertIn("use_reloader=False", self.launcher)
+        self.assertIn("ValidateRange(1024, 65535)", self.launcher)
 
     def test_port_selection_wraps_safely_after_65535(self):
         self.assertIn("65535", self.launcher)
@@ -88,6 +94,8 @@ class StartupScriptContractTests(unittest.TestCase):
         self.assertNotRegex(smoke, r"(?i)\btaskkill\b")
         self.assertIn("$sentinelListener", smoke)
         self.assertIn("Preferred port owner was disturbed", smoke)
+        self.assertRegex(smoke, r"(?i)strict|match.*\^\\d\+|\^\\d\+\$")
+        self.assertIn("Get-Process", smoke)
 
 
 @unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "requires Windows PowerShell")

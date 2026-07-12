@@ -51,16 +51,34 @@ try {
 
     $pidFile = Join-Path $TempRoot "output\runtime\server.pid"
     $deadline = (Get-Date).AddSeconds(75)
-    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $pidFile)) {
+    while ((Get-Date) -lt $deadline) {
         if ($launcherProcess.HasExited) {
             throw "Launcher exited before writing its owned server PID (exit $($launcherProcess.ExitCode))."
         }
+        $receipt = $null
+        if (Test-Path -LiteralPath $pidFile) {
+            try {
+                $receipt = (Get-Content -LiteralPath $pidFile -Raw -ErrorAction Stop).Trim()
+                if ($receipt -notmatch '^\d+$' -or [int64]$receipt -le 0) {
+                    $receipt = $null
+                }
+            } catch {
+                $receipt = $null
+            }
+            if ($receipt) {
+                $candidateProcess = Get-Process -Id ([int]$receipt) -ErrorAction SilentlyContinue
+                $candidateInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $receipt" -ErrorAction SilentlyContinue
+                if ($candidateProcess -and $candidateInfo -and $candidateInfo.CommandLine -match "import app" -and $candidateInfo.CommandLine -match "JOBHUNTER_PORT") {
+                    $serverPid = [int]$receipt
+                    break
+                }
+            }
+        }
         Start-Sleep -Milliseconds 250
     }
-    if (-not (Test-Path -LiteralPath $pidFile)) {
+    if (-not $serverPid) {
         throw "Timed out waiting for the launcher PID receipt."
     }
-    $serverPid = [int](Get-Content -LiteralPath $pidFile | Select-Object -First 1)
 
     $launcherLog = Get-Content -LiteralPath (Join-Path $TempRoot "output\runtime\launcher.log") -Raw
     if ($launcherLog -notmatch 'safely selected port ([0-9]+) instead') {

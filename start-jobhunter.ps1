@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$NoBrowser,
-    [ValidateRange(1, 65535)]
+    [ValidateRange(1024, 65535)]
     [int]$Port = 5000,
     [switch]$SkipInstall,
     [switch]$Diagnostics
@@ -17,6 +17,9 @@ $ServerErrorLog = Join-Path $RuntimePath "server-error.log"
 $PidFile = Join-Path $RuntimePath "server.pid"
 $HealthTimeoutSeconds = 60
 $flaskProcess = $null
+$script:LaunchMutex = $null
+$script:MutexAcquired = $false
+$BrowserBlockedPorts = @(6000, 6666, 6667)
 
 function Write-LauncherMessage {
     param(
@@ -68,6 +71,9 @@ function Find-Python {
 function Test-PortFree {
     param([Parameter(Mandatory = $true)][int]$CandidatePort)
 
+    if ($BrowserBlockedPorts -contains $CandidatePort) {
+        return $false
+    }
     $listener = $null
     try {
         $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $CandidatePort)
@@ -111,6 +117,39 @@ function Test-Dependencies {
     return ($LASTEXITCODE -eq 0)
 }
 
+function Acquire-LauncherMutex {
+    $canonical = [System.IO.Path]::GetFullPath($ProjectPath).TrimEnd('\').ToUpperInvariant()
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($canonical)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha.ComputeHash($bytes)
+    } finally {
+        $sha.Dispose()
+    }
+    $hash = (-join ($digest | ForEach-Object { $_.ToString('x2') }))
+    $created = $false
+    $script:LaunchMutex = New-Object System.Threading.Mutex($false, "Local\JobHunter-$hash", [ref]$created)
+    try {
+        $script:MutexAcquired = $script:LaunchMutex.WaitOne(5000)
+    } catch [System.Threading.AbandonedMutexException] {
+        $script:MutexAcquired = $true
+    }
+    if (-not $script:MutexAcquired) {
+        throw "JobHunter is already running from this project directory. Close the existing launcher or use another copy."
+    }
+}
+
+function Release-LauncherMutex {
+    if ($script:LaunchMutex) {
+        if ($script:MutexAcquired) {
+            try { $script:LaunchMutex.ReleaseMutex() } catch {}
+        }
+        $script:LaunchMutex.Dispose()
+        $script:LaunchMutex = $null
+        $script:MutexAcquired = $false
+    }
+}
+
 function Stop-OwnedServer {
     if ($script:flaskProcess -and -not $script:flaskProcess.HasExited) {
         Write-LauncherMessage "Stopping the server owned by this launcher (PID $($script:flaskProcess.Id))..." Yellow
@@ -131,6 +170,7 @@ try {
         throw "This launcher must be in the same project directory as app.py."
     }
 
+    Acquire-LauncherMutex
     New-Item -ItemType Directory -Path $RuntimePath -Force | Out-Null
     Write-LauncherMessage "JobHunter project: $ProjectPath" Cyan
 
@@ -233,7 +273,7 @@ try {
         throw "The server exited with code $($flaskProcess.ExitCode). See $ServerErrorLog."
     }
 } catch {
-    if (Test-Path -LiteralPath $RuntimePath) {
+    if ($script:MutexAcquired -and (Test-Path -LiteralPath $RuntimePath)) {
         Write-LauncherMessage "Startup failed: $($_.Exception.Message)" Red
         Write-LauncherMessage "Diagnostic log: $LauncherLog" Yellow
     } else {
@@ -243,4 +283,5 @@ try {
     exit 1
 } finally {
     Stop-OwnedServer
+    Release-LauncherMutex
 }
