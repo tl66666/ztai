@@ -333,10 +333,12 @@
             <h3>本轮回答与语音复盘</h3>
             <button class="icon-button" id="voiceBtn" title="语音输入"><i data-lucide="mic"></i></button>
           </div>
+          <p id="speechCapabilityStatus" class="sr-only" role="status"></p>
           <p class="module-copy">模拟面试只保留这一个回答入口：可以打字、浏览器语音转文字，也可以录制真实音频回放并让 AI 分析语速、停顿、音量和表达结构。</p>
           <div class="workflow-chips"><span>回答当前问题</span><span>录音回放</span><span>AI 表达分析</span><span>进入下一问</span></div>
           <textarea id="answerInput" class="input textarea answer" placeholder="输入回答，或点击麦克风语音录入。"></textarea>
           <div class="audio-lab">
+            <p id="recordingCapabilityStatus" class="sr-only" role="status"></p>
             <div class="audio-actions">
               <button class="ghost" id="recordAudioBtn"><i data-lucide="circle-dot"></i>开始真实录音</button>
               <button class="ghost" id="stopAudioBtn"><i data-lucide="square"></i>停止并回放</button>
@@ -617,6 +619,7 @@
   <script src="js/opportunity_handoffs.js"></script>
   <script src="js/opportunity_history.js"></script>
   <script src="js/contextual_agent.js"></script>
+  <script src="js/browser_capabilities.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

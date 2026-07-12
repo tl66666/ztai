@@ -34,6 +34,7 @@ const state = {
   audioMetrics: null,
   audioStartedAt: 0,
   recordingTarget: "answer",
+  recorderFormat: null,
   soundEnabled: localStorage.getItem("jobhunter_sound") !== "off",
   audioContext: null,
   agentConversationId: localStorage.getItem(JOBHUNTER_AGENT_CONVERSATION) || "",
@@ -98,6 +99,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindNavigation();
   bindActions();
   applyTheme(state.theme);
+  applyBrowserCapabilities();
   setupSpeechRecognition();
   await loadCareerProfiles();
   await loadProviders();
@@ -714,11 +716,7 @@ function downloadBlob(blob, filename) {
 }
 
 function audioExtensionFromMime(mime = "") {
-  if (mime.includes("mp4") || mime.includes("m4a")) return "m4a";
-  if (mime.includes("ogg")) return "ogg";
-  if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
-  if (mime.includes("wav")) return "wav";
-  return "webm";
+  return BrowserCapabilities.extensionForMime(mime);
 }
 
 function audioDownloadBase(filename = "interview-answer") {
@@ -1248,29 +1246,44 @@ async function analyzeVoice() {
 }
 
 async function startAudioRecording(target = "answer") {
-  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    return toast("当前浏览器不支持真实录音，建议使用最新版 Chrome 或 Edge");
-  }
+  const plan = BrowserCapabilities.audioInputPlan(window, navigator);
+  if (!plan.canRecord) return toast("当前浏览器不能直接录音，请上传音频或使用文字回答");
   if (state.mediaRecorder && state.mediaRecorder.state === "recording") {
     return toast("正在录音中，先停止当前录音");
   }
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  state.audioChunks = [];
-  state.recordingTarget = target;
-  state.audioStartedAt = Date.now();
-  state.mediaRecorder = new MediaRecorder(stream);
-  state.mediaRecorder.ondataavailable = (event) => {
-    if (event.data.size > 0) state.audioChunks.push(event.data);
-  };
-  state.mediaRecorder.onstop = async () => {
-    stream.getTracks().forEach((track) => track.stop());
-    state.audioBlob = new Blob(state.audioChunks, { type: state.mediaRecorder.mimeType || "audio/webm" });
-    state.audioMetrics = await computeAudioMetrics(state.audioBlob);
-    renderAudioPreview(target);
-    toast("录音已生成，可以回放或分析");
-  };
-  state.mediaRecorder.start();
-  toast(target === "room" ? "模拟面试录音开始" : "真实录音开始");
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    state.audioChunks = [];
+    state.recordingTarget = target;
+    state.audioStartedAt = Date.now();
+    state.recorderFormat = plan.recorderFormat;
+    const options = plan.recorderFormat ? { mimeType: plan.recorderFormat.mimeType } : undefined;
+    state.mediaRecorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
+    state.mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) state.audioChunks.push(event.data);
+    };
+    state.mediaRecorder.onerror = () => {
+      stream.getTracks().forEach((track) => track.stop());
+      toast("录音发生错误，请上传音频或使用文字回答");
+    };
+    state.mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach((track) => track.stop());
+      const mimeType = state.mediaRecorder.mimeType || state.recorderFormat?.mimeType || "audio/webm";
+      state.audioBlob = new Blob(state.audioChunks, { type: mimeType });
+      state.audioMetrics = await computeAudioMetrics(state.audioBlob);
+      renderAudioPreview(target);
+      toast("录音已生成，可以回放或分析");
+    };
+    state.mediaRecorder.start();
+    toast(target === "room" ? "模拟面试录音开始" : "真实录音开始");
+  } catch (error) {
+    stream?.getTracks().forEach((track) => track.stop());
+    state.mediaRecorder = null;
+    toast(error?.name === "NotAllowedError"
+      ? "未获得麦克风权限，请上传音频或使用文字回答"
+      : "无法开始录音，请上传音频或使用文字回答");
+  }
 }
 
 function stopAudioRecording() {
@@ -1675,10 +1688,21 @@ async function scorePractice() {
   await loadTrainingRecords();
 }
 
+function applyBrowserCapabilities() {
+  const speech = BrowserCapabilities.speechRecognition(window);
+  const audio = BrowserCapabilities.audioInputPlan(window, navigator);
+  BrowserCapabilities.applyCapabilityUI(document, { speech, audio });
+}
+
+function resetSpeechRecognitionState() {
+  state.recognizing = false;
+  $("voiceBtn").classList.remove("recording");
+}
+
 function setupSpeechRecognition() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) return;
-  state.recognition = new SpeechRecognition();
+  const speech = BrowserCapabilities.speechRecognition(window);
+  if (!speech.Recognition) return;
+  state.recognition = new speech.Recognition();
   state.recognition.lang = "zh-CN";
   state.recognition.continuous = true;
   state.recognition.interimResults = true;
@@ -1690,20 +1714,34 @@ function setupSpeechRecognition() {
     $("answerInput").value = `${$("answerInput").value.replace(/\s*$/, "")}${text}`;
   };
   state.recognition.onend = () => {
-    state.recognizing = false;
-    $("voiceBtn").classList.remove("recording");
+    resetSpeechRecognitionState();
+  };
+  state.recognition.onerror = (event) => {
+    resetSpeechRecognitionState();
+    const denied = event?.error === "not-allowed" || event?.error === "service-not-allowed";
+    toast(denied
+      ? "未获得语音识别权限，请直接使用文字回答"
+      : "语音识别暂时不可用，请直接使用文字回答");
   };
 }
 
 function toggleVoiceInput() {
   if (!state.recognition) return toast("当前浏览器不支持语音识别，可以使用 Chrome 尝试");
   if (state.recognizing) {
-    state.recognition.stop();
+    try {
+      state.recognition.stop();
+    } catch (error) {
+      resetSpeechRecognitionState();
+    }
     return;
   }
   state.recognizing = true;
   $("voiceBtn").classList.add("recording");
-  state.recognition.start();
+  const result = BrowserCapabilities.startSpeechSafely(state.recognition);
+  if (!result.ok) {
+    resetSpeechRecognitionState();
+    return toast("无法启动语音识别，请直接使用文字回答");
+  }
   toast("正在语音录入");
 }
 
