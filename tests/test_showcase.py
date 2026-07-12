@@ -127,6 +127,7 @@ class ShowcaseContractTests(unittest.TestCase):
             "GitHub Pages",
             "静态项目展示",
             "不能在此直接使用 Agent",
+            "Python 276/276",
             "本机缺少 Firefox",
             "PASS",
             "SKIP",
