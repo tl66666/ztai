@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import tempfile
 import unittest
 
@@ -48,8 +49,7 @@ class OpportunityFrontendContractTests(unittest.TestCase):
 
     def test_entity_ids_drive_deep_links_and_cross_feature_handoffs(self):
         self.assertIn("currentOpportunityId", self.script)
-        self.assertIn('params.get("opportunity")', self.script)
-        self.assertIn("opportunityWorkspaceUrl", self.script)
+        self.assertIn("opportunityHistory.open", self.script)
         self.assertIn("jd_text: state.pendingApplicationJd", self.script)
         self.assertIn("resume_id: state.pendingApplicationResumeId", self.script)
         self.assertIn("application_id: state.currentOpportunityId", self.script)
@@ -66,6 +66,29 @@ class OpportunityFrontendContractTests(unittest.TestCase):
             start.index("state.interviewFromOpportunity = false"),
             start.index("if (!data.success)"),
         )
+
+    def test_back_forward_history_restores_workspace_behaviorally(self):
+        result = subprocess.run(
+            ["node", str(ROOT / "tests" / "js" / "test_opportunity_history.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_app_uses_the_history_controller_as_its_single_route_sync(self):
+        history_script = '<script src="js/opportunity_history.js"></script>'
+        app_script = '<script src="js/app.js"></script>'
+        self.assertIn(history_script, self.html)
+        self.assertLess(self.html.index(history_script), self.html.index(app_script))
+        self.assertIn("OpportunityHistory.createOpportunityHistoryController", self.script)
+        self.assertIn("opportunityHistory.bind()", self.script)
+        self.assertIn("await opportunityHistory.sync()", self.script)
+        self.assertIn("return opportunityHistory.open", self.script)
+        self.assertIn("opportunityHistory.close", self.script)
+        self.assertNotIn('params.get("opportunity")', self.script)
+        self.assertNotIn("function opportunityWorkspaceUrl", self.script)
 
     def test_cards_have_a_visible_icon_and_text_workspace_command(self):
         self.assertIn('data-lucide="panel-right-open"', self.script)

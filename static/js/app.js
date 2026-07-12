@@ -38,6 +38,15 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+const opportunityHistory = OpportunityHistory.createOpportunityHistoryController({
+  window,
+  showPage: (page) => {
+    if ($(`page-${page}`)) showPage(page);
+  },
+  loadWorkspace: loadOpportunityWorkspace,
+  closeWorkspace: resetOpportunityWorkspaceView,
+  notifyStale: () => toast("机会详情不存在或已失效，链接已重置。"),
+});
 const PROVIDER_LINKS = {
   glm: [
     ["智谱开放平台", "https://open.bigmodel.cn/"],
@@ -54,6 +63,7 @@ const PROVIDER_LINKS = {
 };
 
 document.addEventListener("DOMContentLoaded", async () => {
+  opportunityHistory.bind();
   bindNavigation();
   bindActions();
   applyTheme(state.theme);
@@ -62,7 +72,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadProviders();
   await Promise.all([loadResumes(), loadDashboard(), loadApplications(), loadQuestions(), loadTrainingRecords()]);
   await loadAgentConversations();
-  applyInitialRouteFromQuery();
+  await applyInitialRouteFromQuery();
   lucide.createIcons();
 });
 
@@ -91,13 +101,12 @@ function showPage(page) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-function applyInitialRouteFromQuery() {
+async function applyInitialRouteFromQuery() {
+  await opportunityHistory.sync();
   const params = new URLSearchParams(window.location.search);
-  const page = params.get("page");
   const moduleName = params.get("module");
   const record = params.get("record");
-  const opportunity = Number(params.get("opportunity"));
-  if (page) showPage(page);
+  const page = document.querySelector(".page.active")?.id.replace("page-", "");
   if (page && moduleName) {
     document.querySelector(`[data-section-filter="${page}:${moduleName}"]`)?.click();
   }
@@ -106,9 +115,6 @@ function applyInitialRouteFromQuery() {
       const audioCard = [...document.querySelectorAll(".record-card")].find((card) => card.textContent.includes("语音") || card.textContent.includes("录音") || card.textContent.includes("表达"));
       audioCard?.querySelector(".record-actions button")?.click();
     }, 500);
-  }
-  if (page === "tracker" && Number.isInteger(opportunity) && opportunity > 0) {
-    openOpportunityWorkspace(opportunity, { updateUrl: false });
   }
 }
 
@@ -1700,55 +1706,44 @@ async function loadApplications() {
   lucide.createIcons();
 }
 
-function opportunityWorkspaceUrl(opportunityId) {
-  const url = new URL(window.location.href);
-  url.searchParams.set("page", "tracker");
-  url.searchParams.delete("module");
-  url.searchParams.set("opportunity", String(opportunityId));
-  return url;
+async function openOpportunityWorkspace(id, options = {}) {
+  const historyMode = options.historyMode || (options.updateUrl === false ? "none" : "push");
+  return opportunityHistory.open(id, { historyMode });
 }
 
-async function openOpportunityWorkspace(id, options = {}) {
+async function loadOpportunityWorkspace(id) {
   const opportunityId = Number(id);
-  if (!Number.isInteger(opportunityId) || opportunityId <= 0) return;
+  if (!Number.isInteger(opportunityId) || opportunityId <= 0) return false;
   state.currentOpportunityId = opportunityId;
-  showPage("tracker");
   const boardButton = document.querySelector('[data-section-filter="tracker:board"]');
   if (boardButton) filterModules("tracker", "board", boardButton);
   $("opportunityWorkspace").classList.remove("hidden");
   $("opportunityWorkspaceError").classList.add("hidden");
   $("opportunityWorkspaceTitle").textContent = "正在加载机会详情";
   $("opportunityWorkspaceSubtitle").textContent = "正在读取本地关联记录...";
-  if (options.updateUrl !== false) {
-    window.history.pushState({}, "", opportunityWorkspaceUrl(opportunityId));
-  }
 
   const workspace = await api(`/opportunities/${opportunityId}/workspace`);
   if (!workspace.success || state.currentOpportunityId !== opportunityId) {
-    if (state.currentOpportunityId !== opportunityId) return;
-    state.currentOpportunityWorkspace = null;
-    $("opportunityWorkspaceTitle").textContent = "机会详情不可用";
-    $("opportunityWorkspaceSubtitle").textContent = "该记录不存在、已删除或不属于当前本地用户。";
-    const error = $("opportunityWorkspaceError");
-    error.classList.remove("hidden");
-    error.innerHTML = `无法加载机会详情。<button type="button" class="ghost" onclick="openOpportunityWorkspace(${opportunityId}, { updateUrl: false })"><i data-lucide="refresh-cw"></i>重试</button>`;
-    lucide.createIcons();
-    return;
+    if (state.currentOpportunityId !== opportunityId) return undefined;
+    return false;
   }
 
   state.currentOpportunityWorkspace = workspace;
   renderOpportunityWorkspace(workspace);
   selectOpportunityTab($("opportunity-tab-overview"), false);
   $("opportunityWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
+  return true;
 }
 
-function closeOpportunityWorkspace() {
+function resetOpportunityWorkspaceView() {
   state.currentOpportunityId = null;
   state.currentOpportunityWorkspace = null;
   $("opportunityWorkspace").classList.add("hidden");
-  const url = new URL(window.location.href);
-  url.searchParams.delete("opportunity");
-  window.history.replaceState({}, "", url);
+  $("opportunityWorkspaceError").classList.add("hidden");
+}
+
+function closeOpportunityWorkspace(options = {}) {
+  opportunityHistory.close({ historyMode: options.historyMode || "replace" });
 }
 
 function selectOpportunityTab(selectedTab, moveFocus = true) {
