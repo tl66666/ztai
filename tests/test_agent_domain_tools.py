@@ -287,6 +287,73 @@ class AgentDomainToolTests(unittest.TestCase):
         with connect(self.db_path) as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM agent_action_proposals").fetchone()[0], 0)
 
+    def test_model_tool_rejects_numeric_strings_before_proposal_executor(self):
+        invalid_values = ("0", "000", "1000000001")
+        with patch(
+            "utils.agent_runtime.tools.ActionProposalService.propose"
+        ) as propose:
+            results = [
+                self.registry.execute(
+                    "propose_career_action",
+                    {
+                        "action_type": "create_opportunity",
+                        "arguments": {
+                            "company": "Acme",
+                            "job_title": "Engineer",
+                            "salary_min": value,
+                        },
+                    },
+                    user_id=1,
+                )
+                for value in invalid_values
+            ]
+
+        self.assertTrue(all(not item.ok for item in results))
+        self.assertEqual({item.error_code for item in results}, {"invalid_arguments"})
+        propose.assert_not_called()
+        with connect(self.db_path) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM agent_action_proposals").fetchone()[0], 0)
+
+    def test_model_tool_schema_uses_bounded_json_integers_and_accepts_endpoints(self):
+        schema = next(
+            item["function"]["parameters"]
+            for item in self.registry.schemas()
+            if item["function"]["name"] == "propose_career_action"
+        )
+        create_branch = next(
+            item for item in schema["oneOf"]
+            if item["properties"]["action_type"]["const"] == "create_opportunity"
+        )
+        properties = create_branch["properties"]["arguments"]["properties"]
+
+        self.assertEqual(properties["salary_min"]["type"], "integer")
+        self.assertEqual(properties["resume_id"]["type"], "integer")
+        self.assertEqual(properties["resume_id"]["minimum"], 1)
+        self.assertEqual(properties["salary_min"]["minimum"], 0)
+        self.assertEqual(properties["salary_max"]["maximum"], 1_000_000_000)
+        with connect(self.db_path) as conn:
+            resume_id = conn.execute(
+                "INSERT INTO resumes(user_id, title, content) VALUES (1, 'Owned', 'body')"
+            ).lastrowid
+        result = self.registry.execute(
+            "propose_career_action",
+            {
+                "action_type": "create_opportunity",
+                "arguments": {
+                    "company": "Acme",
+                    "job_title": "Engineer",
+                    "salary_min": 0,
+                    "salary_max": 1_000_000_000,
+                    "priority": -1000,
+                    "resume_id": resume_id,
+                },
+            },
+            user_id=1,
+        )
+        self.assertTrue(result.ok, result.display_text)
+        with connect(self.db_path) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM agent_action_proposals").fetchone()[0], 1)
+
     def test_remote_policy_receives_constrained_nested_proposal_schema(self):
         client = SequenceClient([
             {"success": True, "message": {"role": "assistant", "content": "完成。"}}

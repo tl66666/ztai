@@ -82,14 +82,12 @@ def _schema_text(limit: int, *, required: bool = False) -> dict[str, Any]:
 def _schema_integer(
     minimum: int | None = None, maximum: int | None = None
 ) -> dict[str, Any]:
-    integer: dict[str, Any] = {"type": "integer"}
+    schema: dict[str, Any] = {"type": "integer"}
     if minimum is not None:
-        integer["minimum"] = minimum
+        schema["minimum"] = minimum
     if maximum is not None:
-        integer["maximum"] = maximum
-    # ActionProposalService intentionally accepts unsigned decimal strings.
-    numeric_text: dict[str, Any] = {"type": "string", "pattern": r"^[0-9]+$"}
-    return {"oneOf": [integer, numeric_text]}
+        schema["maximum"] = maximum
+    return schema
 
 
 def _opportunity_argument_properties() -> dict[str, Any]:
