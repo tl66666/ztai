@@ -325,22 +325,25 @@
     .metric:nth-child(2).visible { animation-delay: 0.8s; }
     .metric:nth-child(3).visible { animation-delay: 1.6s; }
     .metric:nth-child(4).visible { animation-delay: 2.4s; }
-    .feature-card { border-left: 6px solid var(--pink); }
-    .feature-card:nth-child(2) { border-left-color: var(--mint); }
-    .feature-card:nth-child(3) { border-left-color: var(--blue); }
-    .feature-card:nth-child(4) { border-left-color: var(--yellow); }
-    .feature-card:nth-child(5) { border-left-color: var(--lilac); }
-    .feature-card:nth-child(6) { border-left-color: var(--mint); }
-    .feature-card:nth-child(7) { border-left-color: var(--blue); }
-    .feature-card:nth-child(8) { border-left-color: var(--pink); }
-    .pain-card { border-top: 4px solid var(--danger, #ff5b5b); }
-    .pain-card:nth-child(2) { border-top-color: var(--yellow); }
-    .pain-card:nth-child(3) { border-top-color: var(--pink); }
-    .pain-card:nth-child(4) { border-top-color: var(--blue); }
-    .pain-card:nth-child(5) { border-top-color: var(--lilac); }
-    .pain-card:nth-child(6) { border-top-color: var(--mint); }
-    .pain-card .pain-icon { font-size: 28px; margin-bottom: 10px; display: block; }
-    .pain-card p { font-size: 14px; }
+    .overview-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+    .overview-copy { min-height: 100%; padding: 30px; }
+    .overview-copy .lead { color: rgba(255,255,255,0.9); font-size: 19px; line-height: 1.8; }
+    .overview-copy strong { color: var(--mint); }
+    .module-map { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .module-item {
+      min-height: 122px;
+      padding: 18px;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 20px;
+      background: rgba(255,255,255,0.052);
+    }
+    .module-item b { display: block; margin-bottom: 7px; color: #fff; }
+    .module-item span { color: var(--muted); font-size: 14px; line-height: 1.65; }
     .highlight-card { border-left: 6px solid var(--mint); }
     .highlight-card:nth-child(2) { border-left-color: var(--blue); }
     .highlight-card:nth-child(3) { border-left-color: var(--pink); }
@@ -555,6 +558,61 @@
     .agent-facts { margin-top: 18px; }
     .agent-fact { min-height: 170px; }
     .agent-fact b { display: block; margin-bottom: 8px; color: var(--mint); font-size: 28px; }
+    .agent-jobs { margin: 18px 0; }
+    .agent-job {
+      min-height: 230px;
+      padding-top: 72px;
+      border-top: 4px solid var(--pink);
+    }
+    .agent-job:nth-child(2) { border-top-color: var(--mint); }
+    .agent-job:nth-child(3) { border-top-color: var(--blue); }
+    .agent-job:nth-child(4) { border-top-color: var(--yellow); }
+    .job-index {
+      position: absolute;
+      top: 18px;
+      left: 24px;
+      color: rgba(255,255,255,0.28);
+      font: 400 42px/1 "Instrument Serif", serif;
+    }
+    .runtime-map {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .runtime-node {
+      position: relative;
+      min-height: 142px;
+      padding: 18px 14px;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 20px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.085), rgba(255,255,255,0.035));
+    }
+    .runtime-node:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      top: 50%;
+      right: -13px;
+      z-index: 3;
+      color: var(--pink);
+      font-weight: 900;
+      transform: translateY(-50%);
+    }
+    .runtime-node b { display: block; margin-bottom: 8px; color: #fff; }
+    .runtime-node span { color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .framework-note { border-top: 4px solid var(--pink); }
+    .framework-note:nth-child(2) { border-top-color: var(--mint); }
+    .decision-label {
+      display: inline-flex;
+      margin-bottom: 16px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255,120,188,0.12);
+      color: var(--pink);
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
     .runtime-flow { display: grid; gap: 10px; margin-top: 18px; }
     .runtime-step {
       display: grid;
@@ -652,7 +710,8 @@
     }
     @media (max-width: 980px) {
       .nav { align-items: flex-start; border-radius: 28px; flex-direction: column; }
-      .two, .three, .four, .stack-grid, .flow, .screen-card, .screen-card:nth-child(even), .agent-demo { grid-template-columns: 1fr; }
+      .two, .three, .four, .stack-grid, .flow, .screen-card, .screen-card:nth-child(even), .agent-demo, .overview-grid, .runtime-map { grid-template-columns: 1fr; }
+      .runtime-node:not(:last-child)::after { content: "↓"; top: auto; right: 50%; bottom: -17px; transform: translateX(50%); }
       .screens-grid { display: grid; gap: 18px; padding-bottom: 0; perspective: none; }
       .screen-card,
       .screen-card:nth-child(2),
@@ -677,6 +736,7 @@
       .theme-card { min-height: 440px; }
       .nav-links { width: 100%; }
       .nav-links a { flex: 1 1 auto; }
+      .module-map { grid-template-columns: 1fr; }
       .agent-demo { padding: 14px; }
       .agent-demo .screen-shot, .agent-demo .screen-shot img { min-height: 0; }
     }
@@ -689,12 +749,10 @@
       <span>职途 AI<small>AI Agent Career Studio</small></span>
     </a>
     <div class="nav-links">
-      <a class="pill" href="#pains">痛点</a>
-      <a class="pill" href="#features">功能</a>
-      <a class="pill" href="#highlights">亮点</a>
-      <a class="pill" href="#themes">双主题</a>
-      <a class="pill" href="#screens">实景</a>
-      <a class="pill" href="#agent">智能体</a>
+      <a class="pill" href="#overview">项目总览</a>
+      <a class="pill" href="#agent">Agent 核心</a>
+      <a class="pill" href="#agent-architecture">实现原理</a>
+      <a class="pill" href="#screens">真实界面</a>
       <a class="pill" href="#tech">技术栈</a>
       <a class="pill" href="https://github.com/tl66666/ztai" target="_blank" rel="noreferrer">GitHub</a>
       <a class="button primary" href="#run">本地运行</a>
@@ -715,81 +773,48 @@
         </div>
         <div class="hero-badges">
           <span class="pill">19 个结构化工具</span>
-          <span class="pill">四层持久记忆</span>
+          <span class="pill">分层持久记忆</span>
           <span class="pill">无需 API Key 可用</span>
           <span class="pill">写操作由用户确认</span>
         </div>
       </div>
     </section>
 
-    <section class="wrap section grid four">
-      <article class="card liquid metric fade-up"><b>19</b><span>结构化 Agent 工具</span></article>
-      <article class="card liquid metric fade-up"><b>4</b><span>工作 / 语义 / 情景 / 任务记忆</span></article>
-      <article class="card liquid metric fade-up"><b>3</b><span>可选模型供应商</span></article>
-      <article class="card liquid metric fade-up"><b>1</b><span>完整求职业务闭环</span></article>
-    </section>
-
-    <section id="pains" class="wrap section">
+    <section id="overview" class="wrap section">
       <div class="section-head fade-up">
         <div>
-          <p class="eyebrow">Why We Built This</p>
-          <h2>求职者的真实痛点</h2>
+          <p class="eyebrow">Product Overview</p>
+          <h2>先是一套完整求职系统，再由 Agent 串起每一步</h2>
         </div>
-        <p>求职是一个长达数周甚至数月的过程，但大多数人靠零散工具和记忆硬扛。以下是我们观察到的真实问题，也是这个项目存在的原因。</p>
+        <p>职途 AI 把原本散落在文档、面经、招聘网站和备忘录里的求职数据放回一条六步求职闭环。每个模块都能独立使用，Agent 则负责理解当前状态、寻找阻塞点并协助推进。</p>
       </div>
-      <div class="grid three">
-        <article class="card liquid pain-card fade-up">
-          <span class="pain-icon">📝</span>
-          <h3>简历改了又改，不知道改得对不对</h3>
-          <p>投出去石沉大海，不知道是结构问题、技能描述问题还是项目证据不足。缺乏客观诊断，只能凭感觉反复修改。</p>
+      <div class="overview-grid">
+        <article class="card liquid overview-copy fade-up">
+          <p class="eyebrow">One Career Data Loop</p>
+          <h3>解决的不是单次问答，而是持续数周的求职协作</h3>
+          <p class="lead">用户先建立职业目标和简历资产，再围绕真实 JD 做匹配、面试训练和投递跟进。所有结果都会成为后续决策的证据，<strong>Agent 不需要用户每次重新讲一遍背景</strong>。</p>
+          <div class="agent-points">
+            <span>业务事实：简历、JD、机会、面试、行动项和时间线</span>
+            <span>智能辅助：诊断、匹配、训练建议、阶段复盘和安全提案</span>
+            <span>适用方向：计算机、运营、市场、财务、教育、行政人事</span>
+          </div>
         </article>
-        <article class="card liquid pain-card fade-up">
-          <span class="pain-icon">🔍</span>
-          <h3>JD 看了上百条，匹配度全靠感觉</h3>
-          <p>每条 JD 都手动对比关键词，费时且容易遗漏。没有量化匹配分和缺口清单，不知道自己到底差在哪里。</p>
-        </article>
-        <article class="card liquid pain-card fade-up">
-          <span class="pain-icon">😰</span>
-          <h3>面试紧张，一开口就忘词</h3>
-          <p>平时只看面经不练嘴，到面试时大脑空白。缺乏真实模拟场景，回答没有结构，紧张时连项目都讲不清楚。</p>
-        </article>
-        <article class="card liquid pain-card fade-up">
-          <span class="pain-icon">📋</span>
-          <h3>投递记录散落各处</h3>
-          <p>公司名、岗位、进度、HR 联系方式散落在 Excel、备忘录和微信聊天里。投多了以后进度一团乱，复盘时无从下手。</p>
-        </article>
-        <article class="card liquid pain-card fade-up">
-          <span class="pain-icon">🧩</span>
-          <h3>工具割裂，数据不流通</h3>
-          <p>简历工具只做模板、面试工具只做题库、投递工具只做看板，各管各的。数据无法串联，每换一个工具就要重新输入。</p>
-        </article>
-        <article class="card liquid pain-card fade-up">
-          <span class="pain-icon">🤖</span>
-          <h3>AI 工具不结合求职场景</h3>
-          <p>通用 AI 能聊天但不懂求职流程，给的建议泛泛而谈。无法基于用户真实简历和 JD 做针对性反馈，更不会追踪进度。</p>
-        </article>
-      </div>
-    </section>
-
-    <section id="features" class="wrap section">
-      <div class="section-head fade-up">
-        <div>
-          <p class="eyebrow">Product Modules</p>
-          <h2>功能模块设计</h2>
+        <div class="module-map fade-up">
+          <div class="module-item"><b>职业目标</b><span>沉淀岗位方向、城市、薪资和能力偏好，作为后续分析基线。</span></div>
+          <div class="module-item"><b>简历资产</b><span>支持文本、Word/PDF、版本管理、诊断修改和技能证据提取。</span></div>
+          <div class="module-item"><b>JD 与岗位匹配</b><span>解析职责和关键词，输出匹配证据、能力缺口与改写方向。</span></div>
+          <div class="module-item"><b>模拟面试</b><span>按真实阶段训练，保存回答、录音、反馈和可恢复会话。</span></div>
+          <div class="module-item"><b>机会工作区</b><span>关联公司、岗位、JD、简历版本、面试准备和业务时间线。</span></div>
+          <div class="module-item"><b>投递与复盘</b><span>追踪阶段、风险、行动项和准备度，形成下一步执行清单。</span></div>
         </div>
-        <p>每个模块都对应真实求职任务，并把结果沉淀到后续流程。系统支持计算机、运营、市场、财务、教育、行政人事等求职方向，避免功能只服务单一专业。</p>
       </div>
-      <div class="grid four">
-        <article class="card liquid feature-card fade-up"><h3>项目总览</h3><p>汇总简历、面试、JD 匹配、投递数据，生成职业脉冲评分和下一步行动。</p></article>
-        <article class="card liquid feature-card fade-up"><h3>简历录入与编辑</h3><p>支持文本录入、Word / PDF 上传、原文件保存、在线编辑、替换文件和打开原始文件。</p></article>
-        <article class="card liquid feature-card fade-up"><h3>简历分析与修改</h3><p>从结构、项目证据、技能覆盖、量化表达、风险点等维度做客观分析。</p></article>
-        <article class="card liquid feature-card fade-up"><h3>JD 定制优化</h3><p>粘贴真实 JD 后计算关键词命中、匹配度、能力差距和项目改写方向。</p></article>
-        <article class="card liquid feature-card fade-up"><h3>多专业求职画像</h3><p>不同专业会切换题库、技能雷达、JD 分析重点和模拟面试追问，让非计算机专业也能按自己的岗位方向使用。</p></article>
-        <article class="card liquid feature-card fade-up"><h3>技能图谱</h3><p>根据简历提取技能关键词，生成雷达图、短板清单和补强路线。</p></article>
-        <article class="card liquid feature-card fade-up"><h3>模拟真实面试</h3><p>按自我介绍、项目深挖、技术追问、行为面、反问总结推进训练流程。</p></article>
-        <article class="card liquid feature-card fade-up"><h3>语音回答复盘</h3><p>支持语音转文字、真实录音、回放、语速停顿分析和表达建议。</p></article>
-        <article class="card liquid feature-card fade-up"><h3>投递看板与教练</h3><p>管理岗位阶段，生成跟进建议、薪资评估、复盘提醒和阶段性作战报告。</p></article>
-        <article class="card liquid feature-card fade-up"><h3>上下文求职 Agent</h3><p>在总览、简历、面试和投递页面随时打开，读取当前模块和已选择实体，调用工具完成诊断、盘点、训练建议与安全操作提案。</p></article>
+      <div class="flow fade-up" aria-label="六步求职闭环">
+        <div class="flow-step fade-up"><b>01 建立目标</b><span>确认方向、城市、薪资和优先能力。</span></div>
+        <div class="flow-step fade-up"><b>02 沉淀简历</b><span>保存原件、解析内容并维护版本。</span></div>
+        <div class="flow-step fade-up"><b>03 匹配 JD</b><span>寻找关键词、证据和能力缺口。</span></div>
+        <div class="flow-step fade-up"><b>04 模拟面试</b><span>训练表达并记录真实反馈。</span></div>
+        <div class="flow-step fade-up"><b>05 跟进机会</b><span>维护投递阶段、风险和下一步。</span></div>
+        <div class="flow-step fade-up"><b>06 复盘提升</b><span>由 Agent 综合证据安排优先级。</span></div>
       </div>
     </section>
 
@@ -797,9 +822,9 @@
       <div class="section-head fade-up">
         <div>
           <p class="eyebrow">Contextual Career Agent</p>
-          <h2>Agent 是产品主线，不是旁边的聊天框</h2>
+          <h2>Agent 核心特色：理解现状、调用工具、推进下一步</h2>
         </div>
-        <p>Agent 读取权威业务数据、分层记忆和当前页面上下文，在有限工具预算内推进任务。没有 API Key 时也能执行确定性多工具规划；涉及数据写入时只生成预览，必须由用户确认。</p>
+        <p>它不是悬浮在页面旁边的问答机器人。Agent 会读取当前页面上下文、关联简历或机会、分层记忆和实时业务数据，在有限预算内选择工具，综合多个工具结果，再给出可执行建议。</p>
       </div>
       <article class="card liquid agent-demo fade-up">
         <figure class="screen-shot">
@@ -807,49 +832,87 @@
         </figure>
         <div class="agent-copy">
           <p class="eyebrow">Real Desktop Run</p>
-          <h3>无 Key，也能解决真实求职问题</h3>
-          <p>截图来自 1440 × 900 桌面实测。用户询问当前求职情况后，本地 Agent 连续读取求职看板、职业目标、行动项和训练记录，再综合输出行动优先级，而不是把最后一个工具结果直接返回。</p>
+          <h3>真实桌面运行：从一句问题到行动优先级</h3>
+          <p>截图来自 1440 × 900 Web 实测。用户询问“帮我分析现在的求职情况”后，本地 Agent 连续读取准备度看板、职业目标、行动项和训练记录，综合多个工具结果，输出当前阻塞点和下一步，而不是把最后一次工具调用原样返回。</p>
           <div class="agent-points">
-            <span>求职诊断：结合准备度、目标、行动和训练证据</span>
-            <span>专项建议：机会盘点、面试准备、简历优化、JD 匹配</span>
-            <span>安全推进：新增或更新业务数据前生成待确认操作</span>
+            <span>读取当前页面上下文，自动识别当前模块、简历或机会</span>
+            <span>结合分层记忆与实时业务事实，不要求重复描述背景</span>
+            <span>需要写入时先生成预览，用户确认后才执行</span>
           </div>
         </div>
       </article>
+      <div class="grid four agent-jobs">
+        <article class="card liquid agent-job fade-up"><span class="job-index">01</span><h3>求职诊断与下一步</h3><p>综合准备度、职业目标、行动项、训练质量和机会阶段，定位当前最影响结果的阻塞点并排序。</p></article>
+        <article class="card liquid agent-job fade-up"><span class="job-index">02</span><h3>简历诊断与 JD 匹配</h3><p>读取指定简历和真实 JD，分析关键词、项目证据、技能缺口与改写方向，并把建议定位到具体机会。</p></article>
+        <article class="card liquid agent-job fade-up"><span class="job-index">03</span><h3>面试准备与训练复盘</h3><p>结合岗位、简历、历史回答和训练记录，生成准备重点、薄弱问题与表达练习建议。</p></article>
+        <article class="card liquid agent-job fade-up"><span class="job-index">04</span><h3>机会跟进与行动推进</h3><p>盘点停留阶段、风险和最近事件，提出跟进或行动建议；新增、更新业务数据前必须由用户确认。</p></article>
+      </div>
       <div class="grid four agent-facts">
         <article class="card liquid agent-fact fade-up"><b>19</b><h3>结构化工具</h3><p>覆盖简历、JD、面试、训练、机会、行动项、报告和受限网页读取。</p></article>
-        <article class="card liquid agent-fact fade-up"><b>4</b><h3>分层记忆</h3><p>工作记忆、语义记忆、情景记忆和任务记忆分别管理当前对话、确认事实、历史结果和待续步骤。</p></article>
-        <article class="card liquid agent-fact fade-up"><b>2</b><h3>策略模式</h3><p>配置模型时使用原生 tool calls；无 Key 时使用明确标记的本地确定性策略。</p></article>
+        <article class="card liquid agent-fact fade-up"><b>6</b><h3>分层记忆</h3><p>工作、摘要、语义、情景、任务和实时业务记忆分开管理，不把所有历史无脑塞进 Prompt。</p></article>
+        <article class="card liquid agent-fact fade-up"><b>2</b><h3>策略模式</h3><p>有 Key 时使用 provider-native tool_calls；无 Key 时由 LocalPolicy 执行确定性多工具规划。</p></article>
         <article class="card liquid agent-fact fade-up"><b>1</b><h3>确认边界</h3><p>所有 Agent 写入统一经过“提议 → 预览 → 单次确认 → 领域服务执行”，并展示 <code>risk_level</code>。</p></article>
       </div>
     </section>
 
-    <section id="themes" class="wrap section">
+    <section id="agent-architecture" class="wrap section">
       <div class="section-head fade-up">
         <div>
-          <p class="eyebrow">Visual System</p>
-          <h2>双主题视觉系统</h2>
+          <p class="eyebrow">Agent Architecture</p>
+          <h2>一次请求，怎样从上下文走到业务结果</h2>
         </div>
-        <p>系统内置 Anime 和 Glass 两套风格。主题切换会同步影响 Logo、背景、Hero、卡片、视觉素材和状态组件，保证从首页到业务模块都保持一致。</p>
+        <p>智能度不只来自模型。真正决定结果质量的是上下文是否权威、记忆是否相关、工具是否能操作真实业务，以及写入是否可控。</p>
       </div>
-      <div class="grid two">
-        <article class="card liquid theme-card fade-up">
-          <img src="assets/images/hero-bg (2).png" alt="Anime 主题界面" />
-          <div class="theme-copy">
-            <p class="eyebrow">Anime Theme</p>
-            <h3>二次元轻潮流</h3>
-            <p>柔和粉、薄荷绿、浅紫、插画角色和漂浮 UI 元素，让求职训练更轻松、更有陪伴感。</p>
+      <div class="runtime-map fade-up" aria-label="Agent Runtime 执行链路">
+        <div class="runtime-node"><b>页面上下文</b><span>模块、resume_id、opportunity_id 与用户输入</span></div>
+        <div class="runtime-node"><b>ContextBuilder</b><span>重新读取领域数据，构建权威上下文</span></div>
+        <div class="runtime-node"><b>MemoryStore</b><span>检索相关画像、历史结果和待续任务</span></div>
+        <div class="runtime-node"><b>Orchestrator</b><span>选择策略并控制轮数、时间和重复调用</span></div>
+        <div class="runtime-node"><b>ToolRegistry</b><span>校验 Schema 后调用 19 个业务工具</span></div>
+        <div class="runtime-node"><b>结果综合</b><span>组合证据、缺口、风险和行动优先级</span></div>
+        <div class="runtime-node"><b>领域服务</b><span>只读返回；写入则先生成提议并等待确认</span></div>
+      </div>
+      <div class="grid two" style="margin-top:18px">
+        <article class="card liquid fade-up">
+          <p class="eyebrow">Memory</p>
+          <h3>记忆不是一段无界聊天记录</h3>
+          <div class="runtime-flow">
+            <div class="runtime-step"><strong>W</strong><span><b>工作记忆与摘要记忆：</b>保留当前对话、长对话结论和未完成事项。</span></div>
+            <div class="runtime-step"><strong>S</strong><span><b>语义记忆：</b>只沉淀用户明确确认的岗位、城市、薪资等事实。</span></div>
+            <div class="runtime-step"><strong>E</strong><span><b>情景记忆：</b>保存已完成任务的结果引用，用于相似问题检索。</span></div>
+            <div class="runtime-step"><strong>T</strong><span><b>任务记忆与业务记忆：</b>记录待补槽位，并实时查询简历、机会、面试和行动表。</span></div>
           </div>
         </article>
-        <article class="card liquid theme-card fade-up">
-          <img src="assets/images/hero-bg.png" alt="Glass 主题界面" />
-          <div class="theme-copy">
-            <p class="eyebrow">Glass Theme</p>
-            <h3>液态玻璃科技感</h3>
-            <p>使用项目中的真实首页视觉素材，以透明面板、深色层次和数据化组件强调 AI 求职工作台的工具属性。</p>
-          </div>
+        <article class="card liquid fade-up">
+          <p class="eyebrow">Tool Registry</p>
+          <h3>19 个工具如何解决求职问题</h3>
+          <table class="api-table">
+            <thead><tr><th>工具组</th><th>代表能力</th><th>产出</th></tr></thead>
+            <tbody>
+              <tr><td>简历与 JD</td><td>简历读取/诊断、JD 解析、岗位匹配</td><td>关键词、证据、缺口和改写建议</td></tr>
+              <tr><td>面试与训练</td><td>问题生成、回答评估、训练质量汇总</td><td>准备重点、薄弱问题和表达建议</td></tr>
+              <tr><td>机会与行动</td><td>机会盘点、详情读取、行动项、操作提议</td><td>阶段风险、跟进建议和下一步</td></tr>
+              <tr><td>职业决策</td><td>职业档案、准备度、薪资估算、阶段报告</td><td>目标差距和行动优先级</td></tr>
+              <tr><td>公开信息</td><td>网络搜索、受限网页读取</td><td>需要时效性的公开资料</td></tr>
+            </tbody>
+          </table>
         </article>
       </div>
+    </section>
+
+    <section id="framework" class="wrap section grid two">
+      <article class="card liquid framework-note fade-up">
+        <span class="decision-label">Framework Decision</span>
+        <h2>它是不是 ReAct？</h2>
+        <p><b>准确说法：这是基于 Flask + SQLite 的自研有界 Tool-Calling Runtime，不是标准 ReAct。</b></p>
+        <p>ReAct 强调“推理与行动”循环；本项目不展示或依赖模型的隐藏思维链，而是让模型输出结构化工具调用，由 Orchestrator 在明确预算内执行、校验和综合。模型可用时走 provider-native tool_calls；没有 Key 时由 LocalPolicy 按意图选择确定性多工具规划。</p>
+      </article>
+      <article class="card liquid framework-note fade-up">
+        <span class="decision-label">Why Not LangChain</span>
+        <h2>为什么暂不使用 LangChain / LangGraph</h2>
+        <p>当前复杂度主要在领域事务、分层记忆、提议确认、幂等和恢复语义，而不是缺少通用编排框架。自研 Runtime 依赖更少，也更适合下载即跑的本地 Flask 单体。</p>
+        <p>当系统需要多 Agent 并行、跨服务长流程、人工审批节点图或可视化状态机时，再评估 LangGraph；现有领域服务、工具协议和记忆表可以保留为稳定边界。</p>
+      </article>
     </section>
 
     <section id="screens" class="wrap section">
@@ -943,21 +1006,31 @@
       </div>
     </section>
 
-    <section id="flow" class="wrap section">
+    <section id="themes" class="wrap section">
       <div class="section-head fade-up">
         <div>
-          <p class="eyebrow">Career Loop</p>
-          <h2>业务闭环</h2>
+          <p class="eyebrow">Visual System</p>
+          <h2>双主题视觉系统</h2>
         </div>
-        <p>系统把分散的求职动作串成可追踪流程，每一步的数据都会进入后续智能分析。</p>
+        <p>系统内置 Anime 和 Glass 两套风格。主题切换会同步影响 Logo、背景、Hero、卡片、视觉素材和状态组件，保证从首页到业务模块都保持一致。</p>
       </div>
-      <div class="flow fade-up">
-        <div class="flow-step fade-up"><b>1. 建立简历资产</b><span>上传或录入简历，保留原始文件和解析文本。</span></div>
-        <div class="flow-step fade-up"><b>2. 获取真实 JD</b><span>从招聘平台复制岗位描述，提取技能和职责关键词。</span></div>
-        <div class="flow-step fade-up"><b>3. 定制简历</b><span>生成匹配分、缺口清单、改写建议和面试讲述点。</span></div>
-        <div class="flow-step fade-up"><b>4. 面试训练</b><span>按真实流程训练，保存回答、录音和反馈。</span></div>
-        <div class="flow-step fade-up"><b>5. 投递跟进</b><span>维护岗位阶段，生成跟进话术和风险提醒。</span></div>
-        <div class="flow-step fade-up"><b>6. 复盘提升</b><span>职业脉冲汇总全局数据，给出下一步行动。</span></div>
+      <div class="grid two">
+        <article class="card liquid theme-card fade-up">
+          <img src="assets/images/hero-bg (2).png" alt="Anime 主题界面" />
+          <div class="theme-copy">
+            <p class="eyebrow">Anime Theme</p>
+            <h3>二次元轻潮流</h3>
+            <p>柔和粉、薄荷绿、浅紫、插画角色和漂浮 UI 元素，让求职训练更轻松、更有陪伴感。</p>
+          </div>
+        </article>
+        <article class="card liquid theme-card fade-up">
+          <img src="assets/images/hero-bg.png" alt="Glass 主题界面" />
+          <div class="theme-copy">
+            <p class="eyebrow">Glass Theme</p>
+            <h3>液态玻璃科技感</h3>
+            <p>使用项目中的真实首页视觉素材，以透明面板、深色层次和数据化组件强调 AI 求职工作台的工具属性。</p>
+          </div>
+        </article>
       </div>
     </section>
 
@@ -1028,40 +1101,8 @@
           <li><b>业务层：</b>领域服务统一处理职业档案、简历版本、机会、面试、行动项、状态迁移和领域事件。</li>
           <li><b>数据层：</b>SQLite 保存业务事实、Agent 会话、分层记忆、运行审计、提案和幂等回执。</li>
           <li><b>智能层：</b>自研 Agent Runtime 负责上下文重建、策略切换、工具编排、任务预算与结果综合。</li>
-          <li><b>质量层：</b>Python 291/291、Node 40/40；浏览器矩阵覆盖 Chromium 与 Microsoft Edge。</li>
+          <li><b>质量层：</b>Python 294/294、Node 40/40；浏览器矩阵覆盖 Chromium 与 Microsoft Edge。</li>
         </ul>
-      </article>
-    </section>
-
-    <section id="agent-architecture" class="wrap section grid two">
-      <article class="card liquid fade-up">
-        <p class="eyebrow">Agent Architecture</p>
-        <h2>一次请求如何完成</h2>
-        <div class="runtime-flow">
-          <div class="runtime-step"><strong>01</strong><span><b>上下文重建：</b>服务端根据当前模块、简历或机会 ID 重新读取权威业务数据。</span></div>
-          <div class="runtime-step"><strong>02</strong><span><b>分层检索：</b>组合近期会话、确认画像、历史任务结果、待续槽位和实时业务快照。</span></div>
-          <div class="runtime-step"><strong>03</strong><span><b>策略选择：</b>有 Key 时使用模型原生 tool calls；无 Key 时执行确定性多工具计划。</span></div>
-          <div class="runtime-step"><strong>04</strong><span><b>有界工具循环：</b>限制调用次数、总时长、工具超时和重复指纹，避免无限自循环。</span></div>
-          <div class="runtime-step"><strong>05</strong><span><b>结果综合：</b>将多个工具的结构化结果整理成现状、证据和行动优先级。</span></div>
-          <div class="runtime-step"><strong>06</strong><span><b>安全写入：</b>写操作只生成脱敏预览，用户确认后由领域服务执行并记录回执。</span></div>
-        </div>
-      </article>
-      <article class="card liquid fade-up">
-        <p class="eyebrow">Tool Registry</p>
-        <h2>19 个工具能力地图</h2>
-        <table class="api-table">
-          <thead>
-            <tr><th>工具组</th><th>代表能力</th><th>解决的问题</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>简历与 JD</td><td>查询、读取、诊断、匹配、JD 解析</td><td>找出岗位关键词、项目证据和能力缺口</td></tr>
-            <tr><td>面试训练</td><td>出题、回答评估、训练质量汇总</td><td>建立表达基线并复盘薄弱问题</td></tr>
-            <tr><td>机会与行动</td><td>投递盘点、机会详情、行动项、操作提案</td><td>判断停留阶段并推进下一步</td></tr>
-            <tr><td>职业决策</td><td>职业档案、准备度看板、薪资估算、阶段报告</td><td>综合目标、证据和当前进度</td></tr>
-            <tr><td>外部信息</td><td>公开网络搜索、受限网页读取</td><td>补充需要时效性的公开资料</td></tr>
-            <tr><td>安全边界</td><td>JSON Schema、固定用户、提案确认</td><td>阻止越权参数和未经确认的写入</td></tr>
-          </tbody>
-        </table>
       </article>
     </section>
 
@@ -1081,7 +1122,7 @@
         <p class="eyebrow">Verification & Boundary</p>
         <h2>能运行，也说明边界</h2>
         <ul>
-          <li><b>测试：</b>Python 291/291、Node 40/40。</li>
+          <li><b>测试：</b>Python 294/294、Node 40/40。</li>
           <li><b>浏览器：</b>Microsoft Edge 与 Google Chrome 核心流程通过；本机缺少 Firefox 可执行文件，因此 Mozilla Firefox 记为 SKIP，不冒充 PASS。</li>
           <li><b>无 Key：</b>本地规则模式可完成确定性多工具任务，但不伪装成大模型生成。</li>
           <li><b>隐私：</b>当前是本地单用户应用，SQLite、上传文件、导出、日志和 API Key 不提交到 Git。</li>

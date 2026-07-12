@@ -92,6 +92,47 @@ class ShowcaseContractTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, self.html)
+
+    def test_narrative_introduces_product_then_agent_then_real_evidence(self):
+        overview_position = self.html.index('id="overview"')
+        agent_position = self.html.index('id="agent"')
+        screens_position = self.html.index('id="screens"')
+
+        self.assertLess(overview_position, agent_position)
+        self.assertLess(agent_position, screens_position)
+        for phrase in ("六步求职闭环", "Agent 核心特色", "真实页面实景"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, self.html)
+
+    def test_agent_section_explains_jobs_it_can_finish(self):
+        agent_section = self.html.split('id="agent"', 1)[1].split('id="screens"', 1)[0]
+        for phrase in (
+            "求职诊断与下一步",
+            "简历诊断与 JD 匹配",
+            "面试准备与训练复盘",
+            "机会跟进与行动推进",
+            "读取当前页面上下文",
+            "综合多个工具结果",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, agent_section)
+
+    def test_agent_framework_choice_is_accurate_and_explainable(self):
+        for phrase in (
+            "自研有界 Tool-Calling Runtime",
+            "不是标准 ReAct",
+            "provider-native tool_calls",
+            "LocalPolicy",
+            "ContextBuilder",
+            "MemoryStore",
+            "Orchestrator",
+            "ToolRegistry",
+            "LangGraph",
+            "多 Agent 并行",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, self.html)
+        self.assertNotIn("ReAct 框架实现 AI Agent", self.html)
         self.assertNotIn("13 个工具", self.html)
         self.assertNotIn("ReAct Agent", self.html)
         self.assertNotIn("最近 20 条消息", self.html)
@@ -162,7 +203,7 @@ class ShowcaseContractTests(unittest.TestCase):
             "GitHub Pages",
             "静态项目展示",
             "不能在此直接使用 Agent",
-            "Python 291/291",
+            "Python 294/294",
             "本机缺少 Firefox",
             "PASS",
             "SKIP",
