@@ -58,7 +58,33 @@ test("maps recorded and uploaded audio MIME types to matching extensions", () =>
   assert.equal(Capabilities.extensionForMime("audio/mp4"), "m4a");
   assert.equal(Capabilities.extensionForMime("audio/mpeg"), "mp3");
   assert.equal(Capabilities.extensionForMime("audio/wav"), "wav");
-  assert.equal(Capabilities.extensionForMime(""), "webm");
+  assert.equal(Capabilities.extensionForMime(""), "");
+  assert.equal(Capabilities.extensionForMime("application/octet-stream"), "");
+});
+
+test("preserves safe uploaded extensions when MIME is empty", () => {
+  assert.deepEqual(Capabilities.audioFileDescriptor({ name: "answer.wav", type: "" }), {
+    filename: "answer.wav",
+    extension: "wav",
+    mimeType: "",
+    mayNotPlay: false,
+  });
+  assert.deepEqual(Capabilities.audioFileDescriptor({ name: "voice.m4a", type: "" }), {
+    filename: "voice.m4a",
+    extension: "m4a",
+    mimeType: "",
+    mayNotPlay: false,
+  });
+});
+
+test("uses a safe non-WebM fallback for unknown uploads without extensions", () => {
+  assert.deepEqual(Capabilities.audioFileDescriptor({ name: "voice<>clip", type: "application/octet-stream" }), {
+    filename: "voice__clip.audio",
+    extension: "audio",
+    mimeType: "application/octet-stream",
+    mayNotPlay: true,
+  });
+  assert.match(Capabilities.audioPlaybackErrorMessage(), /下载原文件/);
 });
 
 test("keeps upload and text fallbacks when live recording is unavailable", () => {

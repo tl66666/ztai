@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { after, before, test } = require("node:test");
+const { test } = require("node:test");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -24,10 +24,6 @@ const VIEWPORTS = {
   desktop: { width: 1440, height: 900 },
   mobile: { width: 390, height: 844 },
 };
-
-let server;
-let tempDirectory;
-let baseURL;
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -56,18 +52,31 @@ async function waitForServer(url, child) {
   throw new Error("Timed out waiting for the isolated Flask service");
 }
 
-before(async () => {
+function removeIsolatedTempDirectory(directory) {
+  const resolved = path.resolve(directory);
+  const tempRoot = `${path.resolve(os.tmpdir())}${path.sep}`;
+  assert.ok(resolved.startsWith(tempRoot), `Refusing to remove path outside temp: ${resolved}`);
+  assert.ok(path.basename(resolved).startsWith("jobhunter-e2e-"), `Refusing to remove unexpected temp path: ${resolved}`);
+  if (!fs.existsSync(resolved)) return;
+  for (const entry of fs.readdirSync(resolved, { withFileTypes: true })) {
+    assert.equal(entry.isDirectory(), false, `Unexpected directory in isolated database path: ${entry.name}`);
+    fs.unlinkSync(path.join(resolved, entry.name));
+  }
+  fs.rmdirSync(resolved);
+}
+
+async function startIsolatedServer(label) {
   fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
-  tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "jobhunter-e2e-"));
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `jobhunter-e2e-${label}-`));
   const port = await freePort();
-  baseURL = `http://127.0.0.1:${port}`;
+  const baseURL = `http://127.0.0.1:${port}`;
   const python = process.env.PYTHON || "python";
   const program = [
     "import app as module",
     "module.init_db()",
     `module.app.run(host='127.0.0.1', port=${port}, debug=False, use_reloader=False, threaded=True)`,
   ].join("; ");
-  server = spawn(python, ["-c", program], {
+  const server = spawn(python, ["-c", program], {
     cwd: ROOT,
     env: {
       ...process.env,
@@ -83,22 +92,30 @@ before(async () => {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
-  const log = fs.createWriteStream(path.join(ARTIFACT_DIR, "e2e-server.log"), { flags: "w" });
+  const log = fs.createWriteStream(path.join(ARTIFACT_DIR, `${label}-server.log`), { flags: "w" });
   server.stdout.pipe(log);
   server.stderr.pipe(log);
   await waitForServer(baseURL, server);
-});
-
-after(async () => {
-  if (server && server.exitCode === null) {
-    server.kill();
-    await Promise.race([
-      new Promise((resolve) => server.once("exit", resolve)),
-      new Promise((resolve) => setTimeout(resolve, 2_000)),
-    ]);
-  }
-  if (tempDirectory) fs.rmSync(tempDirectory, { recursive: true, force: true });
-});
+  return {
+    baseURL,
+    async close() {
+      if (server.exitCode === null) {
+        const exited = new Promise((resolve) => server.once("exit", () => resolve(true)));
+        server.kill();
+        const stopped = await Promise.race([
+          exited,
+          new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
+        ]);
+        if (!stopped && server.exitCode === null) {
+          throw new Error(`Isolated Flask service did not stop: ${tempDirectory}`);
+        }
+      }
+      if (!log.writableEnded) await new Promise((resolve) => log.end(resolve));
+      removeIsolatedTempDirectory(tempDirectory);
+      assert.equal(fs.existsSync(tempDirectory), false, `Temporary database was not removed: ${tempDirectory}`);
+    },
+  };
+}
 
 function browserMatrix() {
   const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
@@ -145,6 +162,46 @@ async function fetchJson(page, endpoint, options = {}) {
   }, { endpoint, options });
 }
 
+async function assertKeyGeometry(page, label) {
+  const collisions = await page.evaluate(() => {
+    const visibleRect = (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      if (style.display === "none" || style.visibility === "hidden" || rect.width < 2 || rect.height < 2) return null;
+      return { selector, left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+    };
+    const overlaps = (a, b) => a && b
+      && Math.min(a.right, b.right) - Math.max(a.left, b.left) > 2
+      && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 2;
+    const orderedPairs = [
+      ["#pageTitle", ".top-actions"],
+      ["#careerGoalTitle", "#careerGoalForm"],
+      ["#page-interview .page-subnav", "#page-interview .interview-grid"],
+      ["#roomQuestion", "#roomAnswer"],
+      ["#roomAnswer", "#roomSubmitBtn"],
+      ["#opportunityWorkspaceTitle", ".opportunity-tabs"],
+      [".opportunity-tabs", ".opportunity-panel:not(.hidden)"],
+      ["#agentDrawerTitle", "#agentInput"],
+    ];
+    const modalOpen = document.body.classList.contains("agent-drawer-open")
+      || !document.querySelector("#interviewRoom")?.classList.contains("hidden");
+    const launcherTargets = (modalOpen ? [] : [
+      "#careerGoalRole", "#saveCareerGoalBtn", "#resumeContent", "#saveResumeBtn",
+      "#jdInput", "#matchBtn", "#appCompany", "#saveAppBtn", "#startInterviewBtn",
+      "#answerInput", "#audioFileInput", "#roomAnswer", "#roomSubmitBtn",
+      ".opportunity-tabs", ".opportunity-panel:not(.hidden)",
+    ]).map((selector) => ["#agentLauncher", selector]);
+    return [...orderedPairs, ...launcherTargets].flatMap(([first, second]) => {
+      const a = visibleRect(first);
+      const b = visibleRect(second);
+      return overlaps(a, b) ? [`${first} overlaps ${second}`] : [];
+    });
+  });
+  assert.deepEqual(collisions, [], `${label}: incoherent key-element overlap`);
+}
+
 async function assertViewportIntegrity(page, viewport, label) {
   const layout = await page.evaluate(() => {
     const documentWidth = document.documentElement.clientWidth;
@@ -152,8 +209,11 @@ async function assertViewportIntegrity(page, viewport, label) {
       .filter((element) => {
         const style = getComputedStyle(element);
         const box = element.getBoundingClientRect();
+        const horizontalScroller = element.closest(".opportunity-tabs, .page-subnav, .nav");
+        const intentionallyScrollable = horizontalScroller
+          && horizontalScroller.scrollWidth > horizontalScroller.clientWidth + 1;
         return style.display !== "none" && style.visibility !== "hidden" && box.width > 0
-          && (box.left < -1 || box.right > documentWidth + 1);
+          && !intentionallyScrollable && (box.left < -1 || box.right > documentWidth + 1);
       })
       .slice(0, 8)
       .map((element) => `${element.tagName.toLowerCase()}#${element.id || element.className}`);
@@ -165,6 +225,7 @@ async function assertViewportIntegrity(page, viewport, label) {
   });
   assert.ok(layout.scrollWidth <= layout.clientWidth + 1, `${label}: horizontal overflow ${layout.scrollWidth}/${layout.clientWidth}`);
   assert.deepEqual(layout.overflows, [], `${label}: controls outside viewport`);
+  await assertKeyGeometry(page, label);
 
   const launcher = page.locator("#agentLauncher");
   await launcher.click();
@@ -176,9 +237,16 @@ async function assertViewportIntegrity(page, viewport, label) {
   });
   const drawerBox = await drawer.boundingBox();
   const inputBox = await page.locator("#agentInput").boundingBox();
-  assert.ok(drawerBox && inputBox, `${label}: Agent surface did not render`);
+  const closeBox = await page.locator("#closeAgentDrawer").boundingBox();
+  assert.ok(drawerBox && inputBox && closeBox, `${label}: Agent surface did not render`);
   assert.ok(inputBox.x >= drawerBox.x - 1 && inputBox.x + inputBox.width <= drawerBox.x + drawerBox.width + 1,
     `${label}: Agent input escapes its surface`);
+  assert.ok(inputBox.y >= drawerBox.y - 1 && inputBox.y + inputBox.height <= drawerBox.y + drawerBox.height + 1,
+    `${label}: Agent input is clipped vertically`);
+  assert.ok(closeBox.x >= drawerBox.x - 1 && closeBox.y >= drawerBox.y - 1
+    && closeBox.x + closeBox.width <= drawerBox.x + drawerBox.width + 1
+    && closeBox.y + closeBox.height <= drawerBox.y + drawerBox.height + 1,
+  `${label}: Agent close control is clipped`);
   if (viewport.width <= 480) {
     assert.ok(drawerBox.width >= viewport.width * 0.9
       && drawerBox.y >= viewport.height * 0.05
@@ -188,10 +256,11 @@ async function assertViewportIntegrity(page, viewport, label) {
     assert.ok(drawerBox.x >= viewport.width * 0.55 && drawerBox.height >= viewport.height * 0.9,
       `${label}: Agent should be a desktop right drawer`);
   }
+  await assertKeyGeometry(page, `${label}-agent-surface`);
   await page.locator("#closeAgentDrawer").click();
 }
 
-async function runCareerWorkflow(browser, browserName, viewportName, viewport) {
+async function runCareerWorkflow(browser, browserName, viewportName, viewport, baseURL) {
   const context = await browser.newContext({ viewport, locale: "zh-CN" });
   await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
   const page = await context.newPage();
@@ -220,6 +289,9 @@ async function runCareerWorkflow(browser, browserName, viewportName, viewport) {
   });
 
   const suffix = `${browserName}-${viewportName}-${Date.now()}`;
+  const screenshotPath = path.join(ARTIFACT_DIR, `${browserName}-${viewportName}.png`);
+  const tracePath = path.join(ARTIFACT_DIR, `${browserName}-${viewportName}-trace.zip`);
+  try {
   await page.goto(baseURL, { waitUntil: "domcontentloaded" });
   await page.locator("#resumeCount").waitFor({ state: "attached" });
   await page.waitForFunction(() => document.querySelector("#providerSelect")?.options.length > 0);
@@ -240,19 +312,20 @@ async function runCareerWorkflow(browser, browserName, viewportName, viewport) {
   assert.equal(await page.locator("#answerInput").isEnabled(), true, `${suffix}: text fallback disabled`);
   await assertViewportIntegrity(page, viewport, suffix);
 
-  const profile = await fetchJson(page, "/api/profile", {
-    method: "PUT",
-    body: {
-      career_direction: "software",
-      target_role: "AI 应用测试工程师",
-      cities: ["杭州"],
-      salary: { min: 15, max: 25 },
-      confirmed_skills: ["Python", "接口测试", "Playwright"],
-      source_metadata: { form: "browser-e2e" },
-    },
+  await page.locator("#careerGoalRole").fill("AI 应用测试工程师");
+  await page.locator("#careerGoalCities").fill("杭州");
+  await page.locator("#careerGoalSalaryMin").fill("15");
+  await page.locator("#careerGoalSalaryMax").fill("25");
+  await page.locator("#careerGoalSkills").fill("Python、接口测试、Playwright");
+  const profileResult = jsonFrom(page.waitForResponse((response) => (
+    response.url().endsWith("/api/profile") && response.request().method() === "PUT"
+  )));
+  await page.locator("#saveCareerGoalBtn").click();
+  const { body: profileBody } = await profileResult;
+  assert.equal(profileBody.data.target_role, "AI 应用测试工程师");
+  await assert.doesNotReject(async () => {
+    await page.locator("#careerGoalStatus").getByText("目标档案已保存", { exact: false }).waitFor();
   });
-  assert.equal(profile.status, 200);
-  assert.equal(profile.body.data.target_role, "AI 应用测试工程师");
 
   await page.evaluate(() => navigateToRoute("resume", "input"));
   await page.locator("#resumeTitle").fill(`跨浏览器简历-${suffix}`);
@@ -264,6 +337,7 @@ async function runCareerWorkflow(browser, browserName, viewportName, viewport) {
   const { body: resumeBody } = await resumeResult;
   const resumeId = Number(resumeBody.resume_id);
   assert.ok(resumeId > 0, `${suffix}: resume was not persisted`);
+  await assertKeyGeometry(page, `${suffix}-resume-form`);
 
   await page.evaluate(() => navigateToRoute("resume", "jd"));
   await page.locator("#tailorResumeSelect").selectOption(String(resumeId));
@@ -303,6 +377,37 @@ async function runCareerWorkflow(browser, browserName, viewportName, viewport) {
   await page.locator("#closeAgentDrawer").click();
 
   await page.evaluate(() => prepareInterviewFromOpportunity(null));
+  await page.locator("#page-interview").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#voiceBtn").isHidden(), true, `${suffix}: speech entry visible without support`);
+  assert.equal(await page.locator("#voiceBtn").isDisabled(), true, `${suffix}: speech entry enabled without support`);
+  assert.equal(await page.locator("#voiceBtn").getAttribute("aria-hidden"), "true");
+  assert.match(await page.locator("#speechCapabilityStatus").textContent(), /文字回答/);
+  assert.equal(await page.locator("#recordAudioBtn").isHidden(), true, `${suffix}: recording entry visible without support`);
+  assert.equal(await page.locator("#recordAudioBtn").isDisabled(), true, `${suffix}: recording entry enabled without support`);
+  assert.equal(await page.locator("#recordAudioBtn").getAttribute("aria-hidden"), "true");
+  assert.match(await page.locator("#recordingCapabilityStatus").textContent(), /上传音频.*文字回答/);
+  await page.locator("#audioFileInput").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#audioFileInput").isEnabled(), true);
+  assert.equal(await page.locator("#answerInput").isVisible(), true);
+  assert.equal(await page.locator("#answerInput").isEnabled(), true);
+  await assertKeyGeometry(page, `${suffix}-interview-fallback`);
+  await page.locator("#audioFileInput").setInputFiles({
+    name: "fallback-answer.wav",
+    mimeType: "",
+    buffer: Buffer.from("not-a-decodable-wave-file"),
+  });
+  assert.match(await page.locator("#audioFileInput").inputValue(), /fallback-answer\.wav$/);
+  await page.locator("#audioDownloadLink").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#audioDownloadLink").getAttribute("download"), "fallback-answer.wav");
+  await page.locator("#audioPlayback").dispatchEvent("error");
+  assert.match(await page.locator("#audioPlaybackStatus").textContent(), /下载原文件.*文字回答/);
+  await page.locator("#answerInput").fill("我会继续使用文字回答，并保留上传音频供表达分析。");
+  const audioAnalysis = jsonFrom(page.waitForResponse((response) => (
+    response.url().endsWith("/api/interview/analyze-audio") && response.request().method() === "POST"
+  )));
+  await page.locator("#analyzeAudioBtn").click();
+  const { body: audioAnalysisBody } = await audioAnalysis;
+  assert.equal(audioAnalysisBody.success, true, `${suffix}: uploaded audio was not submittable`);
   await page.locator("#interviewResumeSelect").selectOption(String(resumeId));
   const startResponsePromise = page.waitForResponse((response) => response.url().endsWith("/api/interview/sessions") && response.request().method() === "POST");
   await page.locator("#startInterviewBtn").click();
@@ -326,10 +431,20 @@ async function runCareerWorkflow(browser, browserName, viewportName, viewport) {
   await page.locator("#opportunity-interview").getByRole("button", { name: "继续面试" }).click();
   await continueResponse;
   await page.locator("#interviewRoom").waitFor({ state: "visible" });
+  await assertKeyGeometry(page, `${suffix}-interview-room`);
+  assert.equal(await page.locator("#voiceBtn").isHidden(), true, `${suffix}: speech fallback failed after restart`);
+  assert.equal(await page.locator("#voiceBtn").isDisabled(), true);
+  assert.equal(await page.locator("#voiceBtn").getAttribute("aria-hidden"), "true");
+  assert.match(await page.locator("#speechCapabilityStatus").textContent(), /文字回答/);
   assert.equal(await page.locator("#recordAudioBtn").isHidden(), true, `${suffix}: recording fallback failed on visible interview page`);
+  assert.equal(await page.locator("#recordAudioBtn").isDisabled(), true);
+  assert.equal(await page.locator("#recordAudioBtn").getAttribute("aria-hidden"), "true");
   assert.equal(await page.locator("#roomRecordBtn").isHidden(), true, `${suffix}: room recording fallback failed`);
+  assert.equal(await page.locator("#roomRecordBtn").isDisabled(), true);
   assert.equal(await page.locator("#audioFileInput").isEnabled(), true, `${suffix}: upload fallback failed after restart`);
+  assert.equal(await page.locator("#audioFileInput").isVisible(), true, `${suffix}: upload fallback hidden after restart`);
   assert.equal(await page.locator("#roomAnswer").isEnabled(), true, `${suffix}: text fallback failed after restart`);
+  assert.equal(await page.locator("#roomAnswer").isVisible(), true, `${suffix}: room text fallback hidden after restart`);
   const session = await fetchJson(page, `/api/interview/sessions/${encodeURIComponent(sessionId)}`);
   assert.equal(session.body.status, "active");
   const workspace = await fetchJson(page, `/api/opportunities/${opportunityId}/workspace`);
@@ -339,24 +454,43 @@ async function runCareerWorkflow(browser, browserName, viewportName, viewport) {
   assert.ok(timeline.body.data.some((event) => event.event_type === "opportunity.updated"), `${suffix}: status update absent from timeline`);
 
   await page.locator("#closeInterviewRoom").click();
-  await page.screenshot({ path: path.join(ARTIFACT_DIR, `${browserName}-${viewportName}.png`), fullPage: false });
+  await page.evaluate((id) => openOpportunityWorkspace(id), opportunityId);
+  await page.locator("#opportunity-tab-timeline").click();
+  await page.locator("#opportunity-timeline").waitFor({ state: "visible" });
+  const timelineText = await page.locator("#opportunity-timeline").innerText();
+  assert.match(timelineText, /opportunity\.created/, `${suffix}: created event not visible in timeline UI`);
+  assert.match(timelineText, /opportunity\.updated/, `${suffix}: updated event not visible in timeline UI`);
   await assertViewportIntegrity(page, viewport, `${suffix}-final`);
   assert.deepEqual(project404s, [], `${suffix}: project resources returned 404`);
   assert.deepEqual(pageErrors, [], `${suffix}: unhandled page errors`);
   assert.deepEqual(consoleErrors, [], `${suffix}: console errors`);
-  await context.tracing.stop({ path: path.join(ARTIFACT_DIR, `${browserName}-${viewportName}-trace.zip`) });
-  await context.close();
+  } finally {
+    await page.screenshot({ path: screenshotPath, fullPage: false }).catch(() => {});
+    await context.tracing.stop({ path: tracePath }).catch(() => {});
+    await context.close().catch(() => {});
+  }
 }
 
 for (const browserConfig of browserMatrix()) {
   for (const [viewportName, viewport] of Object.entries(VIEWPORTS)) {
     const name = `${browserConfig.name} ${viewportName} career workflow`;
-    test(name, { timeout: 120_000, skip: browserConfig.skip || undefined }, async () => {
-      const browser = await browserConfig.type.launch({ headless: true, ...browserConfig.launch });
+    test(name, { timeout: 150_000, skip: browserConfig.skip || undefined }, async () => {
+      const artifactBase = `${browserConfig.name}-${viewportName}`;
+      for (const filename of [
+        `${artifactBase}.png`, `${artifactBase}-trace.zip`, `${artifactBase}-server.log`,
+      ]) {
+        fs.rmSync(path.join(ARTIFACT_DIR, filename), { force: true });
+      }
+      const service = await startIsolatedServer(artifactBase);
+      let browser;
       try {
-        await runCareerWorkflow(browser, browserConfig.name, viewportName, viewport);
+        browser = await browserConfig.type.launch({ headless: true, ...browserConfig.launch });
+        await runCareerWorkflow(
+          browser, browserConfig.name, viewportName, viewport, service.baseURL
+        );
       } finally {
-        await browser.close();
+        await browser?.close().catch(() => {});
+        await service.close();
       }
     });
   }

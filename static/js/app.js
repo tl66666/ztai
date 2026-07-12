@@ -102,6 +102,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   applyBrowserCapabilities();
   setupSpeechRecognition();
   await loadCareerProfiles();
+  await loadCareerGoal();
   await loadProviders();
   await Promise.all([loadResumes(), loadDashboard(), loadApplications(), loadQuestions(), loadTrainingRecords()]);
   await loadAgentConversations();
@@ -185,6 +186,7 @@ function bindActions() {
     loadQuestions($("questionCategory")?.value || "general");
     toast(`已切换求职方向：${careerProfileLabel(state.careerProfile)}`);
   });
+  $("careerGoalForm")?.addEventListener("submit", saveCareerGoal);
   document.querySelectorAll("[data-flow-jump]").forEach((button) => {
     button.addEventListener("click", () => {
       const [page, module] = button.dataset.flowJump.split(":");
@@ -325,6 +327,63 @@ async function loadCareerProfiles() {
   state.careerProfile = select.value;
   localStorage.setItem("jobhunter_career_profile", state.careerProfile);
   syncCareerProfileToForms();
+}
+
+function listInputValue(id) {
+  return $(id).value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function optionalNumberValue(id) {
+  const value = $(id).value.trim();
+  return value === "" ? null : Number(value);
+}
+
+async function loadCareerGoal() {
+  const data = await api("/profile");
+  const profile = data.success ? data.data : null;
+  if (!profile) return;
+  $("careerGoalRole").value = profile.target_role || "";
+  $("careerGoalCities").value = (profile.cities || []).join("、");
+  $("careerGoalSalaryMin").value = profile.salary?.min ?? "";
+  $("careerGoalSalaryMax").value = profile.salary?.max ?? "";
+  $("careerGoalSkills").value = (profile.confirmed_skills || []).join("、");
+  $("careerGoalStatus").textContent = `已载入目标档案：${profile.target_role || "未设置目标岗位"}`;
+}
+
+async function saveCareerGoal(event) {
+  event?.preventDefault();
+  const targetRole = $("careerGoalRole").value.trim();
+  const salaryMin = optionalNumberValue("careerGoalSalaryMin");
+  const salaryMax = optionalNumberValue("careerGoalSalaryMax");
+  if (!targetRole) {
+    $("careerGoalStatus").textContent = "请填写目标岗位。";
+    $("careerGoalRole").focus();
+    return;
+  }
+  if (salaryMin !== null && salaryMax !== null && salaryMin > salaryMax) {
+    $("careerGoalStatus").textContent = "薪资下限不能高于上限。";
+    $("careerGoalSalaryMin").focus();
+    return;
+  }
+  const data = await api("/profile", {
+    method: "PUT",
+    body: {
+      career_direction: selectedCareerProfile(),
+      target_role: targetRole,
+      cities: listInputValue("careerGoalCities"),
+      salary: { min: salaryMin, max: salaryMax },
+      confirmed_skills: listInputValue("careerGoalSkills"),
+      source_metadata: { form: "career-goal-editor" },
+    },
+  });
+  if (!data.success) {
+    $("careerGoalStatus").textContent = data.message || "目标档案保存失败，请重试。";
+    return;
+  }
+  $("careerGoalStatus").textContent = `目标档案已保存：${data.data.target_role}`;
+  toast("求职目标档案已保存");
+  await loadDashboard();
+  syncAgentContext();
 }
 
 function selectedCareerProfile() {
@@ -781,7 +840,10 @@ async function downloadSavedAudio(filename, format = "wav") {
     }
   }
   const response = await fetch(`${API}/uploads/${encodeURIComponent(filename)}/download/${format}`);
-  await downloadResponse(response, `${audioDownloadBase(filename)}.${format === "original" ? audioExtensionFromMime("") : format}`);
+  const fallbackName = format === "original"
+    ? BrowserCapabilities.audioFileDescriptor({ name: filename, type: "" }).filename
+    : `${audioDownloadBase(filename)}.${format}`;
+  await downloadResponse(response, fallbackName);
 }
 
 async function downloadResponse(response, fallbackName) {
@@ -1269,7 +1331,7 @@ async function startAudioRecording(target = "answer") {
     };
     state.mediaRecorder.onstop = async () => {
       stream.getTracks().forEach((track) => track.stop());
-      const mimeType = state.mediaRecorder.mimeType || state.recorderFormat?.mimeType || "audio/webm";
+      const mimeType = state.mediaRecorder.mimeType || state.recorderFormat?.mimeType || "";
       state.audioBlob = new Blob(state.audioChunks, { type: mimeType });
       state.audioMetrics = await computeAudioMetrics(state.audioBlob);
       renderAudioPreview(target);
@@ -1357,11 +1419,31 @@ async function computeAudioMetrics(blob) {
 function renderAudioPreview(target = "answer") {
   const playback = target === "room" ? $("roomAudioPlayback") : $("audioPlayback");
   const preview = target === "room" ? $("roomAudioMetricPreview") : $("audioMetricPreview");
+  const status = target === "room" ? $("roomAudioPlaybackStatus") : $("audioPlaybackStatus");
+  const download = target === "room" ? $("roomAudioDownloadLink") : $("audioDownloadLink");
   if (state.audioBlob) {
     if (playback.dataset.url) URL.revokeObjectURL(playback.dataset.url);
     const url = URL.createObjectURL(state.audioBlob);
+    const descriptor = BrowserCapabilities.audioFileDescriptor(state.audioBlob);
     playback.src = url;
     playback.dataset.url = url;
+    download.href = url;
+    download.download = descriptor.filename;
+    download.classList.remove("hidden");
+    status.classList.remove("hidden", "is-warning");
+    status.textContent = descriptor.mayNotPlay
+      ? BrowserCapabilities.audioPlaybackErrorMessage()
+      : `已载入 ${descriptor.filename}，可回放或下载原文件。`;
+    status.classList.toggle("is-warning", descriptor.mayNotPlay);
+    playback.onerror = () => {
+      status.textContent = BrowserCapabilities.audioPlaybackErrorMessage();
+      status.classList.remove("hidden");
+      status.classList.add("is-warning");
+      download.classList.remove("hidden");
+    };
+    playback.oncanplay = () => {
+      if (!descriptor.mayNotPlay) status.classList.remove("is-warning");
+    };
   }
   const metrics = state.audioMetrics || {};
   preview.classList.remove("hidden");
@@ -1378,7 +1460,8 @@ async function analyzeRecordedAudio(target = "answer") {
   const transcript = target === "room" ? $("roomAnswer").value.trim() : $("answerInput").value.trim();
   if (!transcript) return toast("请补充转写文本，AI 需要结合内容和声音一起分析");
   const form = new FormData();
-  form.append("audio", state.audioBlob, `interview-answer.${audioExtensionFromMime(state.audioBlob.type)}`);
+  const descriptor = BrowserCapabilities.audioFileDescriptor(state.audioBlob);
+  form.append("audio", state.audioBlob, descriptor.filename);
   form.append("user_id", USER_ID);
   form.append("transcript", transcript);
   form.append("duration_seconds", String(state.audioMetrics?.duration_seconds || 0));

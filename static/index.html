@@ -102,6 +102,22 @@
         <article class="metric"><span id="statApps">0</span><small>条投递</small></article>
       </div>
 
+      <section class="panel career-goal-panel" aria-labelledby="careerGoalTitle">
+        <div class="panel-head">
+          <div><p class="eyebrow">Career Profile</p><h3 id="careerGoalTitle">求职目标档案</h3></div>
+          <span class="pill">Agent Memory</span>
+        </div>
+        <form id="careerGoalForm" class="career-goal-form">
+          <label><span>目标岗位</span><input id="careerGoalRole" class="input" required placeholder="例如：AI 应用测试工程师" /></label>
+          <label><span>目标城市</span><input id="careerGoalCities" class="input" placeholder="杭州、上海" /></label>
+          <label><span>期望薪资下限（K）</span><input id="careerGoalSalaryMin" class="input" type="number" min="0" step="1" inputmode="numeric" /></label>
+          <label><span>期望薪资上限（K）</span><input id="careerGoalSalaryMax" class="input" type="number" min="0" step="1" inputmode="numeric" /></label>
+          <label class="career-goal-skills"><span>已确认技能</span><input id="careerGoalSkills" class="input" placeholder="Python、接口测试、Playwright" /></label>
+          <button id="saveCareerGoalBtn" class="primary" type="submit"><i data-lucide="save"></i>保存目标档案</button>
+        </form>
+        <p id="careerGoalStatus" class="career-goal-status" role="status" aria-live="polite">填写后，Agent 会在后续简历、机会和面试建议中使用这些已确认信息。</p>
+      </section>
+
       <section class="career-pulse" id="careerPulse">
         <div class="pulse-score">
           <span id="readinessScore">0</span>
@@ -345,6 +361,10 @@
               <button class="ghost" id="analyzeAudioBtn"><i data-lucide="waveform"></i>分析录音</button>
             </div>
             <audio id="audioPlayback" controls></audio>
+            <div class="audio-playback-fallback">
+              <p id="audioPlaybackStatus" class="audio-playback-status hidden" role="status" aria-live="polite"></p>
+              <a id="audioDownloadLink" class="ghost small audio-download-link hidden" download>下载原文件</a>
+            </div>
             <label class="audio-upload">
               <span>上传已有面试录音</span>
               <input id="audioFileInput" class="input" type="file" accept="audio/*,.webm,.mp3,.wav,.m4a" />
@@ -597,6 +617,10 @@
           <button class="ghost" id="roomAnalyzeAudioBtn"><i data-lucide="waveform"></i>分析录音</button>
         </div>
         <audio id="roomAudioPlayback" controls></audio>
+        <div class="audio-playback-fallback">
+          <p id="roomAudioPlaybackStatus" class="audio-playback-status hidden" role="status" aria-live="polite"></p>
+          <a id="roomAudioDownloadLink" class="ghost small audio-download-link hidden" download>下载原文件</a>
+        </div>
         <div id="roomAudioMetricPreview" class="audio-metrics hidden"></div>
       </div>
       <div class="button-row">

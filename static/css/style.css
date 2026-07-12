@@ -14,6 +14,7 @@
   --shadow: 0 24px 60px rgba(83, 72, 116, 0.16);
   --radius: 22px;
   --radius-sm: 14px;
+  --agent-launcher-rail: 148px;
 }
 
 body[data-theme="glass"] {
@@ -142,7 +143,7 @@ button { cursor: pointer; }
 .shell {
   position: relative;
   margin-left: 280px;
-  padding: 22px 30px 44px;
+  padding: 22px var(--agent-launcher-rail) 44px 30px;
 }
 .topbar {
   position: sticky;
@@ -309,8 +310,8 @@ h3 { font-size: 19px; margin-bottom: 0; }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 .page-subnav {
-  position: sticky;
-  top: 88px;
+  position: relative;
+  top: auto;
   z-index: 9;
   display: flex;
   gap: 8px;
@@ -506,6 +507,19 @@ h3 { font-size: 19px; margin-bottom: 0; }
   color: var(--dark);
 }
 .metric small { color: var(--muted); }
+
+.career-goal-panel { margin: 18px 0; padding: 20px; }
+.career-goal-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+.career-goal-form label { display: grid; gap: 7px; min-width: 0; }
+.career-goal-form label > span { color: var(--muted); font-size: 13px; font-weight: 800; }
+.career-goal-skills { grid-column: span 3; }
+.career-goal-form .primary { min-height: 48px; }
+.career-goal-status { margin: 12px 0 0; color: var(--muted); font-size: 13px; }
 
 .career-pulse {
   display: grid;
@@ -1093,6 +1107,10 @@ h3 { font-size: 19px; margin-bottom: 0; }
   width: 100%;
   min-height: 38px;
 }
+.audio-playback-fallback { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.audio-playback-status { margin: 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.audio-playback-status.is-warning { color: #9a3412; font-weight: 800; }
+.audio-download-link { min-height: 44px; display: inline-flex; align-items: center; text-decoration: none; }
 .audio-upload {
   display: grid;
   gap: 8px;
@@ -1697,11 +1715,13 @@ canvas { max-width: 100%; }
     margin: 10px;
     flex-direction: row;
     align-items: center;
+    padding-right: 78px;
   }
   .nav { grid-auto-flow: column; overflow-x: auto; margin: 0 0 0 8px; }
   .nav-item { width: 46px; padding: 0; justify-content: center; }
   .nav-item span, .provider-mini, .brand span { display: none; }
   .shell { margin-left: 0; padding: 8px 14px 30px; }
+  .agent-launcher { top: 24px; right: 24px; bottom: auto; }
   .topbar { position: relative; align-items: flex-start; flex-direction: column; }
   .top-actions { width: 100%; justify-content: stretch; }
   .theme-block, .config-button { flex: 1 1 240px; justify-content: center; }
@@ -1710,6 +1730,8 @@ canvas { max-width: 100%; }
   .model-config-grid .primary { width: 100%; }
   .compact, .model-input, .custom-model-input, .key-input { width: calc(50% - 28px); flex: 1; }
   .home-grid, .lab-grid, .interview-grid, .chat-shell, .records-grid, .practice-workbench, .career-pulse { grid-template-columns: 1fr; }
+  .career-goal-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .career-goal-skills { grid-column: span 1; }
   .hero-route { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .journey-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .answer-studio { position: relative; top: auto; }
@@ -1721,6 +1743,7 @@ canvas { max-width: 100%; }
 @media (max-width: 700px) {
   .hero { min-height: 540px; }
   .metric-grid, .form-grid, .form-grid.four { grid-template-columns: 1fr; }
+  .career-goal-form { grid-template-columns: minmax(0, 1fr); }
   .model-config-grid { grid-template-columns: 1fr; }
   .compact, .model-input, .custom-model-input, .key-input { width: 100%; }
   .top-actions .icon-button { width: 100%; }
@@ -1742,7 +1765,7 @@ canvas { max-width: 100%; }
   .agent-command-head { align-items: stretch; flex-direction: column; gap: 12px; }
   .agent-command-head .primary { width: 100%; }
   .agent-command-grid { grid-template-columns: minmax(0, 1fr); }
-  .agent-launcher { right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom)); min-width: 52px; width: 52px; padding: 0; }
+  .agent-launcher { top: max(18px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right)); bottom: auto; min-width: 52px; width: 52px; padding: 0; }
   .agent-launcher > span { display: none; }
   .agent-launcher b { position: absolute; top: -7px; right: -4px; }
   .agent-drawer {

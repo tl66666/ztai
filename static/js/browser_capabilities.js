@@ -35,10 +35,43 @@
   function extensionForMime(mime = "") {
     const normalized = String(mime).toLowerCase();
     if (normalized.includes("mp4") || normalized.includes("m4a")) return "m4a";
+    if (normalized.includes("webm")) return "webm";
     if (normalized.includes("ogg")) return "ogg";
     if (normalized.includes("mpeg") || normalized.includes("mp3")) return "mp3";
     if (normalized.includes("wav")) return "wav";
-    return "webm";
+    return "";
+  }
+
+  const SAFE_AUDIO_EXTENSIONS = new Set([
+    "webm", "ogg", "m4a", "mp4", "mp3", "wav", "aac", "flac", "opus", "audio",
+  ]);
+
+  function audioFileDescriptor(file = {}) {
+    const mimeType = typeof file.type === "string" ? file.type : "";
+    const rawName = typeof file.name === "string" && file.name.trim()
+      ? file.name.trim().split(/[\\/]/).pop()
+      : "interview-answer";
+    const sanitized = rawName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").slice(0, 180) || "interview-answer";
+    const originalMatch = sanitized.match(/\.([a-z0-9]{1,10})$/i);
+    const originalExtension = originalMatch?.[1].toLowerCase() || "";
+    const mimeExtension = extensionForMime(mimeType);
+    const extension = SAFE_AUDIO_EXTENSIONS.has(originalExtension)
+      ? originalExtension
+      : (mimeExtension || "audio");
+    const base = originalMatch ? sanitized.slice(0, -originalMatch[0].length) : sanitized;
+    const filename = SAFE_AUDIO_EXTENSIONS.has(originalExtension)
+      ? sanitized
+      : `${base || "interview-answer"}.${extension}`;
+    return {
+      filename,
+      extension,
+      mimeType,
+      mayNotPlay: extension === "audio",
+    };
+  }
+
+  function audioPlaybackErrorMessage() {
+    return "当前浏览器无法播放此格式，可下载原文件；文字回答仍可继续。";
   }
 
   function audioInputPlan(scope = {}, navigatorLike = {}) {
@@ -97,6 +130,8 @@
     canRecordAudio,
     selectRecorderFormat,
     extensionForMime,
+    audioFileDescriptor,
+    audioPlaybackErrorMessage,
     audioInputPlan,
     applyCapabilityUI,
     startSpeechSafely,
