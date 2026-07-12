@@ -59,7 +59,7 @@ class ToolDefinition:
 
 
 def _validate(schema: dict, arguments: dict) -> list[str]:
-    return _validate_schema_value(schema, arguments, "参数", schema, 0)
+    return _validate_schema_value(schema, arguments, "参数", schema, 0, 0, None)
 
 
 def _validate_schema_value(
@@ -67,20 +67,33 @@ def _validate_schema_value(
     value,
     path: str,
     root_schema: dict,
-    depth: int,
+    schema_depth: int,
+    data_depth: int,
+    max_data_depth: int | None,
 ) -> list[str]:
-    if depth > 20:
+    if schema_depth > 100:
+        return [f"{path} 结构过于复杂"]
+    if "x-maxDataDepth" in schema:
+        max_data_depth = int(schema["x-maxDataDepth"])
+        data_depth = 0
+    if max_data_depth is not None and data_depth > max_data_depth:
         return [f"{path} 嵌套过深"]
     if "$ref" in schema:
         target = _resolve_local_ref(root_schema, schema["$ref"])
-        return _validate_schema_value(target, value, path, root_schema, depth + 1)
+        return _validate_schema_value(
+            target, value, path, root_schema,
+            schema_depth + 1, data_depth, max_data_depth,
+        )
 
     errors: list[str] = []
     if "oneOf" in schema:
         matches = [
             branch
             for branch in schema["oneOf"]
-            if not _validate_schema_value(branch, value, path, root_schema, depth + 1)
+            if not _validate_schema_value(
+                branch, value, path, root_schema,
+                schema_depth + 1, data_depth, max_data_depth,
+            )
         ]
         if len(matches) != 1:
             errors.append(f"{path} 不符合允许结构")
@@ -109,7 +122,8 @@ def _validate_schema_value(
             for key in value:
                 errors.extend(
                     _validate_schema_value(
-                        property_names, key, f"{path} 字段名", root_schema, depth + 1
+                        property_names, key, f"{path} 字段名", root_schema,
+                        schema_depth + 1, data_depth, max_data_depth,
                     )
                 )
         for key in schema.get("required", []):
@@ -121,7 +135,8 @@ def _validate_schema_value(
             if key in properties:
                 errors.extend(
                     _validate_schema_value(
-                        properties[key], item, child_path, root_schema, depth + 1
+                        properties[key], item, child_path, root_schema,
+                        schema_depth + 1, data_depth + 1, max_data_depth,
                     )
                 )
             elif additional is False:
@@ -129,7 +144,8 @@ def _validate_schema_value(
             elif isinstance(additional, dict):
                 errors.extend(
                     _validate_schema_value(
-                        additional, item, child_path, root_schema, depth + 1
+                        additional, item, child_path, root_schema,
+                        schema_depth + 1, data_depth + 1, max_data_depth,
                     )
                 )
     elif isinstance(value, list):
@@ -146,7 +162,9 @@ def _validate_schema_value(
                         item,
                         f"{path}[{index}]",
                         root_schema,
-                        depth + 1,
+                        schema_depth + 1,
+                        data_depth + 1,
+                        max_data_depth,
                     )
                 )
     elif isinstance(value, str):
@@ -417,40 +435,46 @@ def _evaluate_salary(arguments: dict, context: ToolContext) -> ToolResult:
     return ToolResult(True, data=data, display_text=f"规则估算：{data['minimum']}-{data['maximum']} 元/月（非实时行情）")
 
 
+_APPLICATION_SUMMARY_FIELDS = (
+    "id", "company", "job_title", "status", "city", "updated_at",
+)
+_OPPORTUNITY_DETAIL_FIELDS = (
+    *_APPLICATION_SUMMARY_FIELDS,
+    "channel", "resume_id", "priority", "next_action_at", "interview_at",
+    "deadline_at", "applied_at", "created_at", "needs_status_review",
+)
+
+
+def _project_fields(value: dict, fields: tuple[str, ...]) -> dict:
+    return {field: value.get(field) for field in fields if field in value}
+
+
 def _list_applications(arguments: dict, context: ToolContext) -> ToolResult:
-    data = CareerService(context.db_path, context.user_id).list_opportunities(
-        context.user_id
-    )
+    rows = CareerService(context.db_path, context.user_id).list_opportunities(context.user_id)
+    data = [_project_fields(row, _APPLICATION_SUMMARY_FIELDS) for row in rows]
     text = "\n".join(f"{row['company']} / {row['job_title']} / {row['status']}" for row in data)
     return ToolResult(True, data=data, display_text=text or "暂无投递记录")
 
 
 def _dashboard(arguments: dict, context: ToolContext) -> ToolResult:
     service = CareerService(context.db_path, context.user_id)
-    opportunities = service.list_opportunities(context.user_id)
-    readiness = service.calculate_readiness(context.user_id)
-    data = {
-        "applications": len(opportunities),
-        "opportunities": opportunities,
-        "readiness": readiness,
-    }
-    text = f"投递={len(opportunities)}；求职准备度={readiness['score']}（{readiness['label']}）"
+    data = service.agent_dashboard_summary(context.user_id)
+    readiness = data["readiness"]
+    text = (
+        f"简历={data['resumes']}；匹配={data['matches']}；面试={data['interviews']}；"
+        f"投递={data['applications']}；求职准备度={readiness['score']}（{readiness['label']}）"
+    )
     return ToolResult(True, data=data, display_text=text)
 
 
 def _career_report(arguments: dict, context: ToolContext) -> ToolResult:
-    service = CareerService(context.db_path, context.user_id)
-    opportunities = service.list_opportunities(context.user_id)
-    readiness = service.calculate_readiness(context.user_id)
-    profile = service.get_profile(context.user_id)
-    data = {
-        "profile": profile,
-        "readiness": readiness,
-        "opportunities": opportunities,
-    }
+    dashboard = _dashboard({}, context)
+    applications = _list_applications({}, context)
+    data = {"dashboard": dashboard.data, "applications": applications.data}
+    readiness = dashboard.data["readiness"]
     recent = "\n".join(
         f"{item['company']} / {item['job_title']} / {item['status']}"
-        for item in opportunities[:8]
+        for item in applications.data[:8]
     )
     text = (
         f"求职准备度：{readiness['score']}（{readiness['label']}）\n"
@@ -470,11 +494,12 @@ def _career_profile(arguments: dict, context: ToolContext) -> ToolResult:
 
 def _opportunity(arguments: dict, context: ToolContext) -> ToolResult:
     try:
-        data = CareerService(context.db_path, context.user_id).get_opportunity(
+        row = CareerService(context.db_path, context.user_id).get_opportunity(
             context.user_id, arguments["opportunity_id"]
         )
     except LookupError:
         return ToolResult(False, display_text="未找到投递机会", error_code="not_found")
+    data = _project_fields(row, _OPPORTUNITY_DETAIL_FIELDS)
     return ToolResult(
         True,
         data=data,

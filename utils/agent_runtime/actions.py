@@ -178,6 +178,7 @@ def _career_action_argument_schemas() -> dict[str, dict[str, Any]]:
     report_content = {
         "type": "object",
         "maxProperties": 500,
+        "x-maxDataDepth": 10,
         "propertyNames": {"type": "string", "minLength": 1, "maxLength": 200},
         "additionalProperties": {"$ref": "#/$defs/jsonValue"},
     }

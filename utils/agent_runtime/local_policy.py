@@ -9,7 +9,10 @@ _APPLICATION_STATUSES = (
     "意向", "准备中", "已投递", "简历筛选", "笔试", "一面", "二面",
     "HR 面", "Offer", "已拒绝", "已结束",
 )
-_CREATE_WORDS = ("帮我记录", "帮我创建", "创建", "新增", "保存", "设置", "记录一条")
+_NON_WRITE_REQUEST = re.compile(
+    r"查看|查询|哪些|有没有|保存过|创建过|新增的|怎么|如何|能否介绍|能不能介绍|请介绍"
+)
+_POLITE_PREFIX = r"^(?:请|麻烦)?(?:帮我)?"
 
 
 class LocalPolicy:
@@ -120,22 +123,36 @@ class LocalPolicy:
 
     @staticmethod
     def _explicit_action_type(message: str) -> str | None:
-        explicit_create = any(word in message for word in _CREATE_WORDS)
-        if (
-            any(word in message for word in ("职业目标", "求职目标"))
-            and (explicit_create or any(word in message for word in ("设为", "改成", "更新为")))
-        ):
+        if _NON_WRITE_REQUEST.search(message):
+            return None
+        goal_command = (
+            _POLITE_PREFIX
+            + r"(?:(?:设置|保存|记录)(?:我的)?(?:职业|求职)?目标|"
+              r"把(?:我的)?(?:职业|求职)?目标)(?:为|是|设为|改成|更新为|[:：])?"
+        )
+        if re.search(goal_command, message):
             return "set_career_goal"
-        if explicit_create and any(word in message for word in ("投递", "求职机会", "申请记录")):
+        if re.search(
+            _POLITE_PREFIX
+            + r"(?:记录|创建|新增)(?:一个|一条)?(?:新的)?(?:投递|求职机会|申请记录)",
+            message,
+        ):
             return "create_opportunity"
-        if explicit_create and any(word in message for word in ("行动项", "待办")):
+        if re.search(
+            _POLITE_PREFIX + r"(?:记录|创建|新增)(?:一个|一条)?(?:行动项|待办)",
+            message,
+        ):
             return "create_action_item"
-        if (
-            any(word in message for word in ("阶段", "状态"))
-            and any(word in message for word in ("更新", "改成", "设为"))
+        if re.search(
+            _POLITE_PREFIX
+            + r"把(?:投递|机会|申请)\s*(?:ID|id|编号)?\s*\d+.*(?:推进到|更新为|改成|设为)",
+            message,
         ):
             return "update_opportunity"
-        if explicit_create and "简历版本" in message:
+        if re.search(
+            _POLITE_PREFIX + r"(?:记录|创建|新增)(?:一个|一条)?(?:新)?简历版本",
+            message,
+        ):
             return "create_resume_version"
         return None
 
@@ -205,7 +222,7 @@ class LocalPolicy:
     def _extract_action_arguments(action_type: str, message: str) -> dict:
         if action_type == "set_career_goal":
             role = LocalPolicy._capture(
-                message, r"(?:职业目标|求职目标|目标岗位|目标职位)(?:是|为|设为|[:：])?\s*([^，,。；;\n]+)"
+                message, r"(?:职业目标|求职目标|我的目标|目标岗位|目标职位)(?:是|为|设为|[:：])?\s*([^，,。；;\n]+)"
             )
             return {"target_role": role} if role else {}
         if action_type == "create_opportunity":

@@ -121,6 +121,33 @@ class CareerService:
             ).fetchone()
         return self._profile_from_row(row) if row else None
 
+    def agent_dashboard_summary(self, user_id: int) -> dict[str, Any]:
+        """Return compatibility counts plus canonical readiness, without row contents."""
+        self._require_local_user(user_id)
+        with connect(self.db_path) as conn:
+            counts = {}
+            for key, table in (
+                ("resumes", "resumes"),
+                ("matches", "job_matches"),
+                ("interviews", "interviews"),
+            ):
+                counts[key] = (
+                    conn.execute(
+                        f'SELECT COUNT(*) FROM "{table}" WHERE user_id = ?',
+                        (self.local_user_id,),
+                    ).fetchone()[0]
+                    if self._table_exists(conn, table)
+                    else 0
+                )
+            counts["applications"] = conn.execute(
+                """
+                SELECT COUNT(*) FROM job_applications
+                WHERE user_id = ? AND deleted_at IS NULL
+                """,
+                (self.local_user_id,),
+            ).fetchone()[0]
+        return {**counts, "readiness": self.calculate_readiness(user_id)}
+
     def calculate_readiness(self, user_id: int) -> dict[str, Any]:
         self._require_local_user(user_id)
         with connect(self.db_path) as conn:

@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from utils.agent_runtime.context import ContextBuilder
-from utils.agent_runtime.actions import ALLOWED_ACTION_TYPES
+from utils.agent_runtime.actions import ALLOWED_ACTION_TYPES, ActionProposalService
 from utils.agent_runtime.local_policy import LocalPolicy
 from utils.agent_runtime.memory import MemoryStore, create_agent_tables
 from utils.agent_runtime.models import AgentDecision
@@ -77,8 +77,18 @@ class AgentDomainToolTests(unittest.TestCase):
 
     def test_domain_reads_match_career_service_and_filter_deleted_and_foreign(self):
         self.career.upsert_profile(1, {"target_role": "测试工程师"})
+        secrets = {
+            "notes": "SECRET-NOTES",
+            "jd_text": "SECRET-JD " * 20,
+            "contact_name": "SECRET-CONTACT",
+            "contact_info": "secret@example.com",
+            "offer_details": "SECRET-OFFER",
+            "rejection_reason": "SECRET-REJECTION",
+            "salary_min": 12345,
+            "salary_max": 67890,
+        }
         kept = self.career.create_opportunity(
-            1, {"company": "星河科技", "job_title": "测试工程师"}
+            1, {"company": "星河科技", "job_title": "测试工程师", **secrets}
         )
         deleted = self.career.create_opportunity(
             1, {"company": "已删除公司", "job_title": "秘密岗位"}
@@ -87,6 +97,16 @@ class AgentDomainToolTests(unittest.TestCase):
         with connect(self.db_path) as conn:
             conn.execute(
                 "INSERT INTO job_applications(user_id, company, job_title) VALUES (2, '他人公司', '私密岗位')"
+            )
+            resume_id = conn.execute(
+                "INSERT INTO resumes(user_id, title, content) VALUES (1, 'Owned', 'resume')"
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO job_matches(user_id, resume_id, job_title) VALUES (1, ?, 'Role')",
+                (resume_id,),
+            )
+            conn.execute(
+                "INSERT INTO interviews(user_id, job_title, score, feedback) VALUES (1, 'Role', 80, 'private feedback')"
             )
 
         listing = self.registry.execute("list_applications", {}, user_id=1)
@@ -97,20 +117,74 @@ class AgentDomainToolTests(unittest.TestCase):
         dashboard = self.registry.execute("get_dashboard", {}, user_id=1)
         report = self.registry.execute("generate_career_report", {}, user_id=1)
 
-        self.assertEqual(listing.data, self.career.list_opportunities(1))
+        safe_keys = {"id", "company", "job_title", "status", "city", "updated_at"}
+        self.assertEqual(set(listing.data[0]), safe_keys)
         self.assertEqual(profile.data, self.career.get_profile(1))
-        self.assertEqual(detail.data, self.career.get_opportunity(1, kept["id"]))
+        self.assertTrue(safe_keys.issubset(detail.data))
         self.assertEqual(dashboard.data["readiness"], self.career.calculate_readiness(1))
-        self.assertEqual(report.data["opportunities"], self.career.list_opportunities(1))
-        serialized = json.dumps([listing.data, dashboard.data, report.data], ensure_ascii=False)
+        self.assertEqual(
+            {key: dashboard.data[key] for key in ("resumes", "matches", "interviews", "applications")},
+            {"resumes": 1, "matches": 1, "interviews": 1, "applications": 1},
+        )
+        self.assertNotIn("opportunities", dashboard.data)
+        self.assertEqual(set(report.data), {"dashboard", "applications"})
+        self.assertEqual(set(report.data["applications"][0]), safe_keys)
+        serialized = json.dumps(
+            [listing.data, listing.display_text, detail.data, detail.display_text,
+             dashboard.data, dashboard.display_text, report.data, report.display_text],
+            ensure_ascii=False,
+        )
         self.assertNotIn("已删除公司", serialized)
         self.assertNotIn("他人公司", serialized)
+        for secret in secrets.values():
+            self.assertNotIn(str(secret), serialized)
 
         missing = self.registry.execute(
             "get_opportunity", {"opportunity_id": deleted["id"]}, user_id=1
         )
         self.assertFalse(missing.ok)
         self.assertEqual(missing.error_code, "not_found")
+
+    def test_remote_read_tool_messages_never_receive_opportunity_secrets(self):
+        secret = "REMOTE-TOOL-SECRET"
+        self.career.create_opportunity(
+            1,
+            {
+                "company": "Acme",
+                "job_title": "Engineer",
+                "jd_text": secret,
+                "notes": secret,
+                "contact_info": secret,
+            },
+        )
+        client = SequenceClient([
+            {
+                "success": True,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "read-call",
+                        "type": "function",
+                        "function": {"name": "list_applications", "arguments": "{}"},
+                    }],
+                },
+            },
+            {"success": True, "message": {"role": "assistant", "content": "已汇总。"}},
+        ])
+        store = MemoryStore(self.db_path)
+        conversation = store.create_conversation(1, "safe remote read")
+        orchestrator = AgentOrchestrator(
+            policy=RemoteModelPolicy(client),
+            tools=self.registry,
+            store=store,
+            context_builder=ContextBuilder(store, self.db_path),
+        )
+
+        orchestrator.run(1, conversation.id, "查看投递")
+
+        remote_payload = json.dumps(client.calls[1]["messages"], ensure_ascii=False)
+        self.assertNotIn(secret, remote_payload)
 
     def test_proposal_tool_creates_only_pending_redacted_proposal_for_fixed_user(self):
         secret = "private@example.com"
@@ -518,6 +592,91 @@ class AgentDomainToolTests(unittest.TestCase):
 
         self.assertEqual(decision.type, "needs_input")
         self.assertEqual(decision.arguments["slots"]["arguments"], {"company": "星河科技"})
+
+    def test_read_and_advice_phrases_never_start_write_tasks(self):
+        cases = (
+            ("查看我保存过的投递", "list_applications"),
+            ("有哪些新增的投递记录", "list_applications"),
+            ("有没有创建过投递", "list_applications"),
+            ("查询投递状态怎么更新", "list_applications"),
+            ("怎么设置职业目标", None),
+            ("如何创建行动项", None),
+            ("能否介绍怎么新增简历版本", None),
+        )
+        store = MemoryStore(self.db_path)
+        for index, (message, expected_tool) in enumerate(cases):
+            with self.subTest(message=message):
+                conversation = store.create_conversation(1, f"read-{index}")
+                result = AgentOrchestrator(
+                    policy=LocalPolicy(),
+                    tools=self.registry,
+                    store=store,
+                    context_builder=ContextBuilder(store, self.db_path),
+                ).run(1, conversation.id, message)
+                if expected_tool:
+                    self.assertEqual(result.tools_used, [expected_tool])
+                else:
+                    self.assertEqual(result.tools_used, [])
+                self.assertIsNone(store.get_active_task(conversation.id, 1))
+        with connect(self.db_path) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM agent_action_proposals").fetchone()[0], 0)
+
+    def test_explicit_command_patterns_still_start_write_intents(self):
+        cases = (
+            "帮我创建一个投递",
+            "记录一个投递",
+            "把投递 7 推进到一面",
+            "设置我的目标为测试工程师",
+            "帮我保存职业目标",
+        )
+        policy = LocalPolicy()
+        for message in cases:
+            with self.subTest(message=message):
+                state = type(
+                    "State", (), {
+                        "observations": [], "active_task": None,
+                        "user_message": message, "context_prompt": "",
+                    }
+                )()
+                decision = policy.decide(state, [])
+                self.assertIn(decision.type, {"needs_input", "tool_call"})
+                self.assertNotEqual(decision.tool, "list_applications")
+
+    def test_report_content_depth_matches_canonical_ten_level_limit(self):
+        def nested(depth):
+            value = "leaf"
+            for _ in range(depth):
+                value = {"level": value}
+            return value
+
+        valid = self.registry.execute(
+            "propose_career_action",
+            {
+                "action_type": "save_career_report",
+                "arguments": {"report_type": "weekly", "content": nested(10)},
+            },
+            user_id=1,
+        )
+        with patch("utils.agent_runtime.tools.ActionProposalService.propose") as propose:
+            invalid = self.registry.execute(
+                "propose_career_action",
+                {
+                    "action_type": "save_career_report",
+                    "arguments": {"report_type": "weekly", "content": nested(11)},
+                },
+                user_id=1,
+            )
+
+        self.assertTrue(valid.ok, valid.display_text)
+        self.assertFalse(invalid.ok)
+        self.assertEqual(invalid.error_code, "invalid_arguments")
+        propose.assert_not_called()
+        with self.assertRaisesRegex(ValueError, "deeply nested"):
+            ActionProposalService(self.db_path).propose(
+                1,
+                "save_career_report",
+                {"report_type": "weekly", "content": nested(11)},
+            )
 
     def test_remote_proposal_call_keeps_structured_card_for_final_synthesis(self):
         client = SequenceClient(
