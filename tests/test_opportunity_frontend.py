@@ -50,10 +50,10 @@ class OpportunityFrontendContractTests(unittest.TestCase):
     def test_entity_ids_drive_deep_links_and_cross_feature_handoffs(self):
         self.assertIn("currentOpportunityId", self.script)
         self.assertIn("opportunityHistory.open", self.script)
-        self.assertIn("jd_text: state.pendingApplicationJd", self.script)
-        self.assertIn("resume_id: state.pendingApplicationResumeId", self.script)
-        self.assertIn("application_id: state.currentOpportunityId", self.script)
-        self.assertIn("action_id", self.script)
+        self.assertIn("applicationPayloadForJob(state.pendingApplicationHandoff", self.script)
+        self.assertIn("buildInterviewStartPayload(baseBody, handoff)", self.script)
+        self.assertIn("buildMatchPayload", self.script)
+        self.assertIn("actionId", self.script)
 
     def test_opportunity_interview_handoff_is_cleared_after_successful_start(self):
         start = re.search(
@@ -61,9 +61,9 @@ class OpportunityFrontendContractTests(unittest.TestCase):
             self.script,
             re.DOTALL,
         ).group(0)
-        self.assertIn("state.interviewFromOpportunity = false", start)
+        self.assertIn("state.interviewOpportunityHandoff = null", start)
         self.assertGreater(
-            start.index("state.interviewFromOpportunity = false"),
+            start.index("state.interviewOpportunityHandoff = null"),
             start.index("if (!data.success)"),
         )
 
@@ -76,6 +76,29 @@ class OpportunityFrontendContractTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_entity_handoffs_are_immutable_and_one_shot_behaviorally(self):
+        result = subprocess.run(
+            ["node", str(ROOT / "tests" / "js" / "test_opportunity_handoffs.js")],
+            cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_quality_handoffs_errors_and_focus_are_wired(self):
+        self.assertIn('id="applicationHandoffNotice"', self.html)
+        self.assertIn('id="clearApplicationHandoff"', self.html)
+        self.assertIn('id="applicationBoardHeading"', self.html)
+        self.assertIn('id="matchOpportunityNotice"', self.html)
+        self.assertIn('id="clearMatchOpportunityLink"', self.html)
+        self.assertIn('<script src="js/opportunity_handoffs.js"></script>', self.html)
+        for token in (
+            "interviewOpportunityHandoff", "pendingApplicationHandoff", "matchOpportunityId",
+            "buildInterviewStartPayload", "applicationPayloadForJob", "buildMatchPayload",
+            "retryOpportunityWorkspace", "opportunityWorkspaceError", "opportunityOpener",
+            "focus({ preventScroll: true })", "navigateToRoute",
+        ):
+            self.assertIn(token, self.script)
+        self.assertNotIn("application_id: state.currentOpportunityId", self.script)
 
     def test_app_uses_the_history_controller_as_its_single_route_sync(self):
         history_script = '<script src="js/opportunity_history.js"></script>'
@@ -239,6 +262,23 @@ class OpportunityWorkspaceApiTests(unittest.TestCase):
         self.assertTrue(deleted.is_json)
         self.assertFalse(foreign.get_json()["success"])
         self.assertFalse(deleted.get_json()["success"])
+
+    def test_linked_match_appears_after_workspace_refresh(self):
+        opportunity_id, resume_id = self._seed_workspace()
+        response = self.client.post(
+            "/api/job-match",
+            json={
+                "resume_id": resume_id,
+                "job_title": "Backend Engineer",
+                "jd": "Python Flask SQL API testing requirements " * 4,
+                "application_id": opportunity_id,
+            },
+        )
+        workspace = self.client.get(f"/api/opportunities/{opportunity_id}/workspace").get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["success"])
+        self.assertEqual(len(workspace["matches"]), 2)
 
 
 if __name__ == "__main__":

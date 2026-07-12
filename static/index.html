@@ -36,7 +36,7 @@
     <header class="topbar">
       <div>
         <p class="eyebrow">AI Agent Career Studio</p>
-        <h1 id="pageTitle">项目总览</h1>
+        <h1 id="pageTitle" tabindex="-1">项目总览</h1>
       </div>
       <div class="top-actions">
         <div class="theme-block">
@@ -259,6 +259,10 @@
           <div class="panel-head"><h3>JD 定制优化</h3><span class="pill">Agent</span></div>
           <p class="module-copy">把目标岗位 JD 放进来，系统会拆关键词、匹配差距、项目改写方向和面试讲述重点。</p>
           <div class="workflow-chips"><span>选择简历</span><span>粘贴 JD</span><span>生成优化版</span><span>准备面试话术</span></div>
+          <div id="matchOpportunityNotice" class="edit-notice hidden" aria-live="polite">
+            <div><b>匹配结果将关联到机会</b><span id="matchOpportunityContext"></span></div>
+            <button type="button" class="ghost small" id="clearMatchOpportunityLink">取消关联</button>
+          </div>
           <div class="source-links">
             <a href="https://www.zhipin.com/" target="_blank" rel="noreferrer">去 BOSS 直聘找 JD</a>
             <a href="https://www.zhaopin.com/" target="_blank" rel="noreferrer">去智联招聘找 JD</a>
@@ -454,6 +458,10 @@
           <div class="panel-head"><h3>新增投递</h3><span class="pill">Pipeline</span></div>
           <p class="module-copy">记录公司、岗位、阶段、城市和备注，避免投递多了之后进度混乱。</p>
           <div class="workflow-chips"><span>公司岗位</span><span>投递阶段</span><span>备注待办</span></div>
+          <div id="applicationHandoffNotice" class="edit-notice hidden" aria-live="polite">
+            <div><b>已带入岗位上下文</b><span id="applicationHandoffContext"></span></div>
+            <button type="button" class="ghost small" id="clearApplicationHandoff">清除</button>
+          </div>
           <input id="appCompany" class="input" placeholder="公司名称" />
           <input id="appJob" class="input" placeholder="岗位名称" />
           <div class="form-grid">
@@ -464,7 +472,7 @@
           <button class="primary full" id="saveAppBtn"><i data-lucide="plus"></i>添加记录</button>
         </section>
         <section class="panel wide module-panel" data-module-page="tracker" data-module="board">
-          <div class="panel-head"><h3>投递看板</h3><span class="pill">Live</span></div>
+          <div class="panel-head"><h3 id="applicationBoardHeading" tabindex="-1">投递看板</h3><span class="pill">Live</span></div>
           <p class="module-copy">按投递记录汇总当前机会池，后续可继续扩展为阶段看板和面试提醒。</p>
           <div class="workflow-chips"><span>查看机会池</span><span>跟进状态</span><span>复盘反馈</span></div>
           <div id="applicationList" class="kanban"></div>
@@ -578,6 +586,7 @@
   <script src="https://unpkg.com/lucide@latest"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="js/interview_submission.js"></script>
+  <script src="js/opportunity_handoffs.js"></script>
   <script src="js/opportunity_history.js"></script>
   <script src="js/app.js"></script>
 </body>

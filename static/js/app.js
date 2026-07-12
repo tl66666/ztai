@@ -22,10 +22,10 @@ const state = {
   applicationStatuses: [],
   currentOpportunityId: null,
   currentOpportunityWorkspace: null,
-  pendingApplicationJd: "",
-  pendingApplicationResumeId: null,
-  interviewFromOpportunity: false,
-  pendingInterviewActionId: null,
+  pendingApplicationHandoff: null,
+  interviewOpportunityHandoff: null,
+  matchOpportunityId: null,
+  opportunityOpener: null,
   mediaRecorder: null,
   audioChunks: [],
   audioBlob: null,
@@ -38,14 +38,28 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+const {
+  applicationPayloadForJob,
+  buildApplicationHandoff,
+  buildInterviewHandoff,
+  buildInterviewStartPayload,
+  buildMatchPayload,
+} = OpportunityHandoffs;
 const opportunityHistory = OpportunityHistory.createOpportunityHistoryController({
   window,
   showPage: (page) => {
-    if ($(`page-${page}`)) showPage(page);
+    if ($(`page-${page}`)) renderPage(page);
   },
+  showModule: renderModule,
   loadWorkspace: loadOpportunityWorkspace,
   closeWorkspace: resetOpportunityWorkspaceView,
-  notifyStale: () => toast("机会详情不存在或已失效，链接已重置。"),
+  notifyStale: () => toast("机会详情不存在或已删除，链接已重置。"),
+  notifyForbidden: () => toast("无权访问该机会详情，链接已重置。"),
+  notifyRetryable: () => {
+    if (state.currentOpportunityId) {
+      showOpportunityWorkspaceError(state.currentOpportunityId, "机会详情暂时无法加载，请稍后重试。");
+    }
+  },
 });
 const PROVIDER_LINKS = {
   glm: [
@@ -80,12 +94,12 @@ function bindNavigation() {
   document.querySelectorAll("[data-page]").forEach((item) => {
     item.addEventListener("click", () => {
       playUiTone("jump");
-      showPage(item.dataset.page);
+      navigateToRoute(item.dataset.page);
     });
   });
 }
 
-function showPage(page) {
+function renderPage(page) {
   document.querySelectorAll(".page").forEach((item) => item.classList.remove("active"));
   $(`page-${page}`).classList.add("active");
   document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.page === page));
@@ -104,12 +118,7 @@ function showPage(page) {
 async function applyInitialRouteFromQuery() {
   await opportunityHistory.sync();
   const params = new URLSearchParams(window.location.search);
-  const moduleName = params.get("module");
   const record = params.get("record");
-  const page = document.querySelector(".page.active")?.id.replace("page-", "");
-  if (page && moduleName) {
-    document.querySelector(`[data-section-filter="${page}:${moduleName}"]`)?.click();
-  }
   if (record === "audio") {
     setTimeout(() => {
       const audioCard = [...document.querySelectorAll(".record-card")].find((card) => card.textContent.includes("语音") || card.textContent.includes("录音") || card.textContent.includes("表达"));
@@ -162,7 +171,7 @@ function bindActions() {
     button.addEventListener("click", () => {
       const [page, module] = button.dataset.sectionFilter.split(":");
       playUiTone("tap");
-      filterModules(page, module, button);
+      navigateToRoute(page, module);
     });
   });
   document.querySelectorAll(".page-subnav").forEach((nav) => {
@@ -212,6 +221,14 @@ function bindActions() {
   $("scoreProfessionalBtn").addEventListener("click", scoreProfessionalAnswer);
   $("clearTrainingRecordsBtn").addEventListener("click", clearTrainingRecords);
   $("saveAppBtn").addEventListener("click", saveApplication);
+  $("clearApplicationHandoff")?.addEventListener("click", clearApplicationHandoff);
+  $("clearMatchOpportunityLink")?.addEventListener("click", clearMatchOpportunityLink);
+  $("appJob")?.addEventListener("input", () => {
+    if (state.pendingApplicationHandoff
+        && !Object.keys(applicationPayloadForJob(state.pendingApplicationHandoff, $("appJob").value)).length) {
+      clearApplicationHandoff();
+    }
+  });
   $("closeOpportunityWorkspace")?.addEventListener("click", closeOpportunityWorkspace);
   document.querySelectorAll('.opportunity-tabs [role="tab"]').forEach((tab) => {
     tab.addEventListener("click", () => selectOpportunityTab(tab));
@@ -404,10 +421,29 @@ function filterModules(page, module, activeButton) {
   });
 }
 
-function jumpToModule(page, module) {
-  showPage(page);
+function renderModule(page, module) {
   const button = document.querySelector(`[data-section-filter="${page}:${module}"]`);
   if (button) filterModules(page, module, button);
+}
+
+function activeRoute() {
+  const page = document.querySelector(".page.active")?.id.replace("page-", "") || "home";
+  const module = document.querySelector(`[data-filter-page="${page}"] [data-section-filter].active`)
+    ?.dataset.sectionFilter.split(":")[1] || null;
+  return { page, module };
+}
+
+function navigateToRoute(page, module = null, options = {}) {
+  const current = activeRoute();
+  if (state.pendingApplicationHandoff && current.page === "tracker" && current.module === "add"
+      && (page !== "tracker" || module !== "add")) clearApplicationHandoff();
+  if (state.matchOpportunityId && current.page === "resume" && current.module === "jd"
+      && (page !== "resume" || module !== "jd")) clearMatchOpportunityLink();
+  return opportunityHistory.navigate(page, { module, historyMode: options.historyMode || "push" });
+}
+
+function jumpToModule(page, module) {
+  return navigateToRoute(page, module);
 }
 
 function activateCurrentPageDefaultModule(page) {
@@ -889,20 +925,30 @@ async function tailorResume() {
 async function matchResume() {
   const resumeId = selectedTailorResumeId();
   if (!resumeId) return toast("请先选择简历");
+  const linkedOpportunityId = state.matchOpportunityId;
+  const matchBody = buildMatchPayload({
+    resume_id: Number(resumeId),
+    job_title: $("jobTitleInput").value,
+    jd: $("jdInput").value,
+    job_requirements: $("jdInput").value,
+    career_profile: selectedCareerProfile(),
+  }, linkedOpportunityId);
   const data = await withLoading(
     () => api("/job-match", {
       method: "POST",
-      body: { resume_id: resumeId, job_title: $("jobTitleInput").value, jd: $("jdInput").value, job_requirements: $("jdInput").value, career_profile: selectedCareerProfile() },
+      body: matchBody,
     }),
     "AI 正在计算岗位匹配度..."
   );
+  if (!data.success) return toast(data.message || "岗位匹配失败");
+  clearMatchOpportunityLink();
   $("tailorResult").classList.remove("hidden");
   $("tailorResult").innerHTML = `<h4>岗位匹配：${data.match_score}</h4>${renderText(data.analysis)}<br><b>待补齐：</b>${escapeHtml((data.missing_keywords || []).join("、"))}
     <div class="result-actions">
       <button class="primary" onclick="prepareInterviewFromJd()">带入模拟面试</button>
       <button class="ghost" onclick="prepareApplicationFromJd()">新增投递记录</button>
     </div>`;
-  loadDashboard();
+  await loadDashboard();
 }
 
 async function analyzeJdOnly() {
@@ -931,8 +977,7 @@ async function analyzeJdOnly() {
 }
 
 function prepareInterviewFromJd() {
-  state.interviewFromOpportunity = false;
-  state.pendingInterviewActionId = null;
+  state.interviewOpportunityHandoff = null;
   $("interviewJobTitle").value = $("jobTitleInput").value || $("interviewJobTitle").value;
   $("interviewJd").value = $("jdInput").value || $("interviewJd").value;
   $("interviewResumeSelect").value = selectedTailorResumeId() || selectedResumeId() || "";
@@ -941,12 +986,43 @@ function prepareInterviewFromJd() {
 }
 
 function prepareApplicationFromJd() {
-  state.pendingApplicationJd = $("jdInput").value.trim();
-  state.pendingApplicationResumeId = Number(selectedTailorResumeId() || selectedResumeId()) || null;
-  $("appJob").value = $("jobTitleInput").value || $("appJob").value;
+  const jobTitle = $("jobTitleInput").value || $("appJob").value;
+  state.pendingApplicationHandoff = buildApplicationHandoff({
+    jobTitle,
+    jd: $("jdInput").value.trim(),
+    resumeId: selectedTailorResumeId() || selectedResumeId(),
+  });
+  $("appJob").value = jobTitle;
   $("appNotes").value = $("jdInput").value ? `JD 摘要：${$("jdInput").value.slice(0, 180)}` : $("appNotes").value;
+  renderApplicationHandoffNotice();
   jumpToModule("tracker", "add");
   toast("已带入岗位信息，补公司名后即可保存投递");
+}
+
+function renderApplicationHandoffNotice() {
+  const handoff = state.pendingApplicationHandoff;
+  $("applicationHandoffNotice")?.classList.toggle("hidden", !handoff);
+  if (!handoff || !$("applicationHandoffContext")) return;
+  const resume = state.resumes.find((item) => item.id === handoff.resumeId)?.title || "未关联简历";
+  $("applicationHandoffContext").textContent = `${handoff.jobTitle} · ${resume}${handoff.jd ? " · 已带入 JD" : ""}`;
+}
+
+function clearApplicationHandoff() {
+  state.pendingApplicationHandoff = null;
+  renderApplicationHandoffNotice();
+}
+
+function clearMatchOpportunityLink() {
+  state.matchOpportunityId = null;
+  renderMatchOpportunityNotice();
+}
+
+function renderMatchOpportunityNotice() {
+  const opportunityId = state.matchOpportunityId;
+  $("matchOpportunityNotice")?.classList.toggle("hidden", !opportunityId);
+  if (opportunityId && $("matchOpportunityContext")) {
+    $("matchOpportunityContext").textContent = `机会 #${opportunityId}`;
+  }
 }
 
 async function renderSkills() {
@@ -985,22 +1061,18 @@ async function renderSkills() {
 }
 
 async function startInterview() {
-  const resumeId = $("interviewResumeSelect").value || state.resumes[0]?.id;
+  const handoff = state.interviewOpportunityHandoff;
+  const resumeId = handoff?.resumeId || $("interviewResumeSelect").value || state.resumes[0]?.id;
   if (!resumeId) return toast("请先保存或选择简历");
-  const body = {
+  const baseBody = {
     user_id: USER_ID,
     resume_id: Number(resumeId),
     job_title: $("interviewJobTitle").value || "软件测试工程师",
     jd: $("interviewJd").value,
     career_profile: selectedCareerProfile(),
     mode: "campus",
-    application_id: state.currentOpportunityId,
-    action_id: state.pendingInterviewActionId,
   };
-  if (!state.interviewFromOpportunity) {
-    delete body.application_id;
-    delete body.action_id;
-  }
+  const body = buildInterviewStartPayload(baseBody, handoff);
   const data = await api("/interview/sessions", {
     method: "POST",
     body,
@@ -1009,8 +1081,7 @@ async function startInterview() {
   state.activeInterview = data.session_id;
   state.pendingInterviewSubmission = null;
   state.interviewSubmitting = false;
-  state.pendingInterviewActionId = null;
-  state.interviewFromOpportunity = false;
+  state.interviewOpportunityHandoff = null;
   updateInterviewQuestion(data);
   $("interviewFeedback").classList.add("hidden");
   openInterviewRoom(data);
@@ -1596,8 +1667,7 @@ async function saveApplication() {
     status: $("appStatus").value,
     city: $("appCity").value,
     notes: $("appNotes").value,
-    jd_text: state.pendingApplicationJd,
-    resume_id: state.pendingApplicationResumeId,
+    ...applicationPayloadForJob(state.pendingApplicationHandoff, job),
   };
   if (state.editingAppId) {
     delete payload.jd_text;
@@ -1613,8 +1683,7 @@ async function saveApplication() {
     const savedId = editingId || Number(data.application_id);
     toast(editingId ? "投递记录已更新" : "投递记录已添加");
     state.editingAppId = null;
-    state.pendingApplicationJd = "";
-    state.pendingApplicationResumeId = null;
+    clearApplicationHandoff();
     $("saveAppBtn").innerHTML = `<i data-lucide="plus"></i>添加记录`;
     ["appCompany", "appJob", "appCity", "appNotes"].forEach((id) => $(id).value = "");
     await Promise.all([loadApplications(), loadDashboard()]);
@@ -1627,6 +1696,7 @@ async function editApplication(id) {
   const data = await api(`/applications/detail/${id}`);
   if (!data.success) return toast(data.message || "投递记录不存在");
   const item = data.data;
+  clearApplicationHandoff();
   state.editingAppId = id;
   $("appCompany").value = item.company || "";
   $("appJob").value = item.job_title || "";
@@ -1707,6 +1777,13 @@ async function loadApplications() {
 }
 
 async function openOpportunityWorkspace(id, options = {}) {
+  const current = activeRoute();
+  if (state.pendingApplicationHandoff && current.page === "tracker" && current.module === "add") {
+    clearApplicationHandoff();
+  }
+  if (options.updateUrl !== false && document.activeElement instanceof HTMLElement) {
+    state.opportunityOpener = document.activeElement;
+  }
   const historyMode = options.historyMode || (options.updateUrl === false ? "none" : "push");
   return opportunityHistory.open(id, { historyMode });
 }
@@ -1722,28 +1799,58 @@ async function loadOpportunityWorkspace(id) {
   $("opportunityWorkspaceTitle").textContent = "正在加载机会详情";
   $("opportunityWorkspaceSubtitle").textContent = "正在读取本地关联记录...";
 
-  const workspace = await api(`/opportunities/${opportunityId}/workspace`);
+  let workspace;
+  try {
+    workspace = await api(`/opportunities/${opportunityId}/workspace`);
+  } catch (_error) {
+    showOpportunityWorkspaceError(opportunityId, "网络连接失败，请检查连接后重试。");
+    return { status: "retryable" };
+  }
   if (!workspace.success || state.currentOpportunityId !== opportunityId) {
     if (state.currentOpportunityId !== opportunityId) return undefined;
-    return false;
+    if ([404, 410].includes(workspace.http_status)) return { status: "stale" };
+    if (workspace.http_status === 403) return { status: "forbidden" };
+    showOpportunityWorkspaceError(opportunityId, "机会详情暂时无法加载，请稍后重试。");
+    return { status: "retryable" };
   }
 
   state.currentOpportunityWorkspace = workspace;
   renderOpportunityWorkspace(workspace);
   selectOpportunityTab($("opportunity-tab-overview"), false);
   $("opportunityWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
-  return true;
+  return { status: "ok" };
 }
 
-function resetOpportunityWorkspaceView() {
+function showOpportunityWorkspaceError(opportunityId, message) {
+  $("opportunityWorkspaceTitle").textContent = "机会详情暂时不可用";
+  $("opportunityWorkspaceSubtitle").textContent = "链接已保留，可直接重试。";
+  const error = $("opportunityWorkspaceError");
+  error.classList.remove("hidden");
+  error.innerHTML = `${escapeHtml(message)}<button type="button" class="ghost" onclick="retryOpportunityWorkspace(${opportunityId})"><i data-lucide="refresh-cw"></i>重试</button>`;
+  lucide.createIcons();
+}
+
+function retryOpportunityWorkspace(opportunityId) {
+  $("opportunityWorkspaceError").classList.add("hidden");
+  return opportunityHistory.reload(opportunityId);
+}
+
+function resetOpportunityWorkspaceView(context = {}) {
+  const wasOpen = state.currentOpportunityId !== null || !$("opportunityWorkspace").classList.contains("hidden");
   state.currentOpportunityId = null;
   state.currentOpportunityWorkspace = null;
   $("opportunityWorkspace").classList.add("hidden");
   $("opportunityWorkspaceError").classList.add("hidden");
+  if (!wasOpen) return;
+  const opener = context.restoreFocus && state.opportunityOpener?.isConnected
+    ? state.opportunityOpener
+    : (context.page === "tracker" ? $("applicationBoardHeading") : $("pageTitle"));
+  state.opportunityOpener = null;
+  opener?.focus({ preventScroll: true });
 }
 
-function closeOpportunityWorkspace(options = {}) {
-  opportunityHistory.close({ historyMode: options.historyMode || "replace" });
+function closeOpportunityWorkspace() {
+  return opportunityHistory.close({ historyMode: "push", restoreFocus: true });
 }
 
 function selectOpportunityTab(selectedTab, moveFocus = true) {
@@ -1827,6 +1934,8 @@ function renderOpportunityMatch(workspace) {
 function useWorkspaceJd() {
   const opportunity = state.currentOpportunityWorkspace?.opportunity;
   if (!opportunity) return;
+  state.matchOpportunityId = opportunity.id;
+  renderMatchOpportunityNotice();
   $("jobTitleInput").value = opportunity.job_title || "";
   $("jdInput").value = opportunity.jd_text || "";
   if (opportunity.resume_id) $("tailorResumeSelect").value = String(opportunity.resume_id);
@@ -1870,8 +1979,14 @@ function renderOpportunityInterview(workspace) {
 function prepareInterviewFromOpportunity(actionId = null) {
   const workspace = state.currentOpportunityWorkspace;
   if (!workspace?.opportunity) return;
-  state.interviewFromOpportunity = true;
-  state.pendingInterviewActionId = actionId;
+  state.interviewOpportunityHandoff = buildInterviewHandoff({
+    opportunityId: workspace.opportunity.id,
+    resumeId: workspace.resume?.id,
+    actionId,
+    jobTitle: workspace.opportunity.job_title,
+    jd: workspace.opportunity.jd_text,
+  });
+  if (!state.interviewOpportunityHandoff) return toast("请先为该机会关联简历");
   $("interviewJobTitle").value = workspace.opportunity.job_title || "";
   $("interviewJd").value = workspace.opportunity.jd_text || "";
   if (workspace.resume?.id) $("interviewResumeSelect").value = String(workspace.resume.id);
