@@ -27,6 +27,7 @@ python -m unittest discover -s tests -p "test_*.py" -v
 
 | 范围 | 测试文件 |
 | --- | --- |
+| 本地安全边界与离线依赖 | `test_security_boundaries.py` |
 | 数据迁移与领域服务 | `test_domain_migrations.py`、`test_career_services.py` |
 | 面试恢复与准备度 | `test_interview_persistence.py`、`test_readiness.py` |
 | Agent 动作/工具/记忆 | `test_agent_actions.py`、`test_agent_domain_tools.py`、`test_agent_business_memory.py` |

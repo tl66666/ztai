@@ -46,6 +46,18 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+function renderIcons() {
+  if (!window.lucide || typeof window.lucide.createIcons !== "function") return false;
+  try {
+    window.lucide.createIcons();
+    return true;
+  } catch (error) {
+    console.warn("Icon rendering is unavailable; text controls remain usable.", error);
+    return false;
+  }
+}
+
 const audioPreviewUrls = InterviewMedia.createObjectUrlRegistry({
   create: (blob) => URL.createObjectURL(blob),
   revoke: (url) => URL.revokeObjectURL(url),
@@ -111,7 +123,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadAgentCommandCenter();
   await focusAgentResultFromQuery();
   syncAgentContext();
-  lucide.createIcons();
+  renderIcons();
 });
 
 function bindNavigation() {
@@ -443,7 +455,7 @@ function updateSoundButton() {
   button.classList.toggle("is-off", !state.soundEnabled);
   button.title = state.soundEnabled ? "关闭界面音效" : "开启界面音效";
   button.innerHTML = `<i data-lucide="${state.soundEnabled ? "volume-2" : "volume-x"}"></i>`;
-  if (window.lucide) lucide.createIcons();
+  renderIcons();
 }
 
 function playUiTone(type = "tap") {
@@ -675,7 +687,7 @@ async function loadResumes() {
     : `<div class="list-item"><b>暂无简历</b><small>先保存一份简历</small></div>`;
   updateResumeSelects();
   syncAgentContext();
-  lucide.createIcons();
+  renderIcons();
 }
 
 function updateResumeSelects() {
@@ -691,7 +703,7 @@ async function fillResume(id) {
   state.editingResumeId = id;
   $("saveResumeBtn").innerHTML = `<i data-lucide="save"></i>更新当前简历`;
   setResumeEditNotice(data.data.title);
-  lucide.createIcons();
+  renderIcons();
   jumpToModule("resume", "input");
   $("resumeTitle").focus();
   $("resumeContent").scrollTop = 0;
@@ -713,7 +725,7 @@ function cancelResumeEdit() {
   $("resumeFile").value = "";
   $("saveResumeBtn").innerHTML = `<i data-lucide="save"></i>保存简历`;
   setResumeEditNotice();
-  lucide.createIcons();
+  renderIcons();
   toast("已退出简历编辑模式");
 }
 
@@ -767,7 +779,7 @@ async function saveResume() {
     setResumeEditNotice();
     await loadResumes();
     await loadDashboard();
-    lucide.createIcons();
+    renderIcons();
   } else {
     toast(data.message || "保存失败");
   }
@@ -1150,7 +1162,7 @@ async function renderSkills() {
   const data = await api("/skills/radar", { method: "POST", body: { resume_id: Number(resumeId), career_profile: selectedCareerProfile(), job_title: $("analysisJobTitle").value || $("jobTitleInput").value } });
   const ctx = $("skillChart");
   if (state.skillChart) state.skillChart.destroy();
-  state.skillChart = new Chart(ctx, {
+  state.skillChart = typeof window.Chart === "function" ? new window.Chart(ctx, {
     type: "radar",
     data: {
       labels: data.radar_data.map((item) => item.category),
@@ -1163,7 +1175,7 @@ async function renderSkills() {
       }],
     },
     options: { scales: { r: { min: 0, max: 10 } }, plugins: { legend: { display: false } } },
-  });
+  }) : null;
   $("skillResult").classList.remove("hidden");
   $("skillResult").innerHTML = `
     <h4>技能图谱解读</h4>
@@ -1224,7 +1236,7 @@ function openInterviewRoom(data) {
   $("roomAnswer").value = "";
   $("roomFeedback").classList.add("hidden");
   $("interviewRoom").classList.remove("hidden");
-  lucide.createIcons();
+  renderIcons();
 }
 
 function stageName(stage) {
@@ -1513,7 +1525,7 @@ async function loadTrainingRecords() {
       <p>${escapeHtml((item.transcript || "").slice(0, 90))}</p>
     `)}
   `;
-  lucide.createIcons();
+  renderIcons();
 }
 
 function renderRecordColumn(title, type, items, bodyRenderer) {
@@ -1806,7 +1818,7 @@ async function saveApplication() {
     ["appCompany", "appJob", "appCity", "appNotes"].forEach((id) => $(id).value = "");
     await Promise.all([loadApplications(), loadDashboard()]);
     if (Number.isInteger(savedId) && savedId > 0) await openOpportunityWorkspace(savedId);
-    lucide.createIcons();
+    renderIcons();
   }
 }
 
@@ -1826,7 +1838,7 @@ async function editApplication(id) {
   $("appNotes").value = item.notes || "";
   $("saveAppBtn").innerHTML = `<i data-lucide="save"></i>更新记录`;
   jumpToModule("tracker", "add");
-  lucide.createIcons();
+  renderIcons();
 }
 
 async function deleteApplication(id) {
@@ -1859,7 +1871,7 @@ async function loadApplications() {
   if (!apps.length) {
     $("applicationList").innerHTML = `<div class="opportunity-empty"><strong>暂无投递</strong><span>添加第一条记录后，这里会按阶段自动成列。</span><button class="primary" onclick="jumpToModule('tracker','add')"><i data-lucide="plus"></i>新增投递</button></div>`;
     renderAgentCommandOpportunities();
-    lucide.createIcons();
+    renderIcons();
     return;
   }
   const canonicalSet = new Set(canonicalStatuses);
@@ -1894,7 +1906,7 @@ async function loadApplications() {
     </section>
   `).join("");
   renderAgentCommandOpportunities();
-  lucide.createIcons();
+  renderIcons();
 }
 
 async function openOpportunityWorkspace(id, options = {}) {
@@ -1950,7 +1962,7 @@ function showOpportunityWorkspaceError(opportunityId, message) {
   const error = $("opportunityWorkspaceError");
   error.classList.remove("hidden");
   error.innerHTML = `${escapeHtml(message)}<button type="button" class="ghost" onclick="retryOpportunityWorkspace(${opportunityId})"><i data-lucide="refresh-cw"></i>重试</button>`;
-  lucide.createIcons();
+  renderIcons();
 }
 
 function retryOpportunityWorkspace(opportunityId) {
@@ -2013,7 +2025,7 @@ function renderOpportunityWorkspace(workspace) {
   renderOpportunityInterview(workspace);
   renderOpportunityTimeline(workspace);
   syncAgentContext();
-  lucide.createIcons();
+  renderIcons();
 }
 
 function workspaceDate(value, fallback = "未设置") {
@@ -2202,7 +2214,7 @@ function renderCareerPulse(pulse) {
       <i data-lucide="arrow-right"></i>
     </button>
   `).join("");
-  lucide.createIcons();
+  renderIcons();
 }
 
 function renderNextActions(actions) {
@@ -2269,7 +2281,7 @@ function renderAgentContextChips() {
   box.innerHTML = values.length ? values.map(([kind, label]) => `
     <span class="agent-context-chip">${escapeHtml(label)}<button type="button" data-remove-agent-context="${kind}" aria-label="移除${escapeAttr(label)}上下文" title="移除上下文"><i data-lucide="x"></i></button></span>
   `).join("") : '<span class="agent-context-empty">未附加上下文</span>';
-  if (window.lucide) lucide.createIcons();
+  renderIcons();
 }
 
 function openAgentDrawer(event) {
@@ -2363,7 +2375,7 @@ function renderAgentCommandActions(actions, error = "") {
       <span><b>${escapeHtml(proposal.preview || "待确认操作")}</b><small>${escapeHtml(proposal.risk_level === "high" ? "高风险" : proposal.risk_level === "medium" ? "需确认" : "低风险")}</small></span>
       <i data-lucide="arrow-right"></i>
     </button>`).join("") : '<div class="command-empty"><b>没有待确认操作</b><span>Agent 提出的写入动作会先出现在这里。</span></div>';
-  if (window.lucide) lucide.createIcons();
+  renderIcons();
 }
 
 function renderAgentCommandOpportunities() {
@@ -2377,7 +2389,7 @@ function renderAgentCommandOpportunities() {
       <span><b>${escapeHtml(item.company || "未命名公司")} / ${escapeHtml(item.job_title || "目标岗位")}</b><small>${escapeHtml(item.needs_status_review ? "待确认" : item.status || "未设置")}</small></span>
       <i data-lucide="panel-right-open"></i>
     </button>`).join("") : '<div class="command-empty"><b>暂无活跃机会</b><span>在投递看板添加机会后，会同步到这里。</span></div>';
-  if (window.lucide) lucide.createIcons();
+  renderIcons();
 }
 
 function openAgentProposal(proposalId, opener = null) {
@@ -2602,7 +2614,7 @@ function proposalChanges(card, proposal) {
 function replaceProposalCard(card, proposal, incomingEpoch = state.agentProposalMutationEpoch) {
   const merged = mergeAgentProposal(proposal, incomingEpoch);
   card.outerHTML = ContextualAgent.proposalHtml(merged);
-  if (window.lucide) lucide.createIcons();
+  renderIcons();
   return merged;
 }
 
@@ -2777,7 +2789,7 @@ function renderAgentEvents(events, status = "completed") {
   const statusText = status === "degraded" ? "本地模式" : status === "needs_input" ? "等待补充" : "任务记录";
   const node = $("chatLog").lastElementChild;
   node?.insertAdjacentHTML("beforeend", `<div class="agent-events"><small>${statusText}</small>${rows}</div>`);
-  lucide.createIcons();
+  renderIcons();
 }
 
 function renderAgentSuggestedActions(actions) {
@@ -2789,5 +2801,5 @@ function renderAgentSuggestedActions(actions) {
     </button>
   `).join("");
   node?.insertAdjacentHTML("beforeend", `<div class="agent-suggested-actions">${buttons}</div>`);
-  lucide.createIcons();
+  renderIcons();
 }

@@ -10,11 +10,11 @@ import sqlite3
 import subprocess
 import tempfile
 import uuid
-import warnings
 from urllib.parse import urlsplit
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
+from werkzeug.security import safe_join
 
 from utils.ai_client import extract_keywords, get_ai_client, set_api_key
 from utils.agent_runtime.memory import create_agent_tables
@@ -329,7 +329,10 @@ def parse_resume_file(file_path: str, file_type: str) -> str:
 
 def get_resume_or_404(resume_id: int):
     conn = get_db()
-    row = conn.execute("SELECT * FROM resumes WHERE id = ?", (resume_id,)).fetchone()
+    row = conn.execute(
+        "SELECT * FROM resumes WHERE id = ? AND user_id = ?",
+        (resume_id, AGENT_USER_ID),
+    ).fetchone()
     conn.close()
     return row
 
@@ -826,8 +829,8 @@ def uploaded_file(filename):
 
 @app.route("/api/uploads/<path:filename>/download/<format_type>")
 def download_audio_file(filename, format_type):
-    source_path = os.path.join(UPLOAD_FOLDER, filename)
-    if not os.path.exists(source_path):
+    source_path = safe_join(UPLOAD_FOLDER, filename)
+    if not source_path or not os.path.isfile(source_path):
         return jsonify({"success": False, "message": "音频文件不存在或已被删除"}), 404
     format_type = (format_type or "original").lower()
     if format_type == "original":
@@ -880,7 +883,10 @@ def ai_status():
 def create_resume():
     if request.files:
         file = request.files.get("file")
-        user_id = request.form.get("user_id", 1)
+        requested_user_id = request.form.get("user_id")
+        if requested_user_id is not None and require_agent_user(requested_user_id) is None:
+            return agent_access_denied()
+        user_id = AGENT_USER_ID
         title = (request.form.get("title") or (file.filename if file else "未命名简历")).strip()
         if not file or not file.filename or not allowed_file(file.filename):
             return jsonify({"success": False, "message": "请上传 PDF、Word、TXT 或图片格式简历。"}), 400
@@ -891,7 +897,9 @@ def create_resume():
         content = parse_resume_file(file_path, file_type)
     else:
         data = request.get_json() or {}
-        user_id = data.get("user_id", 1)
+        if "user_id" in data and require_agent_user(data.get("user_id")) is None:
+            return agent_access_denied()
+        user_id = AGENT_USER_ID
         title = (data.get("title") or "").strip()
         content = (data.get("content") or "").strip()
         file_path = None
@@ -915,6 +923,8 @@ def upload_resume():
 
 @app.route("/api/resumes/<int:user_id>")
 def list_resumes(user_id):
+    if require_agent_user(user_id) is None:
+        return agent_access_denied()
     with get_db() as conn:
         rows = conn.execute("SELECT * FROM resumes WHERE user_id = ? ORDER BY updated_at DESC", (user_id,)).fetchall()
     return jsonify({"success": True, "data": [dict(row) for row in rows]})
@@ -969,8 +979,8 @@ def update_resume(resume_id):
         return jsonify({"success": False, "message": "标题和内容不能为空"}), 400
     with get_db() as conn:
         cursor = conn.execute(
-            "UPDATE resumes SET title = ?, content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (title, content, resume_id),
+            "UPDATE resumes SET title = ?, content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+            (title, content, resume_id, AGENT_USER_ID),
         )
     if cursor.rowcount == 0:
         return jsonify({"success": False, "message": "简历不存在"}), 404
@@ -980,7 +990,10 @@ def update_resume(resume_id):
 @app.route("/api/resumes/<int:resume_id>", methods=["DELETE"])
 def delete_resume(resume_id):
     with get_db() as conn:
-        cursor = conn.execute("DELETE FROM resumes WHERE id = ?", (resume_id,))
+        cursor = conn.execute(
+            "DELETE FROM resumes WHERE id = ? AND user_id = ?",
+            (resume_id, AGENT_USER_ID),
+        )
     if cursor.rowcount == 0:
         return jsonify({"success": False, "message": "简历不存在"}), 404
     return jsonify({"success": True, "message": "简历已删除"})
@@ -1506,6 +1519,9 @@ def analyze_voice_answer():
 
 @app.route("/api/interview/analyze-audio", methods=["POST"])
 def analyze_audio_answer():
+    requested_user_id = request.form.get("user_id")
+    if requested_user_id is not None and require_agent_user(requested_user_id) is None:
+        return agent_access_denied()
     transcript = (request.form.get("transcript") or "").strip()
     if not transcript:
         return jsonify({"success": False, "message": "请提供录音对应的转写文本"}), 400
@@ -1524,7 +1540,7 @@ def analyze_audio_answer():
         conn.execute(
             "INSERT INTO audio_records (user_id, transcript, audio_file, score, metrics, feedback) VALUES (?, ?, ?, ?, ?, ?)",
             (
-                int(request.form.get("user_id") or 1),
+                AGENT_USER_ID,
                 transcript,
                 saved_name,
                 result.get("overall_score"),
@@ -1645,6 +1661,8 @@ def build_project_followup_questions(category: str, job_title: str, level: str) 
 @app.route("/api/interview/practice-feedback", methods=["POST"])
 def practice_feedback():
     data = request.get_json() or {}
+    if "user_id" in data and require_agent_user(data.get("user_id")) is None:
+        return agent_access_denied()
     question = (data.get("question") or "").strip()
     answer = (data.get("answer") or "").strip()
     category = data.get("category", "general")
@@ -1668,7 +1686,7 @@ def practice_feedback():
             "follow_up": "下一步：先看参考答案，再用自己的项目经历重答一遍。",
             "needs_answer": True,
         }
-        save_practice_record(data.get("user_id", 1), category, question, answer, result)
+        save_practice_record(AGENT_USER_ID, category, question, answer, result)
         return jsonify(result)
 
     voice = analyze_voice_text(answer)
@@ -1705,7 +1723,7 @@ def practice_feedback():
         "upgrade": build_answer_upgrade(answer, data.get("job_title", "目标岗位")),
         "follow_up": build_follow_up_question(question, category),
     }
-    save_practice_record(data.get("user_id", 1), category, question, answer, result)
+    save_practice_record(AGENT_USER_ID, category, question, answer, result)
     return jsonify(result)
 
 
@@ -1747,6 +1765,8 @@ def build_sample_practice_answer(question: str, category: str) -> str:
 
 @app.route("/api/training-records/<int:user_id>")
 def list_training_records(user_id):
+    if require_agent_user(user_id) is None:
+        return agent_access_denied()
     with get_db() as conn:
         interviews = conn.execute(
             "SELECT id, job_title, conversation, score, feedback, created_at FROM interviews WHERE user_id = ? ORDER BY created_at DESC LIMIT 30",
@@ -1779,28 +1799,36 @@ def delete_training_record(record_type, record_id):
     if not table:
         return jsonify({"success": False, "message": "记录类型不存在"}), 400
     with get_db() as conn:
-        row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (record_id,)).fetchone()
+        row = conn.execute(
+            f"SELECT * FROM {table} WHERE id = ? AND user_id = ?",
+            (record_id, AGENT_USER_ID),
+        ).fetchone()
         if not row:
             return jsonify({"success": False, "message": "记录不存在"}), 404
         if record_type == "audio" and row["audio_file"]:
-            audio_path = os.path.join(UPLOAD_FOLDER, row["audio_file"])
-            if os.path.exists(audio_path):
+            audio_path = safe_join(UPLOAD_FOLDER, row["audio_file"])
+            if audio_path and os.path.isfile(audio_path):
                 try:
                     os.remove(audio_path)
                 except OSError:
                     pass
-        conn.execute(f"DELETE FROM {table} WHERE id = ?", (record_id,))
+        conn.execute(
+            f"DELETE FROM {table} WHERE id = ? AND user_id = ?",
+            (record_id, AGENT_USER_ID),
+        )
     return jsonify({"success": True, "message": "记录已删除"})
 
 
 @app.route("/api/training-records/<int:user_id>/clear", methods=["DELETE"])
 def clear_training_records(user_id):
+    if require_agent_user(user_id) is None:
+        return agent_access_denied()
     with get_db() as conn:
         audio_rows = conn.execute("SELECT audio_file FROM audio_records WHERE user_id = ?", (user_id,)).fetchall()
         for row in audio_rows:
             if row["audio_file"]:
-                audio_path = os.path.join(UPLOAD_FOLDER, row["audio_file"])
-                if os.path.exists(audio_path):
+                audio_path = safe_join(UPLOAD_FOLDER, row["audio_file"])
+                if audio_path and os.path.isfile(audio_path):
                     try:
                         os.remove(audio_path)
                     except OSError:
@@ -2107,6 +2135,8 @@ def agent_clear_memory():
 
 @app.route("/api/career/report/<int:user_id>", methods=["POST"])
 def career_report(user_id):
+    if require_agent_user(user_id) is None:
+        return agent_access_denied()
     with get_db() as conn:
         resumes = conn.execute("SELECT title, content, updated_at FROM resumes WHERE user_id = ? ORDER BY updated_at DESC LIMIT 3", (user_id,)).fetchall()
         matches = conn.execute("SELECT job_title, match_score, created_at FROM job_matches WHERE user_id = ? ORDER BY created_at DESC LIMIT 5", (user_id,)).fetchall()
@@ -2426,6 +2456,8 @@ def create_application():
 
 @app.route("/api/applications/<int:user_id>")
 def list_applications(user_id):
+    if require_agent_user(user_id) is None:
+        return agent_access_denied()
     try:
         rows = get_career_service().list_opportunities(user_id)
     except (PermissionError, LookupError, ValueError) as exc:
@@ -2877,14 +2909,21 @@ def resume_templates():
     })
 
 
+def validate_server_host(host: str) -> str:
+    host = (host or "").strip()
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError(
+            "JOBHUNTER_HOST must be a loopback address because JobHunter is an unauthenticated local application."
+        )
+    return host
+
+
 if __name__ == "__main__":
     init_db()
-    host = os.environ.get("JOBHUNTER_HOST", "127.0.0.1")
-    if host not in {"127.0.0.1", "localhost", "::1"}:
-        warnings.warn(
-            "JOBHUNTER_HOST exposes a single-user local application; use only on a trusted network.",
-            RuntimeWarning,
-        )
+    try:
+        host = validate_server_host(os.environ.get("JOBHUNTER_HOST", "127.0.0.1"))
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     print(f"JobHunter AI running at http://{host}:{LOCAL_PORT}")
     print("Providers: GLM / DeepSeek / Kimi, with local fallback.")
-    app.run(debug=True, host=host, port=LOCAL_PORT)
+    app.run(debug=False, host=host, port=LOCAL_PORT)
