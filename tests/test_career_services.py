@@ -98,6 +98,7 @@ class CareerServiceTests(unittest.TestCase):
             lambda: self.service.create_action_item(2, {"title": "Follow up"}),
             lambda: self.service.list_action_items(2),
             lambda: self.service.complete_action_item(2, 1),
+            lambda: self.service.get_report(2, 1),
             lambda: self.service.timeline(2, 1),
         ]
         for call in calls:

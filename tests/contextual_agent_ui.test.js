@@ -112,4 +112,25 @@ assert.equal(AgentUI.isActiveOpportunity("已结束", canonicalStatuses), false)
 assert.equal(AgentUI.isActiveOpportunity("已拒绝", canonicalStatuses), false);
 assert.equal(AgentUI.isActiveOpportunity("旧版未知状态", canonicalStatuses), true);
 
+assert.deepEqual(
+  AgentUI.resultLookupState(7, { success: true, data: { id: 7, title: "Weekly" } }),
+  { status: "located", retry: false, entity: { id: 7, title: "Weekly" } },
+);
+assert.deepEqual(
+  AgentUI.resultLookupState(7, { success: true, data: { id: 8 } }),
+  { status: "missing", retry: false, entity: null },
+);
+assert.deepEqual(
+  AgentUI.resultLookupState(7, { success: false, http_status: 404 }),
+  { status: "missing", retry: false, entity: null },
+);
+assert.deepEqual(
+  AgentUI.resultLookupState(7, { success: false, http_status: 500 }),
+  { status: "unavailable", retry: true, entity: null },
+);
+assert.deepEqual(
+  AgentUI.resultLookupState(7, null, new Error("offline")),
+  { status: "unavailable", retry: true, entity: null },
+);
+
 console.log("contextual agent behavior tests passed");

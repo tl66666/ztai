@@ -2213,6 +2213,35 @@ def career_profile_api():
     return jsonify({"success": True, "data": profile})
 
 
+def exact_result_error(exc):
+    if isinstance(exc, (LookupError, PermissionError)):
+        return jsonify({"success": False, "message": "结果不存在或已失效"}), 404
+    if isinstance(exc, ValueError):
+        return jsonify({"success": False, "message": str(exc)}), 400
+    app.logger.exception("Unexpected exact result read failure", exc_info=exc)
+    return jsonify({"success": False, "message": "结果暂时无法读取"}), 500
+
+
+@app.route("/api/profile/<int:profile_id>", methods=["GET"])
+def career_profile_result_api(profile_id):
+    try:
+        profile = get_career_service().get_profile(AGENT_USER_ID)
+        if profile is None or profile.get("id") != profile_id:
+            raise LookupError("career profile not found")
+        return jsonify({"success": True, "data": profile})
+    except Exception as exc:
+        return exact_result_error(exc)
+
+
+@app.route("/api/career-reports/<int:report_id>", methods=["GET"])
+def career_report_result_api(report_id):
+    try:
+        report = get_career_service().get_report(AGENT_USER_ID, report_id)
+        return jsonify({"success": True, "data": report})
+    except Exception as exc:
+        return exact_result_error(exc)
+
+
 @app.route("/api/opportunities", methods=["GET", "POST"])
 def opportunities_api():
     service = get_career_service()

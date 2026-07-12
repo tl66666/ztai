@@ -2525,6 +2525,7 @@ async function focusAgentResultFromQuery() {
   if (!key) return;
   const id = Number(params.get(key));
   if (!Number.isInteger(id) || id <= 0) return;
+  $("focusedAgentResult")?.remove();
   if (key === "resume") {
     const card = document.querySelector(`[data-resume-id="${id}"]`);
     if (!card) return toast("结果简历不存在或已归档");
@@ -2534,18 +2535,61 @@ async function focusAgentResultFromQuery() {
     return;
   }
   if (key === "action") {
-    const data = await api("/action-items");
-    const action = data.success ? (data.data || []).find((item) => Number(item.id) === id) : null;
+    let data;
+    try {
+      const response = await api("/action-items");
+      const action = response.success
+        ? (response.data || []).find((item) => Number(item.id) === id)
+        : null;
+      data = action
+        ? { success: true, data: action }
+        : { success: false, http_status: response.http_status || 404 };
+    } catch (error) {
+      return renderAgentResultLookup(key, id, ContextualAgent.resultLookupState(id, null, error));
+    }
+    const lookup = ContextualAgent.resultLookupState(id, data);
+    const action = lookup.entity;
     if (action) {
       $("agentActiveActions").insertAdjacentHTML("afterbegin", `
         <div class="command-row is-result-highlight" tabindex="-1" id="focusedAgentResult"><span><b>${escapeHtml(action.title)}</b><small>${escapeHtml(action.status || "pending")} · 行动 #${id}</small></span></div>`);
       $("focusedAgentResult").focus({ preventScroll: true });
       return;
     }
+    return renderAgentResultLookup(key, id, lookup);
   }
+  const endpoint = key === "profile" ? `/profile/${id}` : `/career-reports/${id}`;
+  let response;
+  try {
+    response = await api(endpoint);
+  } catch (error) {
+    return renderAgentResultLookup(key, id, ContextualAgent.resultLookupState(id, null, error));
+  }
+  const lookup = ContextualAgent.resultLookupState(id, response);
+  if (lookup.status !== "located") return renderAgentResultLookup(key, id, lookup);
+  if (key === "profile") {
+    const target = $("careerProfileSelect")?.closest(".theme-block") || $("careerProfileSelect");
+    target?.classList.add("is-result-highlight");
+    target?.setAttribute("data-profile-id", String(id));
+    $("careerProfileSelect")?.focus({ preventScroll: true });
+    toast(`已定位求职目标 #${id}`);
+    return;
+  }
+  renderAgentResultLookup(key, id, lookup);
+}
+
+function renderAgentResultLookup(key, id, lookup) {
   const labels = { action: "行动", profile: "求职目标", report: "求职报告" };
-  $("agentActiveActions")?.insertAdjacentHTML("afterbegin", `
-    <div class="command-empty is-result-highlight" id="focusedAgentResult" tabindex="-1"><b>已定位${labels[key]} #${id}</b><span>该结果由刚完成的 Agent 操作创建。</span></div>`);
+  const host = key === "profile" ? $("nextActions") : $("agentActiveActions");
+  if (!host) return;
+  if (lookup.status === "located") {
+    const entity = lookup.entity || {};
+    host.insertAdjacentHTML("afterbegin", `
+      <div class="command-row is-result-highlight" id="focusedAgentResult" tabindex="-1"><span><b>${escapeHtml(entity.title || labels[key])}</b><small>已验证 ${escapeHtml(labels[key])} #${id}</small></span></div>`);
+  } else {
+    const message = lookup.status === "missing" ? "结果不存在或已失效" : "结果暂时无法读取";
+    host.insertAdjacentHTML("afterbegin", `
+      <div class="command-empty" id="focusedAgentResult" tabindex="-1" role="status"><b>${message}</b><span>${escapeHtml(labels[key])} #${id}</span>${lookup.retry ? '<button type="button" class="ghost small" onclick="focusAgentResultFromQuery()">重试</button>' : ""}</div>`);
+  }
   $("focusedAgentResult")?.focus({ preventScroll: true });
 }
 

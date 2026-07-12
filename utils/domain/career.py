@@ -1104,6 +1104,17 @@ class CareerService:
         result["content"] = json.loads(result.pop("content_json"))
         return result
 
+    def get_report(self, user_id: int, report_id: int) -> dict[str, Any]:
+        self._require_local_user(user_id)
+        report_id = self._integer(report_id, "report_id")
+        with connect(self.db_path) as conn:
+            row = self._owned_row(conn, "career_reports", report_id)
+            if row is None:
+                raise LookupError("career report not found")
+        result = dict(row)
+        result["content"] = json.loads(result.pop("content_json"))
+        return result
+
     def timeline(self, user_id: int, opportunity_id: int) -> list[dict[str, Any]]:
         self._require_local_user(user_id)
         with connect(self.db_path) as conn:

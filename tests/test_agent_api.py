@@ -270,6 +270,50 @@ class AgentAPITests(unittest.TestCase):
         )
         self.assertNotEqual(response["action_proposals"], response["suggested_actions"])
 
+    def test_profile_and_report_result_endpoints_validate_exact_owned_id(self):
+        service = app_module.get_career_service()
+        profile = service.upsert_profile(1, {"target_role": "Engineer"})
+        report = service.save_report(
+            1, {"report_type": "weekly", "title": "Week 1", "content": {"summary": "ok"}}
+        )
+        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+            foreign_report = conn.execute(
+                "INSERT INTO career_reports(user_id,report_type,content_json,status) "
+                "VALUES (2,'weekly','{}','ready')"
+            ).lastrowid
+            conn.commit()
+
+        profile_response = self.client.get(f"/api/profile/{profile['id']}")
+        report_response = self.client.get(f"/api/career-reports/{report['id']}")
+
+        self.assertEqual(profile_response.status_code, 200)
+        self.assertEqual(profile_response.get_json()["data"]["id"], profile["id"])
+        self.assertEqual(report_response.status_code, 200)
+        self.assertEqual(report_response.get_json()["data"]["id"], report["id"])
+        for path in (
+            f"/api/profile/{profile['id'] + 99999}",
+            f"/api/career-reports/{foreign_report}",
+            "/api/career-reports/999999",
+        ):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 404)
+                self.assertFalse(response.get_json()["success"])
+
+    def test_profile_and_report_result_endpoints_contain_server_errors(self):
+        service = Mock()
+        service.get_profile.side_effect = sqlite3.OperationalError("database unavailable")
+        service.get_report.side_effect = sqlite3.OperationalError("database unavailable")
+
+        with patch.object(app_module, "get_career_service", return_value=service):
+            profile_response = self.client.get("/api/profile/1")
+            report_response = self.client.get("/api/career-reports/1")
+
+        self.assertEqual(profile_response.status_code, 500)
+        self.assertEqual(report_response.status_code, 500)
+        self.assertEqual(profile_response.get_json()["message"], "结果暂时无法读取")
+        self.assertEqual(report_response.get_json()["message"], "结果暂时无法读取")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -208,6 +208,18 @@
     return status === "Offer" || !canonicalStatuses.includes(status) || canonicalStatuses.includes(status);
   }
 
+  function resultLookupState(expectedId, response, error = null) {
+    if (error || !response || (!response.success && response.http_status !== 404)) {
+      return { status: "unavailable", retry: true, entity: null };
+    }
+    const entity = response.success && positiveId(response.data?.id) === positiveId(expectedId)
+      ? response.data
+      : null;
+    return entity
+      ? { status: "located", retry: false, entity }
+      : { status: "missing", retry: false, entity: null };
+  }
+
   return {
     chatPayload,
     createContextStore,
@@ -222,5 +234,6 @@
     unavailableProposal,
     hydrationFailureKind,
     isActiveOpportunity,
+    resultLookupState,
   };
 });
