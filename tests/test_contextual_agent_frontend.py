@@ -97,6 +97,7 @@ class ContextualAgentFrontendTests(unittest.TestCase):
 
         self.assertIn("agentConversationEpoch.begin(conversationId)", restore_flow)
         self.assertIn("agentConversationEpoch.isCurrent", restore_flow)
+        self.assertIn("ContextualAgent.authoritativeHydrationSuccess(latest.action)", restore_flow)
         self.assertNotIn("state.agentProposals.set", restore_flow)
         self.assertIn("agentCommandCenterGate.begin", command_flow)
         self.assertIn("agentCommandCenterGate.isCurrent", command_flow)

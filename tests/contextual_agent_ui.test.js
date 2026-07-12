@@ -76,6 +76,47 @@ for (const kind of ["not_found", "forbidden", "server", "network"]) {
     kind === "server" || kind === "network",
   );
 }
+
+const retrySource = AgentUI.unavailableProposal(proposal, "network");
+const retryBusy = { ...retrySource, hydrationRetry: false, busy: true };
+const hydratedPending = AgentUI.mergeProposalState(
+  retryBusy,
+  AgentUI.authoritativeHydrationSuccess({
+    ...proposal,
+    status: "pending",
+    preview: "fresh authoritative preview",
+  }),
+  { currentEpoch: 2, incomingEpoch: 2 },
+);
+assert.equal(hydratedPending.busy, false);
+assert.equal(hydratedPending.error, "");
+assert.equal(hydratedPending.hydrationRetry, false);
+assert.equal(hydratedPending.hydrationSource, null);
+const hydratedPendingHtml = AgentUI.proposalHtml(hydratedPending);
+assert.ok(hydratedPendingHtml.includes('data-agent-action="edit"'));
+assert.ok(hydratedPendingHtml.includes('data-agent-action="confirm"'));
+assert.ok(hydratedPendingHtml.includes('data-agent-action="cancel"'));
+assert.ok(!hydratedPendingHtml.includes("disabled"));
+
+const hydratedCompleted = AgentUI.mergeProposalState(
+  retryBusy,
+  AgentUI.authoritativeHydrationSuccess({
+    ...proposal,
+    status: "completed",
+    result: { entity_type: "opportunity", id: 41 },
+  }),
+  { currentEpoch: 2, incomingEpoch: 2 },
+);
+assert.equal(hydratedCompleted.status, "completed");
+assert.equal(hydratedCompleted.busy, false);
+assert.equal(hydratedCompleted.error, "");
+assert.equal(hydratedCompleted.hydrationRetry, false);
+assert.equal(hydratedCompleted.hydrationSource, null);
+const hydratedCompletedHtml = AgentUI.proposalHtml(hydratedCompleted);
+assert.ok(hydratedCompletedHtml.includes("data-agent-result-link"));
+assert.ok(!hydratedCompletedHtml.includes('data-agent-action="confirm"'));
+assert.ok(!hydratedCompletedHtml.includes('data-agent-action="retry-hydration"'));
+
 assert.equal(AgentUI.hydrationFailureKind({ http_status: 404 }), "not_found");
 assert.equal(AgentUI.hydrationFailureKind({ http_status: 403 }), "forbidden");
 assert.equal(AgentUI.hydrationFailureKind({ http_status: 500 }), "server");

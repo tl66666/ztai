@@ -258,6 +258,17 @@
     return "server";
   }
 
+  function authoritativeHydrationSuccess(action) {
+    if (!action || typeof action !== "object") return action;
+    return {
+      ...action,
+      busy: false,
+      error: "",
+      hydrationRetry: false,
+      hydrationSource: null,
+    };
+  }
+
   function isActiveOpportunity(status, canonicalStatuses = []) {
     if (status === "已结束" || status === "已拒绝") return false;
     return status === "Offer" || !canonicalStatuses.includes(status) || canonicalStatuses.includes(status);
@@ -312,6 +323,7 @@
     transitionProposal,
     unavailableProposal,
     hydrationFailureKind,
+    authoritativeHydrationSuccess,
     isActiveOpportunity,
     mergeProposalState,
     resultLookupState,

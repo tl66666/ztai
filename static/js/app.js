@@ -2475,7 +2475,7 @@ async function hydrateAgentProposal(proposal) {
       proposal, ContextualAgent.hydrationFailureKind(latest)
     );
   }
-  return latest.action;
+  return ContextualAgent.authoritativeHydrationSuccess(latest.action);
 }
 
 function renderAgentProposals(proposals, messageNode) {
