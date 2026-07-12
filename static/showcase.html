@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="JobHunter（职途 AI）是一个本地运行的上下文求职 Agent 工作台，串联职业目标、简历、JD、面试与投递复盘。">
-  <link rel="icon" href="assets/images/logo.png">
+  <link rel="icon" href="assets/showcase/favicon.png">
   <title>JobHunter / 职途 AI | 上下文求职 Agent</title>
   <style>
     :root {
@@ -269,6 +269,8 @@
     .compat-row { display: grid; grid-template-columns: 145px 1fr; padding: 17px 0; border-bottom: 1px solid var(--line); }
     .compat-row span { color: var(--muted); font-size: 14px; }
     .privacy-note { margin-top: 28px; padding-left: 18px; border-left: 5px solid var(--green); color: var(--muted); }
+    .publication-note, .verification-note { margin-top: 22px; padding: 16px 18px; border-left: 4px solid var(--blue); color: var(--muted); background: rgba(49,91,120,.08); font-size: 14px; }
+    .verification-note { border-left-color: var(--green); }
 
     .audience-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
     .audience-item { padding-top: 19px; border-top: 3px solid var(--coral); }
@@ -364,7 +366,7 @@
         </div>
       </div>
       <figure class="hero-shot">
-        <img src="assets/showcase/agent-workbench.png" alt="JobHunter 项目总览右侧打开上下文求职 Agent 工作台的真实界面截图" width="1440" height="900">
+        <img src="assets/showcase/agent-workbench.webp" alt="JobHunter 项目总览右侧打开上下文求职 Agent 工作台的真实界面截图" width="1440" height="900">
         <figcaption>真实产品截图：全局 Agent 抽屉带入当前模块上下文，主应用仍保持可见。</figcaption>
       </figure>
     </div>
@@ -405,7 +407,7 @@
         </div>
         <div class="feature-grid">
           <figure class="product-frame">
-            <img src="assets/showcase/agent-mobile.png" alt="JobHunter 移动端上下文求职 Agent 底部工作台真实截图" width="390" height="844" loading="lazy" decoding="async">
+            <img src="assets/showcase/agent-mobile.webp" alt="JobHunter 移动端上下文求职 Agent 底部工作台真实截图" width="390" height="844" loading="lazy" decoding="async">
             <figcaption>390 × 844 响应式实测：移动端使用底部工作台，不遮住输入和关闭控件。</figcaption>
           </figure>
           <div class="feature-notes">
@@ -421,12 +423,12 @@
       <div class="shell">
         <div class="section-intro">
           <div><p class="kicker">Human approval boundary</p><h2>能建议，也能推进；最后决定权在用户</h2></div>
-          <p>读取和分析可以直接执行。创建行动项、更新机会阶段等写入操作必须走“提议 → 预览 → 确认”链路，并记录状态与审计信息。高风险覆盖、删除或结束机会需要更强确认。</p>
+          <p>读取和分析可以直接执行。所有 Agent 写入都走“提议 → 预览 → 单次确认”链路，并记录状态与审计信息。<code>risk_level</code> 会随提议展示并由服务端校验；当前界面没有额外二次确认。</p>
         </div>
         <div class="boundary-grid">
           <div class="boundary-step"><strong>Read</strong><h3>先理解上下文</h3><p>工具只读取当前本地用户有权访问的数据，并把必要结果返回给 Agent。</p></div>
           <div class="boundary-step"><strong>Propose</strong><h3>展示影响范围</h3><p>写操作先生成提议，显示对象、字段变化、理由与风险，不把模型输出直接写入数据库。</p></div>
-          <div class="boundary-step"><strong>Confirm</strong><h3>用户确认后执行</h3><p>服务端再次校验所有权、状态、有效期和幂等键；过期或已执行提议不能重复执行。</p></div>
+          <div class="boundary-step"><strong>Confirm</strong><h3>单次确认后执行</h3><p>服务端再次校验所有权、状态、有效期和幂等键；过期或已执行提议不能重复执行。</p></div>
         </div>
         <p class="boundary-note">能力边界：JobHunter 不会自动投递，不会替你向招聘方发送消息，也不承诺获得 Offer。它帮助你组织证据、练习表达和管理行动。</p>
       </div>
@@ -440,27 +442,27 @@
         </div>
 
         <article class="screen-row">
-          <figure><img src="assets/showcase/overview.png" alt="JobHunter 项目总览与今日求职作战台真实截图" width="1690" height="931" loading="lazy" decoding="async"><figcaption>项目总览：准备度、简历、面试、匹配和投递汇总。</figcaption></figure>
+          <figure><img src="assets/showcase/overview.webp" alt="JobHunter 项目总览与今日求职作战台真实截图" width="1440" height="793" loading="lazy" decoding="async"><figcaption>项目总览：准备度、简历、面试、匹配和投递汇总。</figcaption></figure>
           <div class="screen-copy"><p class="kicker">Overview</p><h3>先知道现在在哪里</h3><p>首页把分散记录汇成今日求职作战台。准备度包含数据限制条件和下一步，不把一个分数包装成确定结论。</p><ul><li>职业目标与短板可见</li><li>行动入口回到真实模块</li><li>无数据时提供明确空状态</li></ul></div>
         </article>
 
         <article class="screen-row">
-          <figure><img src="assets/showcase/resume-lab.png" alt="JobHunter 简历实验室真实截图" width="1672" height="934" loading="lazy" decoding="async"><figcaption>简历实验室：上传、结构诊断、JD 定制与版本资产。</figcaption></figure>
+          <figure><img src="assets/showcase/resume-lab.webp" alt="JobHunter 简历实验室真实截图" width="1440" height="804" loading="lazy" decoding="async"><figcaption>简历实验室：上传、结构诊断、JD 定制与版本资产。</figcaption></figure>
           <div class="screen-copy"><p class="kicker">Resume lab</p><h3>让简历成为可维护资产</h3><p>支持原文件、解析文本、编辑版本和面向 JD 的定制草稿。Agent 可读取差距并提出修改任务，但不会静默覆盖主简历。</p></div>
         </article>
 
         <article class="screen-row">
-          <figure><img src="assets/showcase/interview.png" alt="JobHunter 面试训练场真实截图" width="1668" height="937" loading="lazy" decoding="async"><figcaption>面试训练场：模拟流程、题库练习、录音与历史复盘。</figcaption></figure>
+          <figure><img src="assets/showcase/interview.webp" alt="JobHunter 面试训练场真实截图" width="1440" height="809" loading="lazy" decoding="async"><figcaption>面试训练场：模拟流程、题库练习、录音与历史复盘。</figcaption></figure>
           <div class="screen-copy"><p class="kicker">Interview studio</p><h3>训练结果能被下一次使用</h3><p>文字流程不依赖浏览器语音能力。支持时可录音与回放；不支持时保留文字回答和音频文件上传，历史回答继续用于复练。</p></div>
         </article>
 
         <article class="screen-row">
-          <figure><img src="assets/showcase/pipeline.png" alt="JobHunter 投递看板真实截图" width="1675" height="934" loading="lazy" decoding="async"><figcaption>投递看板：机会阶段、跟进建议、备注和结果复盘。</figcaption></figure>
+          <figure><img src="assets/showcase/pipeline.webp" alt="JobHunter 投递看板真实截图" width="1440" height="803" loading="lazy" decoding="async"><figcaption>投递看板：机会阶段、跟进建议、备注和结果复盘。</figcaption></figure>
           <div class="screen-copy"><p class="kicker">Opportunity pipeline</p><h3>机会推进有迹可循</h3><p>把岗位从准备、已投递、面试到结束的变化记录下来。Agent 能建议跟进日期或阶段更新，实际写入仍需要确认。</p></div>
         </article>
 
         <article class="screen-row">
-          <figure><img src="assets/showcase/opportunity-workspace.png" alt="JobHunter 机会详情工作区与时间线真实截图" width="1440" height="900" loading="lazy" decoding="async"><figcaption>Playwright 实测截图：机会详情、简历版本、面试准备与时间线联动。</figcaption></figure>
+          <figure><img src="assets/showcase/opportunity-workspace.webp" alt="JobHunter 机会详情工作区与时间线真实截图" width="1440" height="900" loading="lazy" decoding="async"><figcaption>Playwright 实测截图：机会详情、简历版本、面试准备与时间线联动。</figcaption></figure>
           <div class="screen-copy"><p class="kicker">Opportunity workspace</p><h3>围绕一个岗位组织全部准备</h3><p>机会详情按概览、JD 与匹配、简历版本、面试准备和时间线组织，避免“看板有岗位，准备材料却找不到”的断层。</p></div>
         </article>
       </div>
@@ -508,6 +510,7 @@
             <ol><li>下载或克隆项目。</li><li>在项目根目录双击 <code>start.bat</code>。</li><li>第一次运行按提示安装依赖；之后可直接启动。</li><li>使用结束后在启动窗口按 Ctrl+C 停止本项目服务。</li></ol>
             <p>详细说明见 <a href="../README.md">README</a>；测试矩阵见 <a href="../docs/TESTING.md">测试文档</a>。</p>
           </div>
+          <p class="publication-note"><b>GitHub Pages / 静态项目展示：</b>本文件只展示项目和验收证据，不能在此直接使用 Agent；请在本地用 <code>start.bat</code> 启动完整应用。</p>
         </div>
         <div>
           <p class="kicker">Local mode & compatibility</p>
@@ -518,6 +521,7 @@
             <div class="compat-row"><b>Google Chrome</b><span>核心流程、桌面/平板/移动视口验证。</span></div>
             <div class="compat-row"><b>Mozilla Firefox</b><span>核心文字流程；语音与录音按能力降级。</span></div>
           </div>
+          <p class="verification-note"><b>本版本验收证据：</b>Python 270/270、Node 40/40；浏览器矩阵 7 PASS / 2 Firefox SKIP（本机缺少 Firefox 可执行文件，SKIP 不是通过）。</p>
           <p class="privacy-note"><b>隐私边界：</b>当前版本定位为本地单用户应用，SQLite 数据库、上传文件、导出文件、日志和 API Key 不提交到 Git。它不是带登录、云同步和多租户隔离的公开服务；如需公网部署，必须另行补齐认证、授权和加密设计。</p>
         </div>
       </div>
@@ -542,6 +546,7 @@
         <a href="../README.md">项目说明</a>
         <a href="../docs/PRODUCT_AUDIT.md">产品审计</a>
         <a href="../docs/TESTING.md">测试方法</a>
+        <a href="../docs/SHOWCASE_ASSETS.md">资产审计</a>
         <a href="../LICENSE">开源许可</a>
         <a href="#top">回到顶部</a>
       </nav>
