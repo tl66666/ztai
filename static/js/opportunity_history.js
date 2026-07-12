@@ -24,6 +24,7 @@
     let bound = false;
     let activeRoute = null;
     let activationGeneration = 0;
+    let pendingOpen = null;
 
     function resolveRoute(route) {
       const resolved = {
@@ -92,7 +93,8 @@
         if (status === "stale" || status === "forbidden") {
           options.closeWorkspace({ routeDriven: true, page: route.page });
           removeOpportunityFromUrl();
-          applyRoute({ ...route, module: null, opportunityId: null, hasOpportunity: false });
+          const cleanedRoute = applyRoute({ ...route, module: null, opportunityId: null, hasOpportunity: false });
+          options.focusRoute?.(cleanedRoute);
           if (status === "forbidden") options.notifyForbidden?.(result);
           else options.notifyStale?.(result);
         } else if (status === "retryable") {
@@ -109,6 +111,7 @@
     }
 
     async function sync() {
+      pendingOpen = null;
       return activate(readRoute(windowObject));
     }
 
@@ -119,13 +122,26 @@
         removeOpportunityFromUrl();
         return false;
       }
+      if (pendingOpen?.id === id && activeRoute?.page === "tracker" && activeRoute.opportunityId === id) {
+        return pendingOpen.promise;
+      }
       const historyMode = settings.historyMode || "push";
       const url = routeUrl("tracker", { opportunityId: id });
       writeRoute(url, historyMode);
-      return activate({ page: "tracker", module: null, opportunityId: id, hasOpportunity: true });
+      const marker = {
+        id,
+        promise: activate({ page: "tracker", module: null, opportunityId: id, hasOpportunity: true }),
+      };
+      pendingOpen = marker;
+      try {
+        return await marker.promise;
+      } finally {
+        if (pendingOpen === marker) pendingOpen = null;
+      }
     }
 
     async function navigate(page, settings = {}) {
+      pendingOpen = null;
       const historyMode = settings.historyMode || "push";
       const url = routeUrl(page, settings);
       writeRoute(url, historyMode);
@@ -137,11 +153,13 @@
     }
 
     async function reload(opportunityId) {
+      pendingOpen = null;
       const id = Number(opportunityId);
       return activate({ page: "tracker", module: null, opportunityId: id, hasOpportunity: true });
     }
 
     async function close(settings = {}) {
+      pendingOpen = null;
       const historyMode = settings.historyMode || "replace";
       const url = routeUrl(settings.page || "tracker", { module: settings.module || "board" });
       if (historyMode !== "none") writeRoute(url, historyMode);

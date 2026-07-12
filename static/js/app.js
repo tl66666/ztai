@@ -51,6 +51,7 @@ const opportunityHistory = OpportunityHistory.createOpportunityHistoryController
   window,
   defaultModule: defaultModuleForPage,
   onRouteTransition: handleRouteTransition,
+  focusRoute: focusCleanedRoute,
   showPage: (page) => {
     if ($(`page-${page}`)) renderPage(page);
   },
@@ -452,6 +453,16 @@ function handleRouteTransition(previous, next) {
   if (state.interviewOpportunityHandoff && routeLeavesFlow(previous, next, "interview", "mock")) {
     state.interviewOpportunityHandoff = null;
   }
+}
+
+function focusCleanedRoute(route) {
+  const panel = route.module
+    ? document.querySelector(`.module-panel[data-module-page="${route.page}"][data-module="${route.module}"]:not(.is-filtered-out)`)
+    : null;
+  const target = panel?.querySelector("h2, h3") || $("pageTitle");
+  if (!target) return;
+  target.tabIndex = -1;
+  target.focus({ preventScroll: true });
 }
 
 function renderModelOptions(providerId, selectedModel = "") {

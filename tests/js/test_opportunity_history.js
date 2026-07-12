@@ -20,7 +20,7 @@ async function main() {
   const browser = new FakeWindow("http://localhost/?page=home");
   const outcomes = new Map();
   const transitions = [];
-  const state = { page: null, module: null, current: null, loads: [], closes: [], notices: [] };
+  const state = { page: null, module: null, current: null, loads: [], closes: [], focuses: [], notices: [] };
   const controller = createOpportunityHistoryController({
     window: browser,
     defaultModule: (page) => ({ resume: "input", interview: "mock", tracker: "add" })[page] || null,
@@ -35,6 +35,7 @@ async function main() {
       return outcome;
     },
     closeWorkspace: (context) => { state.current = null; state.closes.push(context); },
+    focusRoute: (route) => state.focuses.push(route),
     notifyStale: () => state.notices.push("stale"),
     notifyForbidden: () => state.notices.push("forbidden"),
     notifyRetryable: () => state.notices.push("retryable"),
@@ -70,6 +71,11 @@ async function main() {
   assert.equal(browser.index, beforeStaleIndex + 1, "404 cleanup must replace its deep link without another history entry");
   assert.equal(state.loads.filter((id) => id === 404).length, 1, "404 cleanup must not fetch the workspace twice");
   assert.equal(state.module, "add", "404 cleanup must immediately render the default module from its page-only URL");
+  assert.deepEqual(
+    state.focuses.at(-1),
+    { page: "tracker", module: "add", opportunityId: null, hasOpportunity: false },
+    "404 cleanup must hand focus to the visible default route after applying it",
+  );
   await controller.navigate("resume", { module: "input" });
   assert.deepEqual(
     transitions.at(-1)[0],
@@ -86,8 +92,10 @@ async function main() {
   assert.equal(new URL(browser.location.href).searchParams.get("opportunity"), "599");
   assert.equal(state.notices.at(-1), "retryable", "rejected loads must be contained");
 
+  const cleanupFocusCount = state.focuses.length;
   await controller.close({ historyMode: "push", restoreFocus: true });
   assert.equal(state.closes.at(-1).restoreFocus, true);
+  assert.equal(state.focuses.length, cleanupFocusCount, "ordinary close must keep its opener-focus behavior");
   assert.equal(new URL(browser.location.href).searchParams.has("opportunity"), false);
 
   const pageOnlyBrowser = new FakeWindow("http://localhost/?page=resume");

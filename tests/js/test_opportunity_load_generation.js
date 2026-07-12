@@ -44,15 +44,22 @@ async function main() {
   const entryCount = browser.entries.length;
   const second = controller.open(51);
   assert.equal(browser.entries.length, entryCount, "double-clicking the same opportunity must not add duplicate history");
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 1, "double-clicking an in-flight opportunity must reuse its GET");
+  const retry = controller.reload(51);
+  assert.equal(requests.length, 2, "an explicit retry must always start a fresh GET");
   assert.equal(requests[0].context.isCurrent(), false, "a retry must supersede the old request even for the same ID");
   assert.equal(requests[1].context.isCurrent(), true);
   requests[1].pending.resolve("new response");
-  await second;
+  await retry;
   requests[0].pending.resolve("old response");
-  await first;
+  await Promise.all([first, second]);
   assert.deepEqual(rendered, ["new response"], "an old response must never overwrite a newer retry");
 
+  await controller.navigate("resume", { module: "jd" });
+  const reopened = controller.open(51);
+  assert.equal(requests.length, 3, "leaving an opportunity and returning must start a normal GET");
+  requests[2].pending.resolve("reopened response");
+  await reopened;
   await controller.navigate("resume", { module: "jd" });
   await controller.navigate("interview", { module: "mock" });
   assert.deepEqual(

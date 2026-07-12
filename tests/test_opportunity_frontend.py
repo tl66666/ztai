@@ -104,6 +104,7 @@ class OpportunityFrontendContractTests(unittest.TestCase):
             "retryOpportunityWorkspace", "opportunityWorkspaceError", "opportunityOpener",
             "focus({ preventScroll: true })", "navigateToRoute", "onRouteTransition",
             "routeLeavesFlow", "opportunityLoadGeneration", "request.isCurrent",
+            "focusCleanedRoute", "focusRoute:", "tabIndex = -1",
         ):
             self.assertIn(token, self.script)
         self.assertNotIn("application_id: state.currentOpportunityId", self.script)
