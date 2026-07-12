@@ -1,21 +1,46 @@
-# JobHunter 测试指南
+# JobHunter 测试与发布指南
 
-## Python 测试
+本项目的质量门禁覆盖 Python 业务契约、原生 JavaScript 状态逻辑、真实浏览器流程、Windows 启动器和仓库隐私。所有命令从仓库根目录运行。
 
-在项目根目录运行：
+## 1. 环境
+
+- Python 3.10+
+- Node.js 20+（JavaScript 与浏览器测试）
+- PowerShell 5.1+（Windows 启动 smoke）
+- Playwright 包及 Chromium/Firefox；Edge 矩阵使用系统安装的 Microsoft Edge
+
+安装 Python 依赖：
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+## 2. Python 测试
+
+完整套件：
 
 ```powershell
 python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-测试默认使用临时 SQLite 数据库，不应读写个人的 `jobhunter.db`。
+测试使用临时数据库，不应读取或修改仓库根目录的 `jobhunter.db`。重点分组：
 
-## JavaScript 单元测试
+| 范围 | 测试文件 |
+| --- | --- |
+| 数据迁移与领域服务 | `test_domain_migrations.py`、`test_career_services.py` |
+| 面试恢复与准备度 | `test_interview_persistence.py`、`test_readiness.py` |
+| Agent 动作/工具/记忆 | `test_agent_actions.py`、`test_agent_domain_tools.py`、`test_agent_business_memory.py` |
+| 前端静态契约 | `test_opportunity_frontend.py`、`test_contextual_agent_frontend.py`、`test_browser_compatibility.py` |
+| 启动、展示和发布卫生 | `test_startup_script.py`、`test_showcase.py`、`test_repository_hygiene.py` |
 
-浏览器能力检测和面试提交状态使用 Node 内置 test runner，不需要前端构建：
+仓库卫生测试通过 `git ls-files` 检查实际跟踪内容，拒绝数据库、真实 `.env`、上传/导出/运行产物、高置信度密钥格式、个人主目录路径和失效 README 链接。
+
+## 3. JavaScript 单元测试
+
+使用 Node 内置 test runner，无需构建：
 
 ```powershell
-node --test tests/js/browser_capabilities.test.js tests/js/career_form.test.js tests/js/interview_media.test.js tests/js/isolated_server.test.js tests/js/browser_artifacts.test.js tests/interview_submission_state.test.js
+node --test tests/js/*.test.js tests/interview_submission_state.test.js
 node tests/contextual_agent_ui.test.js
 node tests/agent_request_races.test.js
 node tests/js/test_opportunity_handoffs.js
@@ -23,28 +48,19 @@ node tests/js/test_opportunity_history.js
 node tests/js/test_opportunity_load_generation.js
 ```
 
-`browser_capabilities.test.js` 覆盖标准和 WebKit 前缀语音识别、录音 API 完整性、Chromium/WebKit 风格 WebM 与 Firefox 风格 Ogg MIME 选择、文件扩展名，以及无录音能力时的上传和文字降级。
+这些测试覆盖：
 
-## 浏览器端到端测试
+- Web Speech 标准/前缀实现和不可用状态；
+- MediaRecorder、`getUserMedia` 与 Chromium/Firefox MIME 选择；
+- 音频上传/文字降级、重复提交和陈旧异步响应；
+- 机会 Back/Forward、深链接、错误保留、重试和不可变跨模块交接；
+- Agent 请求代际、上下文 ID、提案确认控件和响应式壳层契约。
 
-端到端规格位于 `tests/browser/job_hunter_flow.spec.js`，使用 `playwright` 和 Node 内置 test runner。它会自动：
+## 4. 浏览器端到端测试
 
-- 为每个浏览器和视口组合选择独立的空闲回环端口；
-- 为每个组合创建独立临时 SQLite 数据库和 Flask 进程，不在矩阵中共享业务状态；
-- 关闭所有模型 Key，使用确定性本地 Agent；
-- 通过可见表单完成职业档案、简历、JD 匹配、机会、Agent 提案确认、面试恢复和可见时间线流程；
-- 实际构造并上传可解码的 PCM WAV，验证浏览器播放、提交和合理时长；再单独上传损坏 WAV，验证错误提示、原文件下载、未知时长和文字回答降级；
-- 检查同源资源 404、页面异常、控制台 error、横向溢出、关键控件遮挡和 Agent 响应式布局；
-- 每个组合结束后停止自己的服务并删除临时数据库。
+规格：`tests/browser/job_hunter_flow.spec.js`。
 
-先安装 Node.js 20+ 和 Playwright。若仓库没有本地 `node_modules/playwright`，将 `NODE_PATH` 指向已有 Playwright 安装目录：
-
-```powershell
-$env:NODE_PATH = "C:\path\to\node_modules"
-node --test tests/browser/job_hunter_flow.spec.js
-```
-
-全新测试环境可先安装 Playwright 和浏览器：
+全新环境安装：
 
 ```powershell
 npm install --no-save playwright
@@ -52,32 +68,96 @@ npx playwright install chromium firefox
 node --test tests/browser/job_hunter_flow.spec.js
 ```
 
-支持的环境变量：
-
-| 变量 | 用途 |
-| --- | --- |
-| `PYTHON` | 指定启动隔离 Flask 服务的 Python 可执行文件，默认 `python` |
-| `PLAYWRIGHT_CHROMIUM_EXECUTABLE` | 覆盖 Chromium 可执行文件路径 |
-| `PLAYWRIGHT_FIREFOX_EXECUTABLE` | 覆盖 Firefox 可执行文件路径 |
-| `NODE_PATH` | 指向包含 `playwright` 包的 `node_modules` |
-
-完整业务矩阵固定覆盖 `1440x900` 桌面视口和 `390x844` 移动视口；Chromium 另外覆盖 `900x900` 与 `768x900` 平板 launcher、导航、主控件和 Agent 抽屉几何 smoke。Microsoft Edge 通过 Playwright `channel: "msedge"` 启动；系统未安装 Edge 时会输出带检测路径的 SKIP。Firefox 可执行文件不存在时同样输出具体路径并 SKIP。缺失浏览器不计为 PASS，也不会静默回退到 Chromium。
-
-Web Speech 和 MediaRecorder 不请求真实麦克风权限。纯 JS 单元测试验证支持矩阵；E2E 在页面初始化时注入“不支持”能力，在可见面试页和重载恢复后验证语音/录音控件降级，同时确认音频上传、原文件下载和文字回答仍可用。Lucide 和 Chart.js 两个第三方 CDN 在 E2E 中替换为稳定空实现，项目自身 HTML、CSS、JavaScript、图片和 API 均访问真实 Flask 服务。
-
-截图、trace 和服务日志写入 `output/playwright/`。suite 注册测试前统一删除所有浏览器与视口组合的旧同名产物，包括本机缺少浏览器而即将 SKIP 的组合；业务流程在 `finally` 中等待 Agent 抽屉关闭动画完成后写入当前截图并停止 trace。失败和成功都会留下本次调试证据。该目录已被 `.gitignore` 忽略，不提交截图、trace、视频、临时数据库或运行日志。测试失败时先检查：
-
-```text
-output/playwright/<browser>-<viewport>-server.log
-output/playwright/<browser>-<viewport>.png
-output/playwright/<browser>-<viewport>-trace.zip
-```
-
-## 静态检查
+若 Playwright 已由其他工具安装，可把 `NODE_PATH` 指向包含 `playwright` 的 `node_modules`，并按需指定浏览器：
 
 ```powershell
-node --check static/js/browser_capabilities.js
-node --check static/js/app.js
-node --check tests/browser/job_hunter_flow.spec.js
-python -m py_compile app.py config.py utils/agent_runtime/*.py utils/domain/*.py
+$env:NODE_PATH = "C:\path\to\node_modules"
+$env:PLAYWRIGHT_CHROMIUM_EXECUTABLE = "C:\path\to\chrome.exe"
+$env:PLAYWRIGHT_FIREFOX_EXECUTABLE = "C:\path\to\firefox.exe"
+node --test tests/browser/job_hunter_flow.spec.js
 ```
+
+矩阵行为：
+
+- Chromium、Firefox、已安装的 Edge；缺少的浏览器输出明确 SKIP 原因，不冒充通过。
+- `1440x900` 桌面和 `390x844` 移动视口；Chromium 另做中间宽度几何 smoke。
+- 每个组合使用独立空闲回环端口、临时 SQLite 和 Flask 子进程。
+- 关闭所有模型 Key，走确定性本地 Agent，避免测试依赖外部模型。
+- 完成职业档案、简历、JD 匹配、机会、Agent 提案确认、面试恢复、阶段更新和可见时间线。
+- 检查项目资源 404、页面异常、控制台 error、横向溢出、关键遮挡和 Agent 桌面/移动布局。
+- 使用可解码 WAV 验证上传/回放，再用损坏音频验证错误与文字降级。
+
+产物写到 `output/playwright/`：
+
+```text
+<browser>-<viewport>.png
+<browser>-<viewport>-trace.zip
+<browser>-<viewport>-server.log
+```
+
+目录被 Git 忽略。测试注册前会清理旧的同名矩阵产物，避免把过期截图误认为本次结果。
+
+## 5. Windows 启动器验证
+
+静态契约：
+
+```powershell
+python -m unittest tests.test_startup_script -v
+```
+
+干净路径 smoke：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-start.ps1
+```
+
+脚本把跟踪的运行文件复制到包含中文和空格的临时目录，以 `-NoBrowser -SkipInstall` 启动，访问健康端点，并只停止自己创建的进程。它还验证首选端口已有其他服务时不会结束该服务。
+
+## 6. 静态检查
+
+```powershell
+python -m compileall -q app.py config.py utils tests
+node --check static/js/app.js
+node --check static/js/browser_capabilities.js
+node --check tests/browser/job_hunter_flow.spec.js
+git diff --check
+```
+
+## 7. 手工视觉检查
+
+自动矩阵后检查最新桌面和移动截图：
+
+- 产品名、当前机会和 Agent 是首屏可识别信号；
+- Agent 抽屉/底部面板不遮住关闭、发送、确认和取消按钮；
+- 长公司名、岗位名、状态和错误信息不溢出容器；
+- 机会概览、JD、简历、面试、时间线页签可以返回；
+- 网络/500 错误保留机会 URL 并显示重试；404/403 才清理无效实体；
+- 提案确认后对应实体和时间线真实更新；
+- 展示页图片来自真实产品，移动端无横向滚动，减少动态偏好生效。
+
+## 8. 发布前完整门禁
+
+```powershell
+python -m unittest discover -s tests -p "test_*.py" -v
+node --test tests/js/*.test.js tests/interview_submission_state.test.js
+node tests/contextual_agent_ui.test.js
+node tests/agent_request_races.test.js
+node tests/js/test_opportunity_handoffs.js
+node tests/js/test_opportunity_history.js
+node tests/js/test_opportunity_load_generation.js
+python -m compileall -q app.py config.py utils tests
+node --check static/js/app.js
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-start.ps1
+git diff --check
+git status --short
+```
+
+随后执行完整 Playwright 矩阵并检查截图。只有在所有可用浏览器通过、SKIP 原因明确、工作区仅含预期发布变更且无隐私产物时，才提交和推送。
+
+## 9. 失败排查
+
+- 服务未启动：查看 `output/runtime/server-error.log` 或对应 E2E server log。
+- Agent 流程失败：确认测试未设置模型 Key，并检查提案状态和时间线响应。
+- Firefox/Edge SKIP：先看输出中的检测路径，再确认对应浏览器是否安装。
+- 音频失败：区分“浏览器不支持录音”与“上传文件不可解码”；前者必须仍可文字回答。
+- 端口问题：不要结束未知进程；使用启动器自动端口或指定新的 `-Port`。
