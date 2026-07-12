@@ -6,6 +6,7 @@ import sqlite3
 from typing import Any, Callable
 
 from .database import connect
+from .events import apply_event_to_actions
 
 
 StageBuilder = Callable[[dict[str, Any]], list[tuple[str, str]]]
@@ -591,6 +592,14 @@ class InterviewService:
                 event_type,
                 self._dump(payload),
             ),
+        )
+        apply_event_to_actions(
+            conn,
+            self.local_user_id,
+            event_type,
+            "interview_session",
+            session_id,
+            payload,
         )
 
     @staticmethod

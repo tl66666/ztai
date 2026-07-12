@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import re
 import sqlite3
 
 from utils.agent_runtime.memory import ClosingConnection, MemoryStore
+from utils.domain.career import CareerService
 
 
 FACT_PATTERNS = {
@@ -86,64 +88,212 @@ class ContextBuilder:
         if not conversation:
             raise ValueError("conversation_not_found")
         messages = self.store.list_messages(conversation_id, user_id, limit=self.recent_limit)
-        memories = self.store.list_memories(
+        memories = self.store.search_memories(
             user_id,
+            query,
             kind="semantic",
             statuses=("confirmed", "candidate"),
+            limit=8,
         )
-        query_terms = set(re.findall(r"[A-Za-z0-9+#.]+|[\u4e00-\u9fa5]{2,}", query or ""))
-        ranked = sorted(
-            memories,
-            key=lambda memory: (
-                any(term in str(memory["value"]) for term in query_terms),
-                memory["status"] == "confirmed",
-                memory["confidence"],
-            ),
-            reverse=True,
-        )[:8]
-        profile_facts = [f"{memory['memory_key']}：{memory['value']}" for memory in ranked]
-        episodes = self.store.list_memories(
+        profile_facts = [f"{memory['memory_key']}：{memory['value']}" for memory in memories]
+        episodes = self.store.search_memories(
             user_id,
+            query,
             kind="episodic",
             statuses=("confirmed",),
+            limit=3,
         )
-        ranked_episodes = sorted(
-            episodes,
-            key=lambda memory: (
-                any(term in str(memory["value"]) for term in query_terms),
-                memory["confidence"],
-                memory["id"],
-            ),
-            reverse=True,
-        )[:3]
         return RuntimeContext(
             conversation_summary=conversation.summary,
             recent_messages=[{"role": message.role, "content": message.content} for message in messages],
             profile_facts=profile_facts,
             episodes=[
-                f"{episode['value'].get('input', '')} -> {episode['value'].get('result', '')}"
-                for episode in ranked_episodes
+                self._episode_summary(episode["value"])
+                for episode in episodes
             ],
-            career_snapshot=self._career_snapshot(user_id),
+            career_snapshot=self._career_snapshot(user_id, query),
         )
 
-    def _career_snapshot(self, user_id: int) -> str:
+    @staticmethod
+    def _episode_summary(value) -> str:
+        if isinstance(value, dict):
+            return f"{str(value.get('input', ''))[:240]} -> {str(value.get('result', ''))[:240]}"
+        return str(value)[:500]
+
+    def _career_snapshot(self, user_id: int, query: str = "") -> str:
+        sections: list[tuple[str, object]] = []
         try:
-            connection = sqlite3.connect(self.db_path, factory=ClosingConnection)
-            with connection:
-                resume_count = connection.execute(
-                    "SELECT COUNT(*) FROM resumes WHERE user_id = ?", (user_id,)
-                ).fetchone()[0]
-                application_count = connection.execute(
+            service: CareerService | None = CareerService(self.db_path, user_id)
+        except sqlite3.Error:
+            service = None
+
+        try:
+            profile = service.get_profile(user_id) if service else {}
+            profile = profile or {}
+            sections.append(("confirmed_profile", {
+                key: profile.get(key)
+                for key in ("career_direction", "target_role", "cities", "salary", "experience")
+                if profile.get(key) not in (None, "", [], {})
+            }))
+        except (sqlite3.Error, TypeError, ValueError):
+            sections.append(("confirmed_profile", {}))
+
+        with self._business_connection() as connection:
+            counts = {}
+            for label, table, extra in (
+                ("简历", "resumes", ""),
+                ("投递", "job_applications", " AND deleted_at IS NULL"),
+                ("面试训练", "interviews", ""),
+            ):
+                try:
+                    counts[label] = connection.execute(
+                        f'SELECT COUNT(*) FROM "{table}" WHERE user_id = ?{extra}', (user_id,)
+                    ).fetchone()[0]
+                except sqlite3.Error:
+                    counts[label] = 0
+            sections.append((
+                "counts",
+                f"简历 {counts['简历']} 份；投递 {counts['投递']} 条；面试训练 {counts['面试训练']} 次",
+            ))
+            try:
+                row = connection.execute(
                     """
-                    SELECT COUNT(*) FROM job_applications
-                    WHERE user_id = ? AND deleted_at IS NULL
+                    SELECT id, title, version_label, target_job_title, status, updated_at
+                    FROM resumes WHERE user_id = ?
+                    ORDER BY (status = 'active') DESC, (parent_resume_id IS NULL) DESC,
+                             updated_at DESC, id DESC LIMIT 1
                     """,
                     (user_id,),
-                ).fetchone()[0]
-                interview_count = connection.execute(
-                    "SELECT COUNT(*) FROM interviews WHERE user_id = ?", (user_id,)
-                ).fetchone()[0]
-            return f"简历 {resume_count} 份；投递 {application_count} 条；面试训练 {interview_count} 次"
-        except sqlite3.Error:
-            return "暂无可用业务统计"
+                ).fetchone()
+                sections.append(("selected_resume", {
+                    "id": row["id"], "title": row["title"], "version": row["version_label"],
+                    "target": row["target_job_title"], "status": row["status"],
+                    "updated": row["updated_at"],
+                } if row else None))
+            except sqlite3.Error:
+                sections.append(("selected_resume", None))
+
+            opportunities = []
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT id, company, job_title, status, city, priority,
+                           next_action_at, interview_at, deadline_at, updated_at
+                    FROM job_applications
+                    WHERE user_id = ? AND deleted_at IS NULL
+                      AND COALESCE(status, '') NOT IN ('已拒绝', '已结束')
+                    """,
+                    (user_id,),
+                ).fetchall()
+                normalized_query = (query or "").casefold()
+                query_tokens = set(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", normalized_query))
+
+                def relevance(row: sqlite3.Row) -> tuple:
+                    return (
+                        int(str(row["id"]) in query_tokens)
+                        + int(bool(row["company"]) and row["company"].casefold() in normalized_query)
+                        + int(bool(row["job_title"]) and row["job_title"].casefold() in normalized_query),
+                        int(row["priority"] or 0), row["updated_at"] or "", row["id"],
+                    )
+
+                opportunities = [dict(row) for row in sorted(rows, key=relevance, reverse=True)[:5]]
+            except (sqlite3.Error, TypeError, ValueError):
+                opportunities = []
+            sections.append(("opportunities", opportunities))
+
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT id, application_id, title, action_type AS type, status,
+                           priority, due_at, completed_at, completion_evidence, source
+                    FROM action_items
+                    WHERE user_id = ? AND status IN ('pending', 'in_progress', 'completed')
+                    ORDER BY (status != 'completed') DESC, updated_at DESC, id DESC LIMIT 8
+                    """,
+                    (user_id,),
+                ).fetchall()
+                actions = []
+                for row in rows:
+                    action = {
+                        key: row[key]
+                        for key in (
+                            "id", "application_id", "title", "type", "status",
+                            "priority", "due_at", "completed_at", "source",
+                        )
+                    }
+                    if row["source"] == "domain_event" and row["completion_evidence"]:
+                        action["evidence"] = str(row["completion_evidence"])[:500]
+                    actions.append(action)
+                sections.append(("action_items", actions))
+            except sqlite3.Error:
+                sections.append(("action_items", []))
+
+            recent_events = []
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT aggregate_type, aggregate_id, event_type, payload_json, occurred_at
+                    FROM domain_events WHERE user_id = ?
+                    ORDER BY occurred_at DESC, id DESC LIMIT 12
+                    """,
+                    (user_id,),
+                ).fetchall()
+                for row in rows:
+                    outcome = {
+                        "type": row["event_type"], "aggregate": row["aggregate_type"],
+                        "id": row["aggregate_id"], "at": row["occurred_at"],
+                    }
+                    try:
+                        payload = json.loads(row["payload_json"] or "{}")
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        payload = {}
+                    if isinstance(payload, dict):
+                        for key in ("status", "score", "report_type", "answer_count", "fields"):
+                            value = payload.get(key)
+                            if isinstance(value, (str, int, float, bool, list)):
+                                outcome[key] = value
+                    recent_events.append(outcome)
+                sections.append(("recent_outcomes", recent_events))
+            except sqlite3.Error:
+                sections.append(("recent_outcomes", []))
+
+            sections.append(("training_match_trends", self._score_trends(connection, user_id)))
+
+        try:
+            readiness = service.calculate_readiness(user_id) if service else {}
+            sections.insert(3, ("readiness", {
+                key: readiness.get(key)
+                for key in ("score", "label", "components", "blockers", "caps")
+            }))
+        except (sqlite3.Error, TypeError, ValueError):
+            sections.insert(3, ("readiness", {}))
+
+        rendered = "\n".join(
+            f"{name}: {json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}"
+            for name, value in sections
+        )
+        return rendered[:8000]
+
+    def _business_connection(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.db_path, factory=ClosingConnection)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    @staticmethod
+    def _score_trends(connection: sqlite3.Connection, user_id: int) -> dict[str, list]:
+        trends: dict[str, list] = {}
+        for label, table, column in (
+            ("matches", "job_matches", "match_score"),
+            ("interviews", "interviews", "score"),
+            ("practice", "practice_records", "score"),
+        ):
+            try:
+                rows = connection.execute(
+                    f'SELECT "{column}" FROM "{table}" WHERE user_id = ? '
+                    f'AND "{column}" IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 5',
+                    (user_id,),
+                ).fetchall()
+                trends[label] = [row[0] for row in reversed(rows) if isinstance(row[0], (int, float))]
+            except sqlite3.Error:
+                trends[label] = []
+        return trends

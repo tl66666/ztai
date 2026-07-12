@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import re
 import sqlite3
 import uuid
 
@@ -102,6 +103,54 @@ class ClosingConnection(sqlite3.Connection):
 def create_agent_tables(db_path: str) -> None:
     with sqlite3.connect(db_path, factory=ClosingConnection) as connection:
         connection.executescript(AGENT_SCHEMA)
+        try:
+            connection.executescript(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS agent_memories_fts USING fts5(
+                    searchable, user_id UNINDEXED, memory_id UNINDEXED
+                );
+                CREATE TRIGGER IF NOT EXISTS agent_memories_fts_insert
+                AFTER INSERT ON agent_memories BEGIN
+                    INSERT INTO agent_memories_fts(rowid, searchable, user_id, memory_id)
+                    VALUES (
+                        new.id,
+                        new.category || ' ' || new.memory_key || ' ' || new.value_json || ' ' ||
+                        COALESCE(new.related_entity_type, '') || ' ' || COALESCE(new.related_entity_id, ''),
+                        new.user_id,
+                        new.id
+                    );
+                END;
+                CREATE TRIGGER IF NOT EXISTS agent_memories_fts_delete
+                AFTER DELETE ON agent_memories BEGIN
+                    DELETE FROM agent_memories_fts WHERE rowid = old.id;
+                END;
+                CREATE TRIGGER IF NOT EXISTS agent_memories_fts_update
+                AFTER UPDATE ON agent_memories BEGIN
+                    DELETE FROM agent_memories_fts WHERE rowid = old.id;
+                    INSERT INTO agent_memories_fts(rowid, searchable, user_id, memory_id)
+                    VALUES (
+                        new.id,
+                        new.category || ' ' || new.memory_key || ' ' || new.value_json || ' ' ||
+                        COALESCE(new.related_entity_type, '') || ' ' || COALESCE(new.related_entity_id, ''),
+                        new.user_id,
+                        new.id
+                    );
+                END;
+                """
+            )
+            connection.execute("DELETE FROM agent_memories_fts")
+            connection.execute(
+                """
+                INSERT INTO agent_memories_fts(rowid, searchable, user_id, memory_id)
+                SELECT id,
+                       category || ' ' || memory_key || ' ' || value_json || ' ' ||
+                       COALESCE(related_entity_type, '') || ' ' || COALESCE(related_entity_id, ''),
+                       user_id, id
+                FROM agent_memories
+                """
+            )
+        except sqlite3.OperationalError:
+            pass
 
 
 class MemoryStore:
@@ -337,6 +386,8 @@ class MemoryStore:
         confidence: float,
         status: str,
         source_message_id: int | None = None,
+        related_entity_type: str | None = None,
+        related_entity_id: str | int | None = None,
     ) -> int:
         timestamp = _now()
         with self._connect() as connection:
@@ -352,13 +403,16 @@ class MemoryStore:
                 """
                 INSERT INTO agent_memories
                     (user_id, kind, category, memory_key, value_json, confidence, status,
-                     source_message_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     source_message_id, related_entity_type, related_entity_id,
+                     created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id, kind, category, memory_key,
                     json.dumps(value, ensure_ascii=False), confidence, status,
-                    source_message_id, timestamp, timestamp,
+                    source_message_id, related_entity_type,
+                    str(related_entity_id) if related_entity_id is not None else None,
+                    timestamp, timestamp,
                 ),
             )
             return cursor.lastrowid
@@ -387,18 +441,151 @@ class MemoryStore:
                 params,
             ).fetchall()
         return [
-            {
-                "id": row["id"],
-                "kind": row["kind"],
-                "category": row["category"],
-                "memory_key": row["memory_key"],
-                "value": json.loads(row["value_json"]),
-                "confidence": row["confidence"],
-                "status": row["status"],
-                "source_message_id": row["source_message_id"],
-            }
+            self._memory_from_row(row)
             for row in rows
         ]
+
+    def fts_available(self) -> bool:
+        try:
+            with self._connect() as connection:
+                return connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_memories_fts'"
+                ).fetchone() is not None
+        except sqlite3.OperationalError:
+            return False
+
+    def _fts_matches(self, connection: sqlite3.Connection, query: str, user_id: int) -> dict[int, float]:
+        terms = re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+", query or "")
+        if not terms:
+            return {}
+        expression = " OR ".join('"' + term.replace('"', '""') + '"' for term in terms[:12])
+        rows = connection.execute(
+            """
+            SELECT memory_id, bm25(agent_memories_fts) AS relevance
+            FROM agent_memories_fts
+            WHERE agent_memories_fts MATCH ? AND user_id = ?
+            ORDER BY relevance LIMIT 100
+            """,
+            (expression, user_id),
+        ).fetchall()
+        return {int(row["memory_id"]): -float(row["relevance"]) for row in rows}
+
+    def search_memories(
+        self,
+        user_id: int,
+        query: str,
+        kind: str | None = None,
+        statuses: tuple[str, ...] = ("confirmed", "candidate"),
+        limit: int = 8,
+    ) -> list[dict]:
+        if limit <= 0 or not statuses:
+            return []
+        clauses = ["user_id = ?"]
+        params: list = [user_id]
+        if kind:
+            clauses.append("kind = ?")
+            params.append(kind)
+        clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
+        params.extend(statuses)
+        normalized = " ".join((query or "").casefold().split())
+        terms = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", normalized)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM agent_memories WHERE {' AND '.join(clauses)}",
+                params,
+            ).fetchall()
+            try:
+                fts_scores = self._fts_matches(connection, query, user_id)
+            except sqlite3.OperationalError:
+                fts_scores = {}
+
+        def rank(row: sqlite3.Row) -> tuple:
+            searchable = " ".join(
+                str(row[key] or "")
+                for key in ("category", "memory_key", "value_json", "related_entity_type", "related_entity_id")
+            ).casefold()
+            entity_exact = bool(
+                row["related_entity_id"]
+                and str(row["related_entity_id"]).casefold() in terms
+                and (not row["related_entity_type"] or str(row["related_entity_type"]).casefold() in normalized)
+            )
+            exact_field = any(
+                term and term in terms
+                for term in (str(row["category"] or "").casefold(), str(row["memory_key"] or "").casefold())
+            )
+            substring_hits = sum(term in searchable for term in terms)
+            reverse_hit = any(
+                len(value) >= 2 and value in normalized
+                for value in (
+                    str(row["category"] or "").casefold(),
+                    str(row["memory_key"] or "").casefold(),
+                    str(row["value_json"] or "").strip('"').casefold(),
+                    str(row["related_entity_id"] or "").casefold(),
+                )
+            )
+            return (
+                entity_exact,
+                exact_field,
+                reverse_hit,
+                row["id"] in fts_scores,
+                fts_scores.get(row["id"], 0.0),
+                substring_hits,
+                row["status"] == "confirmed",
+                float(row["confidence"]),
+                row["updated_at"] or "",
+                row["id"],
+            )
+
+        relevant = [
+            row for row in rows
+            if not terms or row["id"] in fts_scores or any(
+                term in " ".join(str(row[key] or "") for key in (
+                    "category", "memory_key", "value_json", "related_entity_type", "related_entity_id"
+                )).casefold()
+                for term in terms
+            ) or any(
+                len(value) >= 2 and value in normalized
+                for value in (
+                    str(row["category"] or "").casefold(),
+                    str(row["memory_key"] or "").casefold(),
+                    str(row["value_json"] or "").strip('"').casefold(),
+                    str(row["related_entity_id"] or "").casefold(),
+                )
+            )
+        ]
+        relevant_ids = {row["id"] for row in relevant}
+        ordered = sorted(relevant, key=rank, reverse=True)
+        if len(ordered) < limit:
+            ordered.extend(
+                sorted(
+                    (row for row in rows if row["id"] not in relevant_ids),
+                    key=rank,
+                    reverse=True,
+                )[: limit - len(ordered)]
+            )
+        return [self._memory_from_row(row) for row in ordered[:limit]]
+
+    def delete_memory(self, user_id: int, memory_id: int) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM agent_memories WHERE id = ? AND user_id = ?", (memory_id, user_id)
+            )
+        return cursor.rowcount > 0
+
+    @staticmethod
+    def _memory_from_row(row: sqlite3.Row) -> dict:
+        try:
+            value = json.loads(row["value_json"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            value = str(row["value_json"] or "")[:500]
+        return {
+            "id": row["id"], "user_id": row["user_id"], "kind": row["kind"],
+            "category": row["category"], "memory_key": row["memory_key"], "value": value,
+            "confidence": row["confidence"], "status": row["status"],
+            "source_message_id": row["source_message_id"],
+            "related_entity_type": row["related_entity_type"],
+            "related_entity_id": row["related_entity_id"],
+        }
 
     def create_task(
         self,

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .database import APPLICATION_STATUSES, connect, ensure_column
+from .events import apply_event_to_actions
 
 
 DEFAULT_APPLICATION_STATUS = "已投递"
@@ -1310,6 +1311,14 @@ class CareerService:
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                 source,
             ),
+        )
+        apply_event_to_actions(
+            conn,
+            self.local_user_id,
+            event_type,
+            aggregate_type,
+            aggregate_id,
+            payload,
         )
 
     @staticmethod
