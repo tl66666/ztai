@@ -164,11 +164,127 @@
     };
   }
 
+  function createRecordingController(dependencies) {
+    const {
+      acquireStream,
+      createRecorder,
+      createBlob,
+      computeMetrics,
+      publish,
+      onError = () => {},
+      onRecorderChange = () => {},
+      now = () => Date.now(),
+    } = dependencies;
+    let epoch = 0;
+    let startingToken = null;
+    let active = null;
+
+    const setActive = (value) => {
+      active = value;
+      onRecorderChange(value?.recorder || null);
+    };
+
+    async function start({ target, format }) {
+      if (startingToken !== null || active) return { ok: false, reason: "busy" };
+      const token = ++epoch;
+      startingToken = token;
+      let stream = null;
+      try {
+        stream = await acquireStream();
+        if (token !== epoch) {
+          stopTracks(stream);
+          return { ok: false, reason: "cancelled" };
+        }
+        const recorderOptions = format?.mimeType ? { mimeType: format.mimeType } : undefined;
+        const recorder = createRecorder(stream, recorderOptions);
+        const startedAt = now();
+        setActive({ recorder, stream, token, target });
+        bindRecorderSession({
+          recorder,
+          stream,
+          token,
+          format,
+          isCurrent: (candidate) => candidate === epoch,
+          createBlob,
+          computeMetrics: (blob) => computeMetrics(blob, "recording", startedAt),
+          publish: (result) => {
+            if (active?.token === token) setActive(null);
+            publish({ ...result, target });
+          },
+          onError: (error) => {
+            if (active?.token === token) setActive(null);
+            onError(error);
+          },
+        });
+        recorder.start();
+        return { ok: true, recorder, token };
+      } catch (error) {
+        stopTracks(stream);
+        if (active?.token === token) setActive(null);
+        onError(error);
+        return { ok: false, reason: "error", error };
+      } finally {
+        if (startingToken === token) startingToken = null;
+      }
+    }
+
+    function invalidate() {
+      epoch += 1;
+      startingToken = null;
+      const current = active;
+      if (!current) return;
+      setActive(null);
+      try {
+        if (current.recorder.state === "recording") current.recorder.stop();
+      } finally {
+        stopTracks(current.stream);
+      }
+    }
+
+    function stop() {
+      if (!active) return false;
+      if (active.recorder.state !== "recording") return false;
+      active.recorder.stop();
+      return true;
+    }
+
+    return {
+      start,
+      stop,
+      invalidate,
+      activeRecorder() { return active?.recorder || null; },
+    };
+  }
+
+  function createObjectUrlRegistry({ create, revoke }) {
+    const urls = new Map();
+    const clear = (target) => {
+      const url = urls.get(target);
+      if (!url) return;
+      revoke(url);
+      urls.delete(target);
+    };
+    const clearAll = () => [...urls.keys()].forEach(clear);
+    return {
+      replace(target, blob) {
+        clearAll();
+        const url = create(blob);
+        urls.set(target, url);
+        return url;
+      },
+      get(target) { return urls.get(target) || null; },
+      clear,
+      clearAll,
+    };
+  }
+
   return {
     computeAudioMetrics,
     decodeAudioBlob,
     bindRecorderSession,
     createSpeechTranscriptSession,
     bindSpeechRecognition,
+    createRecordingController,
+    createObjectUrlRegistry,
   };
 });

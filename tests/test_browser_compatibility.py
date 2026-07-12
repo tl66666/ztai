@@ -48,6 +48,22 @@ class BrowserCompatibilityFrontendContracts(unittest.TestCase):
         self.assertRegex(css, r"@media \(max-width: 1120px\)[\s\S]+\.agent-launcher \{ top:")
         self.assertRegex(css, r"\.sidebar \{[\s\S]+padding-right:")
 
+    def test_career_profile_errors_have_visible_retry_contract(self):
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        app = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        career_form = (ROOT / "static" / "js" / "career_form.js").read_text(encoding="utf-8")
+
+        self.assertRegex(
+            html,
+            r'id="careerGoalStatus"[^>]+role="status"[^>]+aria-live="polite"',
+        )
+        self.assertIn('id="retryCareerGoalBtn"', html)
+        self.assertIn("CareerForm.loadProfile", app)
+        self.assertIn("CareerForm.saveProfile", app)
+        self.assertIn('$("retryCareerGoalBtn")?.addEventListener("click", loadCareerGoal)', app)
+        self.assertIn("加载失败，请重试", career_form)
+        self.assertIn("保存失败，请重试", career_form)
+
 
 if __name__ == "__main__":
     unittest.main()

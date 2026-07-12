@@ -152,3 +152,115 @@ test("speech callbacks replace interim text and clear active state on end or err
   assert.deepEqual(activeStates, [true, false, true, false]);
   assert.deepEqual(errors, ["network"]);
 });
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function fakeStream(name) {
+  const track = { stops: 0, stop() { this.stops += 1; } };
+  return { name, track, getTracks: () => [track] };
+}
+
+function fakeRecorder(stream, callbacks) {
+  return {
+    stream,
+    state: "inactive",
+    mimeType: "audio/webm",
+    set ondataavailable(value) { callbacks.data = value; },
+    set onstop(value) { callbacks.stop = value; },
+    set onerror(value) { callbacks.error = value; },
+    start() { this.state = "recording"; },
+    stop() { this.state = "inactive"; },
+  };
+}
+
+test("concurrent recording starts acquire one stream and retain one active recorder", async () => {
+  const pending = deferred();
+  const stream = fakeStream("first");
+  const callbacks = {};
+  let acquisitions = 0;
+  const controller = InterviewMedia.createRecordingController({
+    acquireStream: () => { acquisitions += 1; return pending.promise; },
+    createRecorder: (value) => fakeRecorder(value, callbacks),
+    createBlob: (chunks, options) => ({ chunks, type: options.type }),
+    computeMetrics: async () => ({ duration_seconds: 1 }),
+    publish() {},
+  });
+
+  const first = controller.start({ target: "answer", format: { mimeType: "audio/webm" } });
+  const second = await controller.start({ target: "room", format: { mimeType: "audio/webm" } });
+  assert.deepEqual(second, { ok: false, reason: "busy" });
+  assert.equal(acquisitions, 1);
+  pending.resolve(stream);
+  const started = await first;
+  assert.equal(started.ok, true);
+  assert.equal(controller.activeRecorder(), started.recorder);
+  assert.equal(started.recorder.stream, stream);
+
+  controller.invalidate();
+  assert.equal(controller.activeRecorder(), null);
+  assert.ok(stream.track.stops >= 1);
+});
+
+test("invalidating an in-flight recording stops its late stream without creating a recorder", async () => {
+  const pending = deferred();
+  const stream = fakeStream("late");
+  let recorders = 0;
+  const controller = InterviewMedia.createRecordingController({
+    acquireStream: () => pending.promise,
+    createRecorder: () => { recorders += 1; return fakeRecorder(stream, {}); },
+    createBlob() {}, computeMetrics: async () => ({}), publish() {},
+  });
+
+  const starting = controller.start({ target: "answer", format: null });
+  controller.invalidate();
+  pending.resolve(stream);
+  assert.deepEqual(await starting, { ok: false, reason: "cancelled" });
+  assert.equal(recorders, 0);
+  assert.ok(stream.track.stops >= 1);
+  assert.equal(controller.activeRecorder(), null);
+});
+
+test("upload invalidation prevents an old recorder stop from replacing the upload", async () => {
+  const stream = fakeStream("recording");
+  const callbacks = {};
+  const published = [];
+  const controller = InterviewMedia.createRecordingController({
+    acquireStream: async () => stream,
+    createRecorder: (value) => fakeRecorder(value, callbacks),
+    createBlob: (chunks, options) => ({ chunks, type: options.type }),
+    computeMetrics: async () => ({ duration_seconds: 1 }),
+    publish: (value) => published.push(value),
+  });
+  await controller.start({ target: "answer", format: { mimeType: "audio/webm" } });
+  assert.equal(typeof callbacks.data, "function");
+  assert.equal(typeof callbacks.stop, "function");
+  callbacks.data({ data: { size: 1, name: "recorded" } });
+  controller.invalidate();
+  await callbacks.stop();
+
+  assert.deepEqual(published, []);
+  assert.ok(stream.track.stops >= 1);
+});
+
+test("exclusive preview URLs revoke answer and room URLs when targets alternate", () => {
+  const revoked = [];
+  let sequence = 0;
+  const registry = InterviewMedia.createObjectUrlRegistry({
+    create: () => `blob:${++sequence}`,
+    revoke: (url) => revoked.push(url),
+  });
+
+  assert.equal(registry.replace("answer", {}), "blob:1");
+  assert.equal(registry.replace("room", {}), "blob:2");
+  assert.deepEqual(revoked, ["blob:1"]);
+  assert.equal(registry.get("answer"), null);
+  assert.equal(registry.replace("answer", {}), "blob:3");
+  assert.deepEqual(revoked, ["blob:1", "blob:2"]);
+  registry.clearAll();
+  assert.deepEqual(revoked, ["blob:1", "blob:2", "blob:3"]);
+});

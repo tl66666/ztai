@@ -115,7 +115,10 @@
           <label class="career-goal-skills"><span>已确认技能</span><input id="careerGoalSkills" class="input" placeholder="Python、接口测试、Playwright" /></label>
           <button id="saveCareerGoalBtn" class="primary" type="submit"><i data-lucide="save"></i>保存目标档案</button>
         </form>
-        <p id="careerGoalStatus" class="career-goal-status" role="status" aria-live="polite">填写后，Agent 会在后续简历、机会和面试建议中使用这些已确认信息。</p>
+        <div class="career-goal-status-row">
+          <p id="careerGoalStatus" class="career-goal-status" role="status" aria-live="polite">填写后，Agent 会在后续简历、机会和面试建议中使用这些已确认信息。</p>
+          <button id="retryCareerGoalBtn" class="ghost small" type="button" hidden>重新加载</button>
+        </div>
       </section>
 
       <section class="career-pulse" id="careerPulse">

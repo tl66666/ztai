@@ -52,10 +52,52 @@
     return { direction };
   }
 
+  async function loadProfile({ request, controls, state }) {
+    if (controls.retry) controls.retry.hidden = true;
+    try {
+      const response = await request();
+      if (!response?.success || !response.data) {
+        const message = response?.message || "目标档案加载失败";
+        controls.status.textContent = `${message}，请重试。当前填写内容已保留。`;
+        if (controls.retry) controls.retry.hidden = false;
+        return { ok: false, response };
+      }
+      return { ok: true, response, ...hydrateProfile(response.data, controls, state) };
+    } catch (error) {
+      controls.status.textContent = "目标档案加载失败，请重试。当前填写内容已保留。";
+      if (controls.retry) controls.retry.hidden = false;
+      return { ok: false, error };
+    }
+  }
+
+  async function saveProfile({ request, payload, status, onSuccess = () => {} }) {
+    let response;
+    try {
+      response = await request(payload);
+    } catch (error) {
+      status.textContent = "目标档案保存失败，请重试。表单内容已保留。";
+      return { ok: false, error };
+    }
+    if (!response?.success || !response.data) {
+      const message = response?.message || "目标档案保存失败";
+      status.textContent = `${message}，请重试。表单内容已保留。`;
+      return { ok: false, response };
+    }
+    status.textContent = `目标档案已保存：${response.data.target_role || "未设置目标岗位"}`;
+    try {
+      await onSuccess(response.data);
+      return { ok: true, response };
+    } catch (followupError) {
+      return { ok: true, response, followupError };
+    }
+  }
+
   return {
     parseList,
     serializeList,
     resolveDirection,
     hydrateProfile,
+    loadProfile,
+    saveProfile,
   };
 });

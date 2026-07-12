@@ -520,6 +520,8 @@ h3 { font-size: 19px; margin-bottom: 0; }
 .career-goal-skills { grid-column: span 3; }
 .career-goal-form .primary { min-height: 48px; }
 .career-goal-status { margin: 12px 0 0; color: var(--muted); font-size: 13px; }
+.career-goal-status-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.career-goal-status-row .ghost { margin-top: 12px; }
 
 .career-pulse {
   display: grid;

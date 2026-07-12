@@ -29,10 +29,9 @@ const state = {
   matchOpportunityId: null,
   opportunityOpener: null,
   applications: [],
-  mediaRecorder: null,
+  recordingController: null,
   audioBlob: null,
   audioMetrics: null,
-  recordingSessionToken: 0,
   soundEnabled: localStorage.getItem("jobhunter_sound") !== "off",
   audioContext: null,
   agentConversationId: localStorage.getItem(JOBHUNTER_AGENT_CONVERSATION) || "",
@@ -47,6 +46,10 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+const audioPreviewUrls = InterviewMedia.createObjectUrlRegistry({
+  create: (blob) => URL.createObjectURL(blob),
+  revoke: (url) => URL.revokeObjectURL(url),
+});
 const agentContext = ContextualAgent.createContextStore();
 const agentConversationEpoch = ContextualAgent.createConversationEpoch();
 const agentCommandCenterGate = ContextualAgent.createLatestRequestGate();
@@ -185,6 +188,7 @@ function bindActions() {
     toast(`已切换求职方向：${careerProfileLabel(state.careerProfile)}`);
   });
   $("careerGoalForm")?.addEventListener("submit", saveCareerGoal);
+  $("retryCareerGoalBtn")?.addEventListener("click", loadCareerGoal);
   document.querySelectorAll("[data-flow-jump]").forEach((button) => {
     button.addEventListener("click", () => {
       const [page, module] = button.dataset.flowJump.split(":");
@@ -337,19 +341,21 @@ function optionalNumberValue(id) {
 }
 
 async function loadCareerGoal() {
-  const data = await api("/profile");
-  const profile = data.success ? data.data : null;
-  if (!profile) return;
-  const restored = CareerForm.hydrateProfile(profile, {
-    role: $("careerGoalRole"),
-    cities: $("careerGoalCities"),
-    salaryMin: $("careerGoalSalaryMin"),
-    salaryMax: $("careerGoalSalaryMax"),
-    skills: $("careerGoalSkills"),
-    direction: $("careerProfileSelect"),
-    status: $("careerGoalStatus"),
-  }, state);
-  if (restored.direction.matched) {
+  const result = await CareerForm.loadProfile({
+    request: () => api("/profile"),
+    controls: {
+      role: $("careerGoalRole"),
+      cities: $("careerGoalCities"),
+      salaryMin: $("careerGoalSalaryMin"),
+      salaryMax: $("careerGoalSalaryMax"),
+      skills: $("careerGoalSkills"),
+      direction: $("careerProfileSelect"),
+      status: $("careerGoalStatus"),
+      retry: $("retryCareerGoalBtn"),
+    },
+    state,
+  });
+  if (result.ok && result.direction.matched) {
     localStorage.setItem("jobhunter_career_profile", state.careerProfile);
     syncCareerProfileToForms();
   }
@@ -370,25 +376,24 @@ async function saveCareerGoal(event) {
     $("careerGoalSalaryMin").focus();
     return;
   }
-  const data = await api("/profile", {
-    method: "PUT",
-    body: {
-      career_direction: selectedCareerProfile(),
-      target_role: targetRole,
-      cities: listInputValue("careerGoalCities"),
-      salary: { min: salaryMin, max: salaryMax },
-      confirmed_skills: listInputValue("careerGoalSkills"),
-      source_metadata: { form: "career-goal-editor" },
+  const payload = {
+    career_direction: selectedCareerProfile(),
+    target_role: targetRole,
+    cities: listInputValue("careerGoalCities"),
+    salary: { min: salaryMin, max: salaryMax },
+    confirmed_skills: listInputValue("careerGoalSkills"),
+    source_metadata: { form: "career-goal-editor" },
+  };
+  await CareerForm.saveProfile({
+    request: (body) => api("/profile", { method: "PUT", body }),
+    payload,
+    status: $("careerGoalStatus"),
+    onSuccess: async () => {
+      toast("求职目标档案已保存");
+      await loadDashboard();
+      syncAgentContext();
     },
   });
-  if (!data.success) {
-    $("careerGoalStatus").textContent = data.message || "目标档案保存失败，请重试。";
-    return;
-  }
-  $("careerGoalStatus").textContent = `目标档案已保存：${data.data.target_role}`;
-  toast("求职目标档案已保存");
-  await loadDashboard();
-  syncAgentContext();
 }
 
 function selectedCareerProfile() {
@@ -1310,58 +1315,44 @@ async function analyzeVoice() {
   renderFeedback({ score: data.overall_score, summary: "表达分析完成", voice: data, suggestions: data.tips });
 }
 
+function getRecordingController() {
+  if (state.recordingController) return state.recordingController;
+  state.recordingController = InterviewMedia.createRecordingController({
+    acquireStream: () => navigator.mediaDevices.getUserMedia({ audio: true }),
+    createRecorder: (stream, options) => (
+      options ? new MediaRecorder(stream, options) : new MediaRecorder(stream)
+    ),
+    createBlob: (chunks, options) => new Blob(chunks, options),
+    computeMetrics: (blob, source, startedAt) => computeAudioMetrics(blob, source, startedAt),
+    publish: ({ blob, metrics, target }) => {
+      state.audioBlob = blob;
+      state.audioMetrics = metrics;
+      renderAudioPreview(target);
+      toast("录音已生成，可以回放或分析");
+    },
+    onError: (error) => {
+      toast(error?.name === "NotAllowedError"
+        ? "未获得麦克风权限，请上传音频或使用文字回答"
+        : "录音发生错误，请上传音频或使用文字回答");
+    },
+  });
+  return state.recordingController;
+}
+
 async function startAudioRecording(target = "answer") {
   const plan = BrowserCapabilities.audioInputPlan(window, navigator);
   if (!plan.canRecord) return toast("当前浏览器不能直接录音，请上传音频或使用文字回答");
-  if (state.mediaRecorder && state.mediaRecorder.state === "recording") {
-    return toast("正在录音中，先停止当前录音");
-  }
-  let stream = null;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const startedAt = Date.now();
-    const recorderFormat = plan.recorderFormat;
-    const options = recorderFormat ? { mimeType: recorderFormat.mimeType } : undefined;
-    const recorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
-    const token = state.recordingSessionToken + 1;
-    state.recordingSessionToken = token;
-    state.mediaRecorder = recorder;
-    InterviewMedia.bindRecorderSession({
-      recorder,
-      stream,
-      token,
-      format: recorderFormat,
-      isCurrent: (candidate) => candidate === state.recordingSessionToken,
-      createBlob: (chunks, blobOptions) => new Blob(chunks, blobOptions),
-      computeMetrics: (blob) => computeAudioMetrics(blob, "recording", startedAt),
-      publish: ({ blob, metrics }) => {
-        state.audioBlob = blob;
-        state.audioMetrics = metrics;
-        renderAudioPreview(target);
-        toast("录音已生成，可以回放或分析");
-      },
-      onError: () => {
-        if (state.mediaRecorder === recorder) state.mediaRecorder = null;
-        toast("录音发生错误，请上传音频或使用文字回答");
-      },
-    });
-    recorder.start();
-    toast(target === "room" ? "模拟面试录音开始" : "真实录音开始");
-  } catch (error) {
-    stream?.getTracks().forEach((track) => track.stop());
-    state.mediaRecorder = null;
-    toast(error?.name === "NotAllowedError"
-      ? "未获得麦克风权限，请上传音频或使用文字回答"
-      : "无法开始录音，请上传音频或使用文字回答");
-  }
+  const result = await getRecordingController().start({ target, format: plan.recorderFormat });
+  if (result.ok) return toast(target === "room" ? "模拟面试录音开始" : "真实录音开始");
+  if (result.reason === "busy") toast("正在启动或录制音频，请先停止当前录音");
 }
 
 function stopAudioRecording() {
-  if (!state.mediaRecorder || state.mediaRecorder.state !== "recording") return toast("当前没有正在录制的音频");
-  state.mediaRecorder.stop();
+  if (!getRecordingController().stop()) toast("当前没有正在录制的音频");
 }
 
 async function handleAudioUpload() {
+  getRecordingController().invalidate();
   const file = $("audioFileInput").files[0];
   if (!file) return;
   state.audioBlob = file;
@@ -1384,8 +1375,7 @@ function renderAudioPreview(target = "answer") {
   const status = target === "room" ? $("roomAudioPlaybackStatus") : $("audioPlaybackStatus");
   const download = target === "room" ? $("roomAudioDownloadLink") : $("audioDownloadLink");
   if (state.audioBlob) {
-    if (playback.dataset.url) URL.revokeObjectURL(playback.dataset.url);
-    const url = URL.createObjectURL(state.audioBlob);
+    const url = audioPreviewUrls.replace(target, state.audioBlob);
     const descriptor = BrowserCapabilities.audioFileDescriptor(state.audioBlob);
     playback.src = url;
     playback.dataset.url = url;
