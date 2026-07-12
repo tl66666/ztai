@@ -27,6 +27,7 @@ const state = {
   interviewOpportunityHandoff: null,
   matchOpportunityId: null,
   opportunityOpener: null,
+  applications: [],
   mediaRecorder: null,
   audioChunks: [],
   audioBlob: null,
@@ -36,9 +37,14 @@ const state = {
   soundEnabled: localStorage.getItem("jobhunter_sound") !== "off",
   audioContext: null,
   agentConversationId: localStorage.getItem(JOBHUNTER_AGENT_CONVERSATION) || "",
+  agentDrawerOpener: null,
+  agentProposals: new Map(),
+  currentPage: "home",
+  currentModule: "",
 };
 
 const $ = (id) => document.getElementById(id);
+const agentContext = ContextualAgent.createContextStore();
 const {
   applicationPayloadForJob,
   buildApplicationHandoff,
@@ -92,6 +98,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   await Promise.all([loadResumes(), loadDashboard(), loadApplications(), loadQuestions(), loadTrainingRecords()]);
   await loadAgentConversations();
   await applyInitialRouteFromQuery();
+  await loadAgentCommandCenter();
+  syncAgentContext();
   lucide.createIcons();
 });
 
@@ -105,6 +113,8 @@ function bindNavigation() {
 }
 
 function renderPage(page) {
+  if (state.currentPage !== page) state.currentModule = "";
+  state.currentPage = page;
   document.querySelectorAll(".page").forEach((item) => item.classList.remove("active"));
   $(`page-${page}`).classList.add("active");
   document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.page === page));
@@ -116,6 +126,8 @@ function renderPage(page) {
     agent: "AI 教练",
   };
   $("pageTitle").textContent = titles[page] || "JobHunter AI";
+  syncAgentContext();
+  if (page === "agent") loadAgentCommandCenter();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -239,6 +251,17 @@ function bindActions() {
     tab.addEventListener("keydown", handleOpportunityTabKeydown);
   });
   $("salaryBtn").addEventListener("click", evaluateSalary);
+  $("agentLauncher")?.addEventListener("click", openAgentDrawer);
+  $("openAgentWorkspace")?.addEventListener("click", openAgentDrawer);
+  $("closeAgentDrawer")?.addEventListener("click", closeAgentDrawer);
+  $("agentDrawerBackdrop")?.addEventListener("click", closeAgentDrawer);
+  $("agentContextChips")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-agent-context]");
+    if (!button) return;
+    agentContext.remove(button.dataset.removeAgentContext);
+    renderAgentContextChips();
+  });
+  $("chatLog")?.addEventListener("click", handleProposalClick);
   $("sendAgentBtn").addEventListener("click", sendAgentMessage);
   $("careerReportBtn").addEventListener("click", generateCareerReport);
   $("newAgentConversation")?.addEventListener("click", createAgentConversation);
@@ -249,8 +272,15 @@ function bindActions() {
     await restoreAgentMessages();
   });
   $("agentInput").addEventListener("keydown", (event) => {
-    if (event.key === "Enter") sendAgentMessage();
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      sendAgentMessage();
+    }
   });
+  ["analysisResumeSelect", "exportResumeSelect", "tailorResumeSelect", "skillResumeSelect", "interviewResumeSelect"].forEach((id) => {
+    $(id)?.addEventListener("change", syncAgentContext);
+  });
+  document.addEventListener("keydown", handleAgentDrawerKeydown);
   document.querySelectorAll("[data-prompt]").forEach((button) => {
     button.addEventListener("click", () => {
       $("agentInput").value = button.dataset.prompt;
@@ -426,8 +456,10 @@ function filterModules(page, module, activeButton) {
 }
 
 function renderModule(page, module) {
+  if (page === state.currentPage) state.currentModule = module || "";
   const button = document.querySelector(`[data-section-filter="${page}:${module}"]`);
   if (button) filterModules(page, module, button);
+  syncAgentContext();
 }
 
 function navigateToRoute(page, module = null, options = {}) {
@@ -564,6 +596,7 @@ async function loadResumes() {
     `).join("")
     : `<div class="list-item"><b>暂无简历</b><small>先保存一份简历</small></div>`;
   updateResumeSelects();
+  syncAgentContext();
   lucide.createIcons();
 }
 
@@ -1739,6 +1772,7 @@ async function loadApplications() {
     return;
   }
   const apps = data.success ? data.data : [];
+  state.applications = apps;
   const canonicalStatuses = Array.isArray(data.canonical_statuses) ? data.canonical_statuses : [];
   state.applicationStatuses = canonicalStatuses;
   const previousStatus = $("appStatus").value;
@@ -1750,6 +1784,7 @@ async function loadApplications() {
     : (canonicalStatuses.includes("已投递") ? "已投递" : canonicalStatuses[0] || "");
   if (!apps.length) {
     $("applicationList").innerHTML = `<div class="opportunity-empty"><strong>暂无投递</strong><span>添加第一条记录后，这里会按阶段自动成列。</span><button class="primary" onclick="jumpToModule('tracker','add')"><i data-lucide="plus"></i>新增投递</button></div>`;
+    renderAgentCommandOpportunities();
     lucide.createIcons();
     return;
   }
@@ -1784,6 +1819,7 @@ async function loadApplications() {
       `).join("") : `<div class="kanban-empty"><span>暂无记录</span></div>`}
     </section>
   `).join("");
+  renderAgentCommandOpportunities();
   lucide.createIcons();
 }
 
@@ -1828,6 +1864,7 @@ async function loadOpportunityWorkspace(id, request = {}) {
 
   state.currentOpportunityWorkspace = workspace;
   renderOpportunityWorkspace(workspace);
+  syncAgentContext();
   selectOpportunityTab($("opportunity-tab-overview"), false);
   $("opportunityWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
   return { status: "ok" };
@@ -1852,6 +1889,7 @@ function resetOpportunityWorkspaceView(context = {}) {
   state.opportunityLoadGeneration += 1;
   state.currentOpportunityId = null;
   state.currentOpportunityWorkspace = null;
+  syncAgentContext();
   $("opportunityWorkspace").classList.add("hidden");
   $("opportunityWorkspaceError").classList.add("hidden");
   if (!wasOpen) return;
@@ -1900,6 +1938,7 @@ function renderOpportunityWorkspace(workspace) {
   renderOpportunityResume(workspace);
   renderOpportunityInterview(workspace);
   renderOpportunityTimeline(workspace);
+  syncAgentContext();
   lucide.createIcons();
 }
 
@@ -2106,6 +2145,162 @@ function renderNextActions(actions) {
   `).join("") : "";
 }
 
+function currentAgentResumeId() {
+  if (state.currentOpportunityWorkspace?.resume?.id) return state.currentOpportunityWorkspace.resume.id;
+  if (state.currentPage === "resume" && state.editingResumeId) return state.editingResumeId;
+  const selectors = {
+    "resume:analysis": "analysisResumeSelect",
+    "resume:export": "exportResumeSelect",
+    "resume:jd": "tailorResumeSelect",
+    "resume:skills": "skillResumeSelect",
+    "interview:mock": "interviewResumeSelect",
+  };
+  const id = selectors[`${state.currentPage}:${state.currentModule}`];
+  return id ? Number($(id)?.value || 0) || null : null;
+}
+
+function syncAgentContext() {
+  if (!window.ContextualAgent) return;
+  agentContext.sync({
+    module: state.currentModule ? `${state.currentPage}:${state.currentModule}` : state.currentPage,
+    opportunityId: state.currentOpportunityId,
+    resumeId: currentAgentResumeId(),
+  });
+  renderAgentContextChips();
+}
+
+function renderAgentContextChips() {
+  const box = $("agentContextChips");
+  if (!box) return;
+  const context = agentContext.payload();
+  const moduleLabels = {
+    home: "项目总览", resume: "简历实验室", interview: "面试训练场",
+    tracker: "投递看板", agent: "行动指挥台",
+  };
+  const values = [];
+  if (context.module) {
+    const [page, module] = context.module.split(":");
+    const moduleButton = module && document.querySelector(`[data-section-filter="${page}:${module}"]`);
+    values.push(["module", `模块：${moduleButton?.textContent?.trim() || moduleLabels[page] || page}`]);
+  }
+  if (context.opportunity_id) {
+    const opportunity = state.currentOpportunityWorkspace?.opportunity
+      || state.applications.find((item) => Number(item.id) === context.opportunity_id);
+    values.push(["opportunity", `机会：${opportunity ? `${opportunity.company} / ${opportunity.job_title}` : `#${context.opportunity_id}`}`]);
+  }
+  if (context.resume_id) {
+    const resume = state.resumes.find((item) => Number(item.id) === context.resume_id);
+    values.push(["resume", `简历：${resume?.title || `#${context.resume_id}`}`]);
+  }
+  box.innerHTML = values.length ? values.map(([kind, label]) => `
+    <span class="agent-context-chip">${escapeHtml(label)}<button type="button" data-remove-agent-context="${kind}" aria-label="移除${escapeAttr(label)}上下文" title="移除上下文"><i data-lucide="x"></i></button></span>
+  `).join("") : '<span class="agent-context-empty">未附加上下文</span>';
+  if (window.lucide) lucide.createIcons();
+}
+
+function openAgentDrawer(event) {
+  const drawer = $("agentDrawer");
+  if (!drawer || drawer.getAttribute("aria-hidden") === "false") return;
+  state.agentDrawerOpener = event?.currentTarget || document.activeElement;
+  syncAgentContext();
+  drawer.setAttribute("aria-hidden", "false");
+  $("agentLauncher").setAttribute("aria-expanded", "true");
+  $("agentDrawerBackdrop").classList.remove("hidden");
+  document.body.classList.add("agent-drawer-open");
+  requestAnimationFrame(() => {
+    $("closeAgentDrawer")?.focus({ preventScroll: true });
+  });
+  loadAgentCommandCenter();
+}
+
+function closeAgentDrawer() {
+  const drawer = $("agentDrawer");
+  if (!drawer || drawer.getAttribute("aria-hidden") === "true") return;
+  drawer.setAttribute("aria-hidden", "true");
+  $("agentLauncher").setAttribute("aria-expanded", "false");
+  $("agentDrawerBackdrop").classList.add("hidden");
+  document.body.classList.remove("agent-drawer-open");
+  const opener = state.agentDrawerOpener?.isConnected ? state.agentDrawerOpener : $("agentLauncher");
+  state.agentDrawerOpener = null;
+  opener?.focus({ preventScroll: true });
+}
+
+function handleAgentDrawerKeydown(event) {
+  const drawer = $("agentDrawer");
+  if (!drawer || drawer.getAttribute("aria-hidden") !== "false") return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeAgentDrawer();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = [...drawer.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href]')]
+    .filter((node) => node.offsetParent !== null);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+async function loadAgentCommandCenter() {
+  let data;
+  try {
+    data = await api("/agent/actions");
+  } catch (_error) {
+    data = { success: false, actions: [] };
+  }
+  const actions = data.success ? data.actions || [] : [];
+  actions.forEach((proposal) => state.agentProposals.set(Number(proposal.id), proposal));
+  renderAgentCommandActions(actions, data.success ? "" : "待确认操作暂时无法加载");
+  renderAgentCommandOpportunities();
+}
+
+function renderAgentCommandActions(actions, error = "") {
+  const box = $("agentActiveActions");
+  const count = actions.length;
+  $("agentActionCount").textContent = String(count);
+  $("agentLauncherBadge").textContent = String(count);
+  $("agentLauncherBadge").classList.toggle("hidden", !count);
+  if (!box) return;
+  if (error) {
+    box.innerHTML = `<div class="command-empty" role="alert">${escapeHtml(error)}<button type="button" class="ghost small" onclick="loadAgentCommandCenter()">重试</button></div>`;
+    return;
+  }
+  box.innerHTML = count ? actions.map((proposal) => `
+    <button type="button" class="command-row" onclick="openAgentProposal(${Number(proposal.id)}, this)">
+      <span><b>${escapeHtml(proposal.preview || "待确认操作")}</b><small>${escapeHtml(proposal.risk_level === "high" ? "高风险" : proposal.risk_level === "medium" ? "需确认" : "低风险")}</small></span>
+      <i data-lucide="arrow-right"></i>
+    </button>`).join("") : '<div class="command-empty"><b>没有待确认操作</b><span>Agent 提出的写入动作会先出现在这里。</span></div>';
+  if (window.lucide) lucide.createIcons();
+}
+
+function renderAgentCommandOpportunities() {
+  const box = $("agentCommandOpportunities");
+  if (!box) return;
+  const active = state.applications.filter((item) => !["已拒绝", "已放弃"].includes(item.status)).slice(0, 6);
+  box.innerHTML = active.length ? active.map((item) => `
+    <button type="button" class="command-row" onclick="closeAgentDrawer(); openOpportunityWorkspace(${Number(item.id)})">
+      <span><b>${escapeHtml(item.company || "未命名公司")} / ${escapeHtml(item.job_title || "目标岗位")}</b><small>${escapeHtml(item.needs_status_review ? "待确认" : item.status || "未设置")}</small></span>
+      <i data-lucide="panel-right-open"></i>
+    </button>`).join("") : '<div class="command-empty"><b>暂无活跃机会</b><span>在投递看板添加机会后，会同步到这里。</span></div>';
+  if (window.lucide) lucide.createIcons();
+}
+
+function openAgentProposal(proposalId, opener = null) {
+  openAgentDrawer({ currentTarget: opener || $("agentLauncher") });
+  const existing = $("chatLog").querySelector(`[data-proposal-id="${Number(proposalId)}"]`);
+  if (existing) return existing.scrollIntoView({ block: "center", behavior: "smooth" });
+  const proposal = state.agentProposals.get(Number(proposalId));
+  if (!proposal) return;
+  appendMessage("这项操作需要你的确认。", "bot", { proposals: [proposal] });
+}
+
 async function sendAgentMessage() {
   const input = $("agentInput");
   const message = input.value.trim();
@@ -2113,14 +2308,14 @@ async function sendAgentMessage() {
   if (!state.agentConversationId) await createAgentConversation();
   appendMessage(message, "user");
   input.value = "";
+  const chatRequest = {
+    ...ContextualAgent.chatPayload(message, state.agentConversationId, agentContext.payload()),
+    conversation_id: state.agentConversationId,
+  };
   const data = await withLoading(
     () => api("/agent/chat", {
       method: "POST",
-      body: {
-        user_id: USER_ID,
-        conversation_id: state.agentConversationId,
-        message,
-      },
+      body: chatRequest,
     }),
     "AI 教练正在读取上下文并处理任务..."
   );
@@ -2128,10 +2323,11 @@ async function sendAgentMessage() {
   state.agentConversationId = data.conversation_id;
   localStorage.setItem(JOBHUNTER_AGENT_CONVERSATION, state.agentConversationId);
   const reply = data.reply || data.message || "我暂时没想好，换个问法试试。";
-  appendMessage(reply, "bot");
+  appendMessage(reply, "bot", { proposals: data.action_proposals || [] });
   renderAgentEvents(data.events || [], data.status);
   renderAgentSuggestedActions(data.suggested_actions || []);
   await loadAgentConversations(state.agentConversationId, false);
+  await loadAgentCommandCenter();
 }
 
 async function generateCareerReport() {
@@ -2139,11 +2335,12 @@ async function generateCareerReport() {
   await sendAgentMessage();
 }
 
-function appendMessage(text, type) {
+function appendMessage(text, type, options = {}) {
   const node = document.createElement("div");
   node.className = `message ${type}`;
   node.innerHTML = renderText(text);
   $("chatLog").appendChild(node);
+  renderAgentProposals(options.proposals || [], node);
   $("chatLog").scrollTop = $("chatLog").scrollHeight;
 }
 
@@ -2200,12 +2397,115 @@ async function restoreAgentMessages() {
   );
   if (!data.success || !data.messages?.length) return renderAgentWelcome();
   $("chatLog").innerHTML = "";
-  data.messages.forEach((message) => {
-    appendMessage(message.content, message.role === "user" ? "user" : "bot");
+  for (const message of data.messages) {
+    const proposals = message.role === "assistant"
+      ? await hydrateAgentProposals(ContextualAgent.proposalsFromMetadata(message.metadata))
+      : [];
+    appendMessage(message.content, message.role === "user" ? "user" : "bot", { proposals });
     if (message.role === "assistant") {
       renderAgentEvents(message.metadata?.events || [], message.metadata?.status || "completed");
     }
+  }
+}
+
+async function hydrateAgentProposals(proposals) {
+  return Promise.all(proposals.map(async (proposal) => {
+    let latest;
+    try {
+      latest = await api(`/agent/actions/${Number(proposal.id)}`);
+    } catch (_error) {
+      latest = { success: false };
+    }
+    const resolved = latest.success ? latest.action : proposal;
+    state.agentProposals.set(Number(resolved.id), resolved);
+    return resolved;
+  }));
+}
+
+function renderAgentProposals(proposals, messageNode) {
+  if (!messageNode || !proposals.length) return;
+  proposals.forEach((proposal) => {
+    state.agentProposals.set(Number(proposal.id), proposal);
+    messageNode.insertAdjacentHTML("beforeend", ContextualAgent.proposalHtml(proposal));
   });
+}
+
+function proposalError(data, fallback) {
+  return data?.error?.message || data?.message || fallback;
+}
+
+function proposalChanges(card, proposal) {
+  const changes = {};
+  card.querySelectorAll("[data-agent-edit-field]").forEach((input) => {
+    const path = input.dataset.agentEditField.split(".");
+    const original = path.reduce((value, key) => value?.[key], proposal.editable);
+    let value = input.value;
+    if (typeof original === "number") value = Number(value);
+    if (Array.isArray(original)) {
+      try { value = JSON.parse(value); } catch (_error) { value = input.value.split(",").map((item) => item.trim()).filter(Boolean); }
+    }
+    let target = changes;
+    path.forEach((key, index) => {
+      if (index === path.length - 1) target[key] = value;
+      else target = target[key] ||= {};
+    });
+  });
+  return changes;
+}
+
+function replaceProposalCard(card, proposal) {
+  state.agentProposals.set(Number(proposal.id), proposal);
+  card.outerHTML = ContextualAgent.proposalHtml(proposal);
+  if (window.lucide) lucide.createIcons();
+}
+
+async function handleProposalClick(event) {
+  const button = event.target.closest("[data-agent-action]");
+  if (!button) return;
+  const card = button.closest("[data-proposal-id]");
+  const proposalId = Number(card?.dataset.proposalId);
+  const actionName = button.dataset.agentAction;
+  const proposal = state.agentProposals.get(proposalId);
+  if (!card || !proposal || proposal.status !== "pending") return;
+  const body = actionName === "edit" ? proposalChanges(card, proposal) : {};
+  const startEvent = `${actionName}_start`;
+  let next = ContextualAgent.transitionProposal(proposal, startEvent);
+  replaceProposalCard(card, next);
+  try {
+    const data = await api(`/agent/actions/${proposalId}/${actionName}`, { method: "POST", body });
+    const freshCard = $("chatLog").querySelector(`[data-proposal-id="${proposalId}"]`);
+    if (!data.success) {
+      next = ContextualAgent.transitionProposal(next, `${actionName}_error`, {
+        error: proposalError(data, "操作失败，请重试"),
+      });
+      if (freshCard) replaceProposalCard(freshCard, next);
+      return;
+    }
+    next = ContextualAgent.transitionProposal(next, `${actionName}_success`, { action: data.action });
+    if (freshCard) replaceProposalCard(freshCard, next);
+    if (actionName === "confirm") {
+      await refreshAfterAgentAction(next.result);
+      toast("操作已确认并完成");
+    } else if (actionName === "cancel") {
+      toast("操作已取消，业务数据未改变");
+    } else {
+      toast("预览已更新，请确认后执行");
+    }
+    await loadAgentCommandCenter();
+  } catch (_error) {
+    const freshCard = $("chatLog").querySelector(`[data-proposal-id="${proposalId}"]`);
+    next = ContextualAgent.transitionProposal(next, `${actionName}_error`, { error: "网络连接失败，请重试" });
+    if (freshCard) replaceProposalCard(freshCard, next);
+  }
+}
+
+async function refreshAfterAgentAction(result) {
+  const openOpportunityId = state.currentOpportunityId;
+  await Promise.all([loadResumes(), loadApplications(), loadDashboard()]);
+  if (openOpportunityId) {
+    await loadOpportunityWorkspace(openOpportunityId, { isCurrent: () => true });
+  }
+  syncAgentContext();
 }
 
 function renderAgentWelcome() {
@@ -2248,7 +2548,7 @@ function renderAgentSuggestedActions(actions) {
   if (!actions.length) return;
   const node = $("chatLog").lastElementChild;
   const buttons = actions.map((action) => `
-    <button type="button" onclick="jumpToModule('${escapeAttr(action.page)}','${escapeAttr(action.module)}')">
+    <button type="button" onclick="closeAgentDrawer(); jumpToModule('${escapeAttr(action.page)}','${escapeAttr(action.module)}')">
       ${escapeHtml(action.label)}<i data-lucide="arrow-right"></i>
     </button>
   `).join("");

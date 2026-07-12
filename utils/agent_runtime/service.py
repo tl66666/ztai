@@ -32,7 +32,9 @@ class AgentService:
     def clear_conversation(self, conversation_id: str, user_id: int) -> bool:
         return self.store.clear_conversation(conversation_id, user_id)
 
-    def chat(self, user_id: int, message: str, conversation_id: str = "") -> dict:
+    def chat(
+        self, user_id: int, message: str, conversation_id: str = "", context: dict | None = None
+    ) -> dict:
         if conversation_id:
             conversation = self.store.get_conversation(conversation_id, user_id)
             if not conversation:
@@ -52,7 +54,7 @@ class AgentService:
             store=self.store,
             context_builder=self.context_builder,
         )
-        result = orchestrator.run(user_id, conversation_id, message)
+        result = orchestrator.run(user_id, conversation_id, message, entity_context=context or {})
         return {
             **asdict(result),
             "suggested_actions": self._suggested_actions(result.tools_used),

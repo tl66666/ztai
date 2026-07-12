@@ -130,7 +130,10 @@ class AgentOrchestrator:
         self.max_iterations = max_iterations
         self.max_runtime_seconds = max_runtime_seconds
 
-    def run(self, user_id: int, conversation_id: str, message: str) -> AgentRunResult:
+    def run(
+        self, user_id: int, conversation_id: str, message: str,
+        entity_context: dict | None = None,
+    ) -> AgentRunResult:
         started = time.monotonic()
         if not self.store.get_conversation(conversation_id, user_id):
             raise ValueError("conversation_not_found")
@@ -139,7 +142,9 @@ class AgentOrchestrator:
             self.store.upsert_memory(
                 user_id, "semantic", "profile", key, value, 0.95, "confirmed", user_message.id
             )
-        runtime_context = self.context_builder.build(user_id, conversation_id, message)
+        runtime_context = self.context_builder.build(
+            user_id, conversation_id, message, entity_context=entity_context or {}
+        )
         active_task = self.store.get_active_task(conversation_id, user_id)
         state = RunState(
             user_id=user_id,

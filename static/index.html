@@ -518,36 +518,63 @@
     </section>
 
     <section id="page-agent" class="page">
-      <div class="chat-shell">
-        <section class="coach-profile">
-          <img id="coachAvatar" src="/assets/images/ai-avatar%20(2).png" alt="AI 教练" />
-          <h3>JobHunter Coach</h3>
-          <p>简历、JD、面试、谈薪都能一起推演。</p>
-          <div class="quick-prompts">
-            <button data-prompt="帮我介绍这个 AI 求职辅助系统项目的技术亮点">项目亮点</button>
-            <button data-prompt="给我一套软件测试工程师自我介绍">自我介绍</button>
-            <button data-prompt="我该怎么回答你最大的缺点是什么">高频题</button>
-            <button id="careerReportBtn">生成求职作战报告</button>
-          </div>
+      <section class="agent-command-head">
+        <div>
+          <p class="eyebrow">Agent Command Center</p>
+          <h2>求职行动指挥台</h2>
+          <p class="module-copy">集中查看待确认操作和进行中的机会。所有写入都会先预览，再由你确认。</p>
+        </div>
+        <button class="primary" id="openAgentWorkspace" type="button"><i data-lucide="panel-right-open"></i>打开 Agent 工作台</button>
+      </section>
+      <div class="agent-command-grid">
+        <section class="panel command-panel">
+          <div class="panel-head"><h3>待确认操作</h3><span class="pill" id="agentActionCount">0</span></div>
+          <div id="agentActiveActions" class="command-list" aria-live="polite"></div>
         </section>
-        <section class="panel chat-panel">
-          <div class="agent-conversation-bar">
-            <label for="agentConversationSelect">当前会话</label>
-            <select id="agentConversationSelect" class="input compact" aria-label="选择 AI 教练会话"></select>
-            <button class="icon-button" id="newAgentConversation" type="button" title="新建会话" aria-label="新建会话"><i data-lucide="message-square-plus"></i></button>
-            <button class="icon-button" id="clearAgentConversation" type="button" title="清空当前会话" aria-label="清空当前会话"><i data-lucide="eraser"></i></button>
-          </div>
-          <div id="chatLog" class="chat-log">
-            <div class="message bot">你好，我是你的 AI 求职教练。把目标岗位、简历片段或面试问题发给我，我们直接打磨。</div>
-          </div>
-          <div class="chat-input">
-            <input id="agentInput" class="input" placeholder="输入你的求职问题" />
-            <button class="primary" id="sendAgentBtn"><i data-lucide="send"></i></button>
-          </div>
+        <section class="panel command-panel">
+          <div class="panel-head"><h3>活跃机会</h3><button class="ghost small" type="button" onclick="jumpToModule('tracker','board')">打开看板</button></div>
+          <div id="agentCommandOpportunities" class="command-list" aria-live="polite"></div>
         </section>
       </div>
     </section>
   </main>
+
+  <button type="button" class="agent-launcher" id="agentLauncher" aria-controls="agentDrawer" aria-expanded="false">
+    <i data-lucide="bot"></i><span>Agent</span><b id="agentLauncherBadge" class="hidden" aria-label="待确认操作数">0</b>
+  </button>
+  <div class="agent-drawer-backdrop hidden" id="agentDrawerBackdrop" aria-hidden="true"></div>
+  <aside class="agent-drawer" id="agentDrawer" role="dialog" aria-modal="true" aria-labelledby="agentDrawerTitle" aria-hidden="true" tabindex="-1">
+    <header class="agent-drawer-head">
+      <div>
+        <p class="eyebrow">Contextual Career Agent</p>
+        <h2 id="agentDrawerTitle">求职 Agent 工作台</h2>
+      </div>
+      <button class="icon-button" id="closeAgentDrawer" type="button" title="关闭 Agent 工作台" aria-label="关闭 Agent 工作台"><i data-lucide="x"></i></button>
+    </header>
+    <div class="agent-context-strip">
+      <span>本轮上下文</span>
+      <div id="agentContextChips" class="agent-context-chips" aria-live="polite"></div>
+    </div>
+    <div class="agent-conversation-bar">
+      <label for="agentConversationSelect">当前会话</label>
+      <select id="agentConversationSelect" class="input compact" aria-label="选择 Agent 会话"></select>
+      <button class="icon-button" id="newAgentConversation" type="button" title="新建会话" aria-label="新建会话"><i data-lucide="message-square-plus"></i></button>
+      <button class="icon-button" id="clearAgentConversation" type="button" title="清空当前会话" aria-label="清空当前会话"><i data-lucide="eraser"></i></button>
+    </div>
+    <div id="chatLog" class="chat-log" aria-live="polite" aria-relevant="additions">
+      <div class="message bot">你好，我是你的求职 Agent。当前模块、机会和简历可以作为本轮上下文，你也可以随时移除。</div>
+    </div>
+    <div class="agent-quick-prompts" aria-label="常用指令">
+      <button class="ghost small" data-prompt="根据当前机会，给我下一步求职行动建议">下一步行动</button>
+      <button class="ghost small" data-prompt="检查当前简历与目标岗位的关键差距">检查简历差距</button>
+      <button class="ghost small" id="careerReportBtn" type="button">生成求职报告</button>
+    </div>
+    <div class="chat-input">
+      <label class="sr-only" for="agentInput">输入给求职 Agent 的消息</label>
+      <textarea id="agentInput" class="input" rows="2" placeholder="输入问题或行动，例如：为当前机会创建面试准备计划"></textarea>
+      <button class="primary icon-command" id="sendAgentBtn" type="button" title="发送消息" aria-label="发送消息"><i data-lucide="send"></i></button>
+    </div>
+  </aside>
 
   <section id="interviewRoom" class="interview-room hidden" aria-live="polite">
     <div class="interview-room-card">
@@ -588,6 +615,7 @@
   <script src="js/interview_submission.js"></script>
   <script src="js/opportunity_handoffs.js"></script>
   <script src="js/opportunity_history.js"></script>
+  <script src="js/contextual_agent.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

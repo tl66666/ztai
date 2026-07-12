@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from unittest.mock import patch
+from unittest.mock import Mock
 
 import app as app_module
 
@@ -75,6 +76,40 @@ class AgentAPITests(unittest.TestCase):
                 )
                 self.assertNotIn("x" * 100, response.get_data(as_text=True))
         self.assertEqual(counts(), before)
+
+    def test_chat_accepts_only_identifier_context_and_passes_it_to_service(self):
+        service = Mock()
+        service.chat.return_value = {
+            "reply": "ok", "ai_used": False, "conversation_id": "conversation-1",
+            "status": "completed", "events": [], "tools_used": [],
+            "action_proposals": [], "suggested_actions": [],
+        }
+        context = {"module": "resume:jd", "opportunity_id": 41, "resume_id": 7}
+
+        with patch.object(app_module, "get_agent_service", return_value=service):
+            response = self.client.post(
+                "/api/agent/chat",
+                json={"user_id": 1, "conversation_id": "conversation-1", "message": "分析差距", "context": context},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        service.chat.assert_called_once_with(
+            user_id=1, message="分析差距", conversation_id="conversation-1", context=context
+        )
+
+    def test_chat_rejects_client_supplied_entity_content_in_context(self):
+        for context in (
+            {"opportunity_id": 1, "company": "untrusted"},
+            {"resume_id": 1, "resume_content": "private"},
+            {"opportunity_id": "1"},
+            {"resume_id": 0},
+        ):
+            with self.subTest(context=context):
+                response = self.client.post(
+                    "/api/agent/chat", json={"user_id": 1, "message": "hello", "context": context}
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json()["message"], "上下文只能包含当前模块和实体 ID")
 
     def test_first_message_names_a_precreated_conversation(self):
         conversation_id = self.create_conversation(title="新对话")

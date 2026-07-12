@@ -2026,11 +2026,27 @@ def agent_chat():
     user_id = require_agent_user(data.get("user_id", AGENT_USER_ID))
     if user_id is None:
         return agent_access_denied()
+    context = data.get("context") or {}
+    if not isinstance(context, dict) or set(context) - {"module", "opportunity_id", "resume_id"}:
+        return jsonify({"success": False, "message": "上下文只能包含当前模块和实体 ID"}), 400
+    module = context.get("module")
+    if module is not None and (
+        not isinstance(module, str)
+        or not re.fullmatch(r"[a-z][a-z0-9_-]{0,49}(?::[a-z][a-z0-9_-]{0,49})?", module)
+    ):
+        return jsonify({"success": False, "message": "上下文只能包含当前模块和实体 ID"}), 400
+    for field in ("opportunity_id", "resume_id"):
+        value = context.get(field)
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value <= 0
+        ):
+            return jsonify({"success": False, "message": "上下文只能包含当前模块和实体 ID"}), 400
     try:
         agent_result = get_agent_service().chat(
             user_id=user_id,
             message=message,
             conversation_id=str(data.get("conversation_id", "")),
+            context=context,
         )
     except ValueError:
         return jsonify({"success": False, "message": "会话不存在"}), 404

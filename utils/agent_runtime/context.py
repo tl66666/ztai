@@ -116,7 +116,10 @@ class ContextBuilder:
         self.store.save_summary(conversation_id, user_id, summary, until_id)
         return summary
 
-    def build(self, user_id: int, conversation_id: str, query: str) -> RuntimeContext:
+    def build(
+        self, user_id: int, conversation_id: str, query: str,
+        entity_context: dict | None = None,
+    ) -> RuntimeContext:
         conversation = self.store.get_conversation(conversation_id, user_id)
         if not conversation:
             raise ValueError("conversation_not_found")
@@ -144,7 +147,7 @@ class ContextBuilder:
                 self._episode_summary(episode["value"])
                 for episode in episodes
             ],
-            career_snapshot=self._career_snapshot(user_id, query),
+            career_snapshot=self._career_snapshot(user_id, query, entity_context or {}),
         )
 
     @staticmethod
@@ -153,8 +156,16 @@ class ContextBuilder:
             return f"{str(value.get('input', ''))[:240]} -> {str(value.get('result', ''))[:240]}"
         return str(value)[:500]
 
-    def _career_snapshot(self, user_id: int, query: str = "") -> str:
+    def _career_snapshot(
+        self, user_id: int, query: str = "", entity_context: dict | None = None
+    ) -> str:
+        entity_context = entity_context or {}
         sections: list[tuple[str, object]] = []
+        sections.append(("ui_context", {
+            key: entity_context[key]
+            for key in ("module", "opportunity_id", "resume_id")
+            if key in entity_context
+        }))
         try:
             service: CareerService | None = CareerService(self.db_path, user_id)
         except sqlite3.Error:
@@ -192,6 +203,9 @@ class ContextBuilder:
             query_tokens = set(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", normalized_query))
             try:
                 mentioned_ids = [token for token in query_tokens if token.isdigit()]
+                opportunity_id = entity_context.get("opportunity_id")
+                if isinstance(opportunity_id, int) and opportunity_id > 0:
+                    mentioned_ids.insert(0, str(opportunity_id))
                 id_order = (
                     f"id IN ({','.join('?' for _ in mentioned_ids)})"
                     if mentioned_ids else "0"
@@ -221,8 +235,10 @@ class ContextBuilder:
             def opportunity_relevance(candidate: sqlite3.Row) -> tuple:
                 company = safe_text(candidate["company"], 300).casefold()
                 job_title = safe_text(candidate["job_title"], 300).casefold()
+                preferred_id = entity_context.get("opportunity_id")
                 return (
-                    int(str(candidate["id"]) in query_tokens)
+                    2 * int(isinstance(preferred_id, int) and candidate["id"] == preferred_id)
+                    + int(str(candidate["id"]) in query_tokens)
                     + int(bool(company) and company in normalized_query)
                     + int(bool(job_title) and job_title in normalized_query),
                     int(candidate["priority"] or 0) if isinstance(candidate["priority"], (int, float)) else 0,
@@ -233,7 +249,9 @@ class ContextBuilder:
                     opportunity_rows, key=opportunity_relevance, default=None
                 )
                 selected_resume_id = (
-                    relevant_opportunity["resume_id"]
+                    entity_context.get("resume_id")
+                    if isinstance(entity_context.get("resume_id"), int)
+                    else relevant_opportunity["resume_id"]
                     if relevant_opportunity is not None
                     and opportunity_relevance(relevant_opportunity)[0] > 0
                     else None

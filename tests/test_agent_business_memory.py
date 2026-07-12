@@ -355,6 +355,42 @@ class AgentBusinessMemoryTests(unittest.TestCase):
             self.assertIn(expected, snapshot)
         self.assertLess(snapshot.index("Acme"), snapshot.find("opportunities") + 1000)
 
+    def test_explicit_ui_entity_ids_select_owned_authoritative_rows(self):
+        career = CareerService(self.db_path)
+        with connect(self.db_path) as conn:
+            selected_resume = conn.execute(
+                "INSERT INTO resumes (user_id,title,content,status,updated_at) "
+                "VALUES (1,'Selected Resume','private','active','2025-01-01')"
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO resumes (user_id,title,content,status,updated_at) "
+                "VALUES (1,'Recent Resume','private','active','2026-01-01')"
+            )
+        selected = career.create_opportunity(
+            1, {"company": "Selected Co", "job_title": "Engineer", "priority": 1}
+        )
+        career.create_opportunity(
+            1, {"company": "Recent Co", "job_title": "Engineer", "priority": 9}
+        )
+        conversation = self.store.create_conversation(1, "UI context")
+
+        snapshot = ContextBuilder(self.store, self.db_path).build(
+            1,
+            conversation.id,
+            "Give general advice",
+            entity_context={
+                "module": "tracker:board",
+                "opportunity_id": selected["id"],
+                "resume_id": selected_resume,
+            },
+        ).career_snapshot
+
+        self.assertIn('ui_context:', snapshot)
+        self.assertIn('"module":"tracker:board"', snapshot)
+        self.assertIn('"title":"Selected Resume"', snapshot)
+        opportunities = snapshot.split("opportunities:", 1)[1].splitlines()[0]
+        self.assertLess(opportunities.index("Selected Co"), opportunities.index("Recent Co"))
+
     def test_snapshot_survives_blob_fields_and_keeps_healthy_rows(self):
         career = CareerService(self.db_path)
         healthy = career.create_opportunity(
