@@ -135,6 +135,44 @@ class AgentActionServiceTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(invalid_count, 0)
 
+    def test_report_action_link_is_owned_pending_typed_and_frozen(self):
+        from utils.agent_runtime.actions import career_action_tool_schema
+
+        with connect(self.db_path) as conn:
+            valid_id = conn.execute(
+                "INSERT INTO action_items (user_id,title,action_type,status) "
+                "VALUES (1,'Save report','career_report','pending')"
+            ).lastrowid
+            wrong_type_id = conn.execute(
+                "INSERT INTO action_items (user_id,title,action_type,status) "
+                "VALUES (1,'Follow up','follow_up','pending')"
+            ).lastrowid
+            completed_id = conn.execute(
+                "INSERT INTO action_items (user_id,title,action_type,status) "
+                "VALUES (1,'Done report','career_report','completed')"
+            ).lastrowid
+            in_progress_id = conn.execute(
+                "INSERT INTO action_items (user_id,title,action_type,status) "
+                "VALUES (1,'Started report','career_report','in_progress')"
+            ).lastrowid
+            foreign_id = conn.execute(
+                "INSERT INTO action_items (user_id,title,action_type,status) "
+                "VALUES (2,'Foreign report','career_report','pending')"
+            ).lastrowid
+        base = {"report_type": "weekly", "content": {"summary": "progress"}}
+        proposal = self.propose("save_career_report", {**base, "action_id": valid_id})
+        self.assertEqual(proposal["arguments"]["action_id"], valid_id)
+        with self.assertRaisesRegex(ValueError, "not allowed"):
+            self.service.edit(1, proposal["id"], {"action_id": wrong_type_id})
+        for invalid_id in (wrong_type_id, completed_id, in_progress_id, foreign_id):
+            with self.subTest(action_id=invalid_id), self.assertRaises((LookupError, ValueError)):
+                self.propose("save_career_report", {**base, "action_id": invalid_id})
+        report_branch = next(
+            branch for branch in career_action_tool_schema()["oneOf"]
+            if branch["properties"]["action_type"].get("const") == "save_career_report"
+        )
+        self.assertIn("action_id", report_branch["properties"]["arguments"]["properties"])
+
     def test_all_action_schemas_reject_unknown_and_invalid_values_before_persisting(self):
         with connect(self.db_path) as conn:
             opportunity_id = conn.execute(

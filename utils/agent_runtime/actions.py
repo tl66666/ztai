@@ -219,6 +219,7 @@ def _career_action_argument_schemas() -> dict[str, dict[str, Any]]:
         ),
         "save_career_report": _schema_object(
             {
+                "action_id": _schema_integer(1),
                 "report_type": _schema_text(100, required=True),
                 "title": _schema_text(500),
                 "period_start": _schema_text(100),
@@ -649,6 +650,22 @@ class ActionProposalService:
                     raise ValueError("invalid status transition")
             self._check_optional_owned(result["changes"], "resume_id", "resumes", "resume")
         elif action_type == "save_career_report":
+            if "action_id" in result:
+                self._required_id(result, "action_id")
+                with connect(self.db_path) as conn:
+                    action = conn.execute(
+                        """
+                        SELECT action_type, status FROM action_items
+                        WHERE id = ? AND user_id = ?
+                        """,
+                        (result["action_id"], self.local_user_id),
+                    ).fetchone()
+                if action is None:
+                    raise LookupError("action item not found")
+                if action["status"] != "pending":
+                    raise ValueError("report action item is not pending")
+                if action["action_type"] not in {"career_report", "save_career_report"}:
+                    raise ValueError("action item is not a report action")
             self._required_text(result, "report_type", 100)
             if not isinstance(result.get("content"), dict):
                 raise ValueError("content must be an object")
@@ -683,7 +700,7 @@ class ActionProposalService:
             },
             "complete_action_item": {"evidence"},
             "update_opportunity": self._all_fields("create_opportunity") - {"resume_id"},
-            "save_career_report": self._all_fields("save_career_report"),
+            "save_career_report": self._all_fields("save_career_report") - {"action_id"},
         }
         return fields[action_type]
 

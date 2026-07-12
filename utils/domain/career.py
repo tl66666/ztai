@@ -1026,7 +1026,8 @@ class CareerService:
         self._require_local_user(user_id)
         values = self._require_mapping(values, "report values")
         permitted = {
-            "report_type", "title", "period_start", "period_end", "content", "status"
+            "report_type", "title", "period_start", "period_end", "content", "status",
+            "action_id",
         }
         unknown = set(values) - permitted
         if unknown:
@@ -1047,8 +1048,18 @@ class CareerService:
         if len(content_json) > 200_000:
             raise ValueError("content is too large")
         source = self._bounded_text(source, "source", 100, required=True)
+        action_id = values.get("action_id")
         with connect(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if action_id is not None:
+                action_id = self._integer(action_id, "action_id")
+                action = self._owned_row(conn, "action_items", action_id)
+                if not action:
+                    raise LookupError("action item not found")
+                if action["status"] != "pending":
+                    raise ValueError("report action item is not pending")
+                if action["action_type"] not in {"career_report", "save_career_report"}:
+                    raise ValueError("action item is not a report action")
             cursor = conn.execute(
                 """
                 INSERT INTO career_reports (
@@ -1067,7 +1078,7 @@ class CareerService:
                 report_id,
                 "career_report.saved",
                 self._agent_receipt_payload(
-                    {"report_type": report_type},
+                    {"report_type": report_type, "action_id": action_id},
                     source,
                     "career_report",
                     report_id,

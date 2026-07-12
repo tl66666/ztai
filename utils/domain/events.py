@@ -34,7 +34,11 @@ def apply_event_to_actions(
             (aggregate_id, user_id),
         ).fetchone()
         application_id = row[0] if row else None
-    elif event_type != "career_report.saved":
+    elif event_type == "career_report.saved":
+        action_id = _integer_id((payload or {}).get("action_id"))
+        if action_id is None:
+            return 0
+    else:
         return 0
 
     if event_type != "career_report.saved" and application_id is None:
@@ -48,11 +52,19 @@ def apply_event_to_actions(
                 evidence_values[key] = value
     evidence = json.dumps(evidence_values, ensure_ascii=False, separators=(",", ":"))[:500]
     placeholders = ",".join("?" for _ in action_types)
-    clauses = ["user_id = ?", "status IN ('pending', 'in_progress')"]
+    action_status_clause = (
+        "status = 'pending'"
+        if event_type == "career_report.saved"
+        else "status IN ('pending', 'in_progress')"
+    )
+    clauses = ["user_id = ?", action_status_clause]
     params: list[Any] = [user_id]
     clauses.append(f"action_type IN ({placeholders})")
     params.extend(action_types)
-    if event_type != "career_report.saved":
+    if event_type == "career_report.saved":
+        clauses.append("id = ?")
+        params.append(action_id)
+    else:
         clauses.append("application_id = ?")
         params.append(application_id)
     cursor = conn.execute(

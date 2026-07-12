@@ -65,6 +65,54 @@ class AgentBusinessMemoryTests(unittest.TestCase):
             )
         self.assertEqual([row["id"] for row in results], [memory_id])
 
+    def test_chinese_partial_overlap_beats_unrelated_high_confidence_padding(self):
+        relevant_id = self.store.upsert_memory(
+            1, "semantic", "preference", "target_role", "后端开发", 0.7, "candidate"
+        )
+        unrelated_id = self.store.upsert_memory(
+            1, "semantic", "preference", "alternative_role", "前端岗位", 1.0, "confirmed"
+        )
+        for force_fallback in (False, True):
+            manager = (
+                patch.object(
+                    self.store, "_fts_matches",
+                    side_effect=sqlite3.OperationalError("forced fallback"),
+                )
+                if force_fallback
+                else patch.object(self.store, "_fts_matches", wraps=self.store._fts_matches)
+            )
+            with manager:
+                results = self.store.search_memories(1, "想找后端岗位！", kind="semantic")
+            self.assertEqual(results[0]["id"], relevant_id)
+            self.assertIn(unrelated_id, [row["id"] for row in results])
+
+    def test_search_deduplicates_semantic_and_episodic_identity_in_fts_and_fallback(self):
+        self.store.upsert_memory(
+            1, "semantic", "preference", "target_role", " 后端开发 ", 0.7, "candidate"
+        )
+        best_semantic = self.store.upsert_memory(
+            1, "semantic", "preference", "target_role", "后端开发", 0.9, "confirmed"
+        )
+        self.store.upsert_memory(
+            1, "episodic", "interview", "attempt-1", {"input": "Acme", "result": "pass"},
+            0.5, "candidate", related_entity_type="opportunity", related_entity_id="9",
+        )
+        best_episode = self.store.upsert_memory(
+            1, "episodic", "interview", "attempt-2", {"result": "pass", "input": "Acme"},
+            0.8, "confirmed", related_entity_type="opportunity", related_entity_id="9",
+        )
+        for force_fallback in (False, True):
+            manager = (
+                patch.object(self.store, "_fts_matches", side_effect=sqlite3.OperationalError("fallback"))
+                if force_fallback else patch.object(self.store, "_fts_matches", wraps=self.store._fts_matches)
+            )
+            with manager:
+                semantic = self.store.search_memories(1, "后端岗位", kind="semantic")
+                episodic = self.store.search_memories(1, "Acme", kind="episodic")
+            self.assertEqual([row["id"] for row in semantic].count(best_semantic), 1)
+            self.assertEqual(len([row for row in semantic if row["memory_key"] == "target_role"]), 1)
+            self.assertEqual([row["id"] for row in episodic], [best_episode])
+
     def test_fts_backfill_supersede_and_delete_stay_consistent(self):
         memory_id = self.store.upsert_memory(
             1, "semantic", "preference", "target_city", "Shanghai", 0.9, "confirmed"
@@ -149,6 +197,46 @@ class AgentBusinessMemoryTests(unittest.TestCase):
             self.assertIn(expected, snapshot)
         self.assertLess(snapshot.index("Acme"), snapshot.find("opportunities") + 1000)
 
+    def test_snapshot_prefers_relevant_newer_non_archived_resume_and_only_active_actions(self):
+        career = CareerService(self.db_path)
+        with connect(self.db_path) as conn:
+            old_id = conn.execute(
+                "INSERT INTO resumes (user_id,title,content,status,updated_at) "
+                "VALUES (1,'Old active','x','active','2025-01-01T00:00:00+00:00')"
+            ).lastrowid
+            newer_id = conn.execute(
+                "INSERT INTO resumes (user_id,title,content,status,parent_resume_id,updated_at) "
+                "VALUES (1,'New tailored','x','draft',?,'2026-01-01T00:00:00+00:00')",
+                (old_id,),
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO resumes (user_id,title,content,status,updated_at) "
+                "VALUES (1,'Newest archived','x','archived','2027-01-01T00:00:00+00:00')"
+            )
+        opportunity = career.create_opportunity(
+            1, {"company": "Relevant Co", "job_title": "Backend", "resume_id": newer_id}
+        )
+        active = career.create_action_item(1, {"title": "Active task", "type": "follow_up"})
+        completed = career.create_action_item(1, {"title": "Completed task", "type": "follow_up"})
+        career.complete_action_item(1, completed["id"])
+        cancelled = career.create_action_item(
+            1, {"title": "Cancelled task", "type": "follow_up", "status": "cancelled"}
+        )
+        conversation = self.store.create_conversation(1, "Selection")
+
+        snapshot = ContextBuilder(self.store, self.db_path).build(
+            1, conversation.id, f"Relevant Co opportunity {opportunity['id']}"
+        ).career_snapshot
+
+        self.assertIn('"title":"New tailored"', snapshot)
+        self.assertNotIn("Old active", snapshot)
+        self.assertNotIn("Newest archived", snapshot)
+        self.assertIn("Active task", snapshot)
+        self.assertNotIn("Completed task", snapshot)
+        self.assertNotIn("Cancelled task", snapshot)
+        self.assertIn(str(active["id"]), snapshot)
+        self.assertNotIn(str(cancelled["id"]), snapshot.split("action_items:", 1)[1].splitlines()[0])
+
     def test_event_mapper_completes_only_exact_linked_actions_and_is_idempotent(self):
         career = CareerService(self.db_path)
         opportunity = career.create_opportunity(1, {"company": "Acme", "job_title": "Engineer"})
@@ -200,8 +288,8 @@ class AgentBusinessMemoryTests(unittest.TestCase):
         )
         conversation = self.store.create_conversation(1, "After event")
         snapshot = ContextBuilder(self.store, self.db_path).build(1, conversation.id, "actions").career_snapshot
-        self.assertIn("Create tailored resume", snapshot)
-        self.assertIn("completed", snapshot)
+        self.assertNotIn("Create tailored resume", snapshot)
+        self.assertIn("resume.version_created", snapshot)
         self.assertEqual(career.list_action_items(1)[0]["id"], action["id"])
 
     def test_interview_and_report_writers_complete_only_their_action_types(self):
@@ -211,6 +299,35 @@ class AgentBusinessMemoryTests(unittest.TestCase):
             1, {"opportunity_id": opportunity["id"], "title": "Mock", "type": "mock_interview"}
         )
         report_action = career.create_action_item(1, {"title": "Save report", "type": "career_report"})
+        wrong_report_action = career.create_action_item(
+            1, {"title": "Other report", "type": "save_career_report"}
+        )
+        wrong_type_action = career.create_action_item(
+            1, {"title": "Not a report", "type": "follow_up"}
+        )
+        completed_report_action = career.create_action_item(
+            1, {"title": "Old report", "type": "career_report"}
+        )
+        career.complete_action_item(1, completed_report_action["id"])
+        started_report_action = career.create_action_item(
+            1, {"title": "Started report", "type": "career_report", "status": "in_progress"}
+        )
+        with connect(self.db_path) as conn:
+            foreign_action_id = conn.execute(
+                "INSERT INTO action_items (user_id,title,action_type,status) "
+                "VALUES (2,'Foreign report','career_report','pending')"
+            ).lastrowid
+            apply_event_to_actions(
+                conn, 1, "career_report.saved", "career_report", 99,
+                {"action_id": started_report_action["id"]},
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT status FROM action_items WHERE id = ?",
+                    (started_report_action["id"],),
+                ).fetchone()[0],
+                "in_progress",
+            )
         with connect(self.db_path) as conn:
             session_id = conn.execute(
                 "INSERT INTO interview_sessions (user_id,application_id,job_title) VALUES (1,?,'Engineer')",
@@ -224,10 +341,34 @@ class AgentBusinessMemoryTests(unittest.TestCase):
         self.assertEqual(statuses[report_action["id"]], "pending")
 
         career.save_report(
-            1, {"report_type": "weekly", "title": "Week", "content": {"score": 77}}
+            1, {"report_type": "weekly", "title": "Unlinked", "content": {"score": 77}}
         )
         statuses = {row["id"]: row["status"] for row in career.list_action_items(1)}
-        self.assertEqual(statuses[report_action["id"]], "completed")
+        self.assertEqual(statuses[report_action["id"]], "pending")
+        self.assertEqual(statuses[wrong_report_action["id"]], "pending")
+        for invalid_action_id in (
+            wrong_type_action["id"], completed_report_action["id"], foreign_action_id,
+            started_report_action["id"],
+        ):
+            with self.subTest(action_id=invalid_action_id), self.assertRaises((LookupError, ValueError)):
+                career.save_report(
+                    1,
+                    {
+                        "report_type": "weekly", "content": {},
+                        "action_id": invalid_action_id,
+                    },
+                )
+
+        career.save_report(
+            1,
+            {
+                "report_type": "weekly", "title": "Linked", "content": {"score": 77},
+                "action_id": report_action["id"],
+            },
+        )
+        rows = {row["id"]: row for row in career.list_action_items(1)}
+        self.assertEqual(rows[report_action["id"]]["status"], "completed")
+        self.assertEqual(rows[wrong_report_action["id"]]["status"], "pending")
 
 
 if __name__ == "__main__":

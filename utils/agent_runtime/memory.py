@@ -93,6 +93,28 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _search_terms(text: str) -> list[str]:
+    terms: list[str] = []
+    for token in re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", (text or "").casefold()):
+        terms.append(token)
+        if re.fullmatch(r"[\u4e00-\u9fff]+", token) and len(token) > 2:
+            terms.extend(token[index : index + 2] for index in range(len(token) - 1))
+    return list(dict.fromkeys(terms))
+
+
+def _normalized_value(value) -> str:
+    def normalize(item):
+        if isinstance(item, str):
+            return " ".join(item.casefold().split())
+        if isinstance(item, dict):
+            return {str(key): normalize(item[key]) for key in sorted(item, key=str)}
+        if isinstance(item, list):
+            return [normalize(child) for child in item]
+        return item
+
+    return json.dumps(normalize(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 class ClosingConnection(sqlite3.Connection):
     def __exit__(self, exc_type, exc_value, traceback):
         result = super().__exit__(exc_type, exc_value, traceback)
@@ -455,7 +477,7 @@ class MemoryStore:
             return False
 
     def _fts_matches(self, connection: sqlite3.Connection, query: str, user_id: int) -> dict[int, float]:
-        terms = re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+", query or "")
+        terms = _search_terms(query)
         if not terms:
             return {}
         expression = " OR ".join('"' + term.replace('"', '""') + '"' for term in terms[:12])
@@ -488,7 +510,7 @@ class MemoryStore:
         clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
         params.extend(statuses)
         normalized = " ".join((query or "").casefold().split())
-        terms = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", normalized)
+        terms = _search_terms(normalized)
         with self._connect() as connection:
             rows = connection.execute(
                 f"SELECT * FROM agent_memories WHERE {' AND '.join(clauses)}",
@@ -513,6 +535,14 @@ class MemoryStore:
                 term and term in terms
                 for term in (str(row["category"] or "").casefold(), str(row["memory_key"] or "").casefold())
             )
+            searchable_terms = set(_search_terms(searchable))
+            overlap_signature = tuple(term in searchable_terms for term in terms)
+            overlap_hits = len(set(terms) & searchable_terms)
+            overlap_weight = sum(
+                len(terms) - index
+                for index, term in enumerate(terms)
+                if term in searchable_terms
+            )
             substring_hits = sum(term in searchable for term in terms)
             reverse_hit = any(
                 len(value) >= 2 and value in normalized
@@ -527,6 +557,9 @@ class MemoryStore:
                 entity_exact,
                 exact_field,
                 reverse_hit,
+                overlap_signature,
+                overlap_weight,
+                overlap_hits,
                 row["id"] in fts_scores,
                 fts_scores.get(row["id"], 0.0),
                 substring_hits,
@@ -536,8 +569,30 @@ class MemoryStore:
                 row["id"],
             )
 
+        deduplicated: dict[tuple, sqlite3.Row] = {}
+        for row in rows:
+            parsed = self._memory_from_row(row)
+            identity = (
+                row["kind"], row["category"], row["memory_key"],
+                _normalized_value(parsed["value"]),
+            ) if row["kind"] == "semantic" else (
+                row["kind"], _normalized_value(parsed["value"]),
+                row["related_entity_type"] or "", row["related_entity_id"] or "",
+            )
+            incumbent = deduplicated.get(identity)
+            quality = (
+                row["status"] == "confirmed", float(row["confidence"]),
+                row["updated_at"] or "", row["id"],
+            )
+            if incumbent is None or quality > (
+                incumbent["status"] == "confirmed", float(incumbent["confidence"]),
+                incumbent["updated_at"] or "", incumbent["id"],
+            ):
+                deduplicated[identity] = row
+        candidate_rows = list(deduplicated.values())
+
         relevant = [
-            row for row in rows
+            row for row in candidate_rows
             if not terms or row["id"] in fts_scores or any(
                 term in " ".join(str(row[key] or "") for key in (
                     "category", "memory_key", "value_json", "related_entity_type", "related_entity_id"
@@ -558,7 +613,7 @@ class MemoryStore:
         if len(ordered) < limit:
             ordered.extend(
                 sorted(
-                    (row for row in rows if row["id"] not in relevant_ids),
+                    (row for row in candidate_rows if row["id"] not in relevant_ids),
                     key=rank,
                     reverse=True,
                 )[: limit - len(ordered)]

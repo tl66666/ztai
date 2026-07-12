@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import json
 import re
 import sqlite3
@@ -156,15 +157,50 @@ class ContextBuilder:
                 f"简历 {counts['简历']} 份；投递 {counts['投递']} 条；面试训练 {counts['面试训练']} 次",
             ))
             try:
-                row = connection.execute(
+                opportunity_rows = connection.execute(
                     """
-                    SELECT id, title, version_label, target_job_title, status, updated_at
-                    FROM resumes WHERE user_id = ?
-                    ORDER BY (status = 'active') DESC, (parent_resume_id IS NULL) DESC,
-                             updated_at DESC, id DESC LIMIT 1
+                    SELECT id, company, job_title, resume_id
+                    FROM job_applications
+                    WHERE user_id = ? AND deleted_at IS NULL
                     """,
                     (user_id,),
-                ).fetchone()
+                ).fetchall()
+                normalized_query = (query or "").casefold()
+                query_tokens = set(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", normalized_query))
+
+                def opportunity_relevance(candidate: sqlite3.Row) -> int:
+                    return (
+                        int(str(candidate["id"]) in query_tokens)
+                        + int(bool(candidate["company"]) and candidate["company"].casefold() in normalized_query)
+                        + int(bool(candidate["job_title"]) and candidate["job_title"].casefold() in normalized_query)
+                    )
+
+                relevant_opportunity = max(
+                    opportunity_rows, key=opportunity_relevance, default=None
+                )
+                selected_resume_id = (
+                    relevant_opportunity["resume_id"]
+                    if relevant_opportunity is not None
+                    and opportunity_relevance(relevant_opportunity) > 0
+                    else None
+                )
+                resume_rows = connection.execute(
+                    """
+                    SELECT id, title, version_label, target_job_title, status, updated_at
+                    FROM resumes
+                    WHERE user_id = ? AND COALESCE(status, 'active') != 'archived'
+                    """,
+                    (user_id,),
+                ).fetchall()
+                by_id = {candidate["id"]: candidate for candidate in resume_rows}
+                row = by_id.get(selected_resume_id)
+                if row is None and resume_rows:
+                    row = max(
+                        resume_rows,
+                        key=lambda candidate: (
+                            self._parsed_timestamp(candidate["updated_at"]), candidate["id"]
+                        ),
+                    )
                 sections.append(("selected_resume", {
                     "id": row["id"], "title": row["title"], "version": row["version_label"],
                     "target": row["target_job_title"], "status": row["status"],
@@ -207,8 +243,8 @@ class ContextBuilder:
                     SELECT id, application_id, title, action_type AS type, status,
                            priority, due_at, completed_at, completion_evidence, source
                     FROM action_items
-                    WHERE user_id = ? AND status IN ('pending', 'in_progress', 'completed')
-                    ORDER BY (status != 'completed') DESC, updated_at DESC, id DESC LIMIT 8
+                    WHERE user_id = ? AND status IN ('pending', 'in_progress')
+                    ORDER BY updated_at DESC, id DESC LIMIT 8
                     """,
                     (user_id,),
                 ).fetchall()
@@ -278,6 +314,16 @@ class ContextBuilder:
         connection = sqlite3.connect(self.db_path, factory=ClosingConnection)
         connection.row_factory = sqlite3.Row
         return connection
+
+    @staticmethod
+    def _parsed_timestamp(value) -> datetime:
+        if not value:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return datetime.min.replace(tzinfo=timezone.utc)
 
     @staticmethod
     def _score_trends(connection: sqlite3.Connection, user_id: int) -> dict[str, list]:
