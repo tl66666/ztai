@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import ipaddress
+import json
 import random
 import re
 import socket
@@ -14,7 +15,14 @@ import requests
 
 from utils.agent_runtime.memory import ClosingConnection
 from utils.agent_runtime.models import ToolResult
+from utils.agent_runtime.actions import (
+    ALLOWED_ACTION_TYPES,
+    PROPOSAL_STATUSES,
+    ActionProposalService,
+)
 from utils.ai_client import get_ai_client
+from utils.domain.career import ACTION_STATUSES, CareerService
+from utils.domain.interviews import InterviewService
 
 
 @dataclass(frozen=True)
@@ -57,10 +65,19 @@ def _validate(schema: dict, arguments: dict) -> list[str]:
     for key in schema.get("required", []):
         if key not in arguments or arguments[key] in (None, ""):
             errors.append(f"缺少参数 {key}")
-    type_map = {"string": str, "integer": int, "number": (int, float), "boolean": bool}
+    type_map = {
+        "string": str,
+        "integer": int,
+        "number": (int, float),
+        "boolean": bool,
+        "object": dict,
+        "array": list,
+    }
     for key, value in arguments.items():
         rule = properties.get(key)
-        if not rule or key == "user_id":
+        if not rule:
+            if schema.get("additionalProperties") is False:
+                errors.append(f"不支持参数 {key}")
             continue
         expected = type_map.get(rule.get("type"))
         if expected and (not isinstance(value, expected) or isinstance(value, bool) and rule.get("type") != "boolean"):
@@ -77,8 +94,9 @@ def _validate(schema: dict, arguments: dict) -> list[str]:
 
 
 class ToolRegistry:
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, local_user_id: int = 1):
         self.db_path = db_path
+        self.local_user_id = int(local_user_id)
         self._tools: dict[str, ToolDefinition] = {}
 
     def register(self, definition: ToolDefinition) -> None:
@@ -117,6 +135,16 @@ class ToolRegistry:
                 display_text="工具参数必须是 JSON 对象",
                 error_code="invalid_arguments",
             )
+        try:
+            runtime_user_id = int(user_id)
+        except (TypeError, ValueError):
+            runtime_user_id = -1
+        if runtime_user_id != self.local_user_id:
+            return ToolResult(
+                False,
+                display_text="当前工具仅允许本地用户访问",
+                error_code="forbidden",
+            )
         safe_arguments = {key: value for key, value in arguments.items() if key != "user_id"}
         errors = _validate(definition.parameters, safe_arguments)
         if errors:
@@ -131,7 +159,7 @@ class ToolRegistry:
             if timeout_seconds is not None:
                 effective_timeout = min(effective_timeout, max(0.01, timeout_seconds))
             context = ToolContext(
-                user_id=int(user_id),
+                user_id=self.local_user_id,
                 db_path=self.db_path,
                 deadline=time.monotonic() + effective_timeout,
             )
@@ -145,10 +173,21 @@ class ToolRegistry:
                 error_code="tool_timeout",
                 retryable=True,
             )
-        except (sqlite3.Error, ValueError, TypeError) as exc:
-            return ToolResult(False, display_text=str(exc), error_code="tool_error", retryable=False)
-        except requests.RequestException as exc:
-            return ToolResult(False, display_text=str(exc), error_code="network_error", retryable=True)
+        except LookupError:
+            return ToolResult(False, display_text="未找到可读取的数据", error_code="not_found")
+        except PermissionError:
+            return ToolResult(False, display_text="无权读取该数据", error_code="forbidden")
+        except (ValueError, TypeError):
+            return ToolResult(False, display_text="工具参数无效", error_code="invalid_arguments", retryable=False)
+        except sqlite3.Error:
+            return ToolResult(False, display_text="数据读取失败", error_code="tool_error", retryable=False)
+        except requests.RequestException:
+            return ToolResult(
+                False,
+                display_text="网络请求失败",
+                error_code="network_error",
+                retryable=True,
+            )
         except Exception:
             return ToolResult(
                 False,
@@ -278,42 +317,118 @@ def _evaluate_salary(arguments: dict, context: ToolContext) -> ToolResult:
 
 
 def _list_applications(arguments: dict, context: ToolContext) -> ToolResult:
-    with _connect(context.db_path) as connection:
-        rows = connection.execute(
-            """
-            SELECT id, company, job_title, status, city, updated_at
-            FROM job_applications
-            WHERE user_id = ? AND deleted_at IS NULL
-            ORDER BY updated_at DESC LIMIT 20
-            """,
-            (context.user_id,),
-        ).fetchall()
-    data = [dict(row) for row in rows]
+    data = CareerService(context.db_path, context.user_id).list_opportunities(
+        context.user_id
+    )
     text = "\n".join(f"{row['company']} / {row['job_title']} / {row['status']}" for row in data)
     return ToolResult(True, data=data, display_text=text or "暂无投递记录")
 
 
 def _dashboard(arguments: dict, context: ToolContext) -> ToolResult:
-    with _connect(context.db_path) as connection:
-        counts = {
-            "resumes": connection.execute("SELECT COUNT(*) FROM resumes WHERE user_id = ?", (context.user_id,)).fetchone()[0],
-            "matches": connection.execute("SELECT COUNT(*) FROM job_matches WHERE user_id = ?", (context.user_id,)).fetchone()[0],
-            "interviews": connection.execute("SELECT COUNT(*) FROM interviews WHERE user_id = ?", (context.user_id,)).fetchone()[0],
-            "applications": connection.execute(
-                "SELECT COUNT(*) FROM job_applications WHERE user_id = ? AND deleted_at IS NULL",
-                (context.user_id,),
-            ).fetchone()[0],
-        }
-    text = "；".join(f"{key}={value}" for key, value in counts.items())
-    return ToolResult(True, data=counts, display_text=text)
+    service = CareerService(context.db_path, context.user_id)
+    opportunities = service.list_opportunities(context.user_id)
+    readiness = service.calculate_readiness(context.user_id)
+    data = {
+        "applications": len(opportunities),
+        "opportunities": opportunities,
+        "readiness": readiness,
+    }
+    text = f"投递={len(opportunities)}；求职准备度={readiness['score']}（{readiness['label']}）"
+    return ToolResult(True, data=data, display_text=text)
 
 
 def _career_report(arguments: dict, context: ToolContext) -> ToolResult:
-    dashboard = _dashboard({}, context)
-    applications = _list_applications({}, context)
-    data = {"dashboard": dashboard.data, "applications": applications.data[:8]}
-    text = f"求职概况：{dashboard.display_text}\n最近投递：\n{applications.display_text}"
+    service = CareerService(context.db_path, context.user_id)
+    opportunities = service.list_opportunities(context.user_id)
+    readiness = service.calculate_readiness(context.user_id)
+    profile = service.get_profile(context.user_id)
+    data = {
+        "profile": profile,
+        "readiness": readiness,
+        "opportunities": opportunities,
+    }
+    recent = "\n".join(
+        f"{item['company']} / {item['job_title']} / {item['status']}"
+        for item in opportunities[:8]
+    )
+    text = (
+        f"求职准备度：{readiness['score']}（{readiness['label']}）\n"
+        f"最近投递：\n{recent or '暂无投递记录'}"
+    )
     return ToolResult(True, data=data, display_text=text)
+
+
+def _career_profile(arguments: dict, context: ToolContext) -> ToolResult:
+    data = CareerService(context.db_path, context.user_id).get_profile(context.user_id)
+    return ToolResult(
+        True,
+        data=data,
+        display_text=json.dumps(data, ensure_ascii=False) if data else "暂无职业档案",
+    )
+
+
+def _opportunity(arguments: dict, context: ToolContext) -> ToolResult:
+    try:
+        data = CareerService(context.db_path, context.user_id).get_opportunity(
+            context.user_id, arguments["opportunity_id"]
+        )
+    except LookupError:
+        return ToolResult(False, display_text="未找到投递机会", error_code="not_found")
+    return ToolResult(
+        True,
+        data=data,
+        display_text=f"{data['company']} / {data['job_title']} / {data['status']}",
+    )
+
+
+def _training_insights(arguments: dict, context: ToolContext) -> ToolResult:
+    data = InterviewService(context.db_path, context.user_id).training_insights(
+        context.user_id
+    )
+    return ToolResult(
+        True,
+        data=data,
+        display_text=(
+            f"最近完成训练：面试 {data['interviews']['completed_count']} 次，"
+            f"题库 {data['practice']['completed_count']} 次，"
+            f"语音 {data['audio']['completed_count']} 次"
+        ),
+    )
+
+
+def _list_action_items(arguments: dict, context: ToolContext) -> ToolResult:
+    status = arguments.get("status")
+    data = CareerService(context.db_path, context.user_id).list_action_items(
+        context.user_id
+    )
+    if status:
+        data = [item for item in data if item.get("status") == status]
+    text = "\n".join(f"#{item['id']} {item['title']} / {item['status']}" for item in data)
+    return ToolResult(True, data=data, display_text=text or "暂无行动项")
+
+
+def _list_agent_actions(arguments: dict, context: ToolContext) -> ToolResult:
+    service = ActionProposalService(context.db_path, local_user_id=context.user_id)
+    proposals = service.list_actions(context.user_id, arguments.get("status"))
+    data = [service.public(item) for item in proposals]
+    text = "\n".join(f"#{item['id']} {item['preview']} / {item['status']}" for item in data)
+    return ToolResult(True, data=data, display_text=text or "暂无操作提案")
+
+
+def _propose_career_action(arguments: dict, context: ToolContext) -> ToolResult:
+    service = ActionProposalService(context.db_path, local_user_id=context.user_id)
+    proposal = service.propose(
+        context.user_id,
+        arguments["action_type"],
+        arguments["arguments"],
+        rationale=arguments.get("rationale", ""),
+    )
+    public = service.public(proposal)
+    return ToolResult(
+        True,
+        data=public,
+        display_text=f"本地规则模式已生成待确认操作：{public['preview']}。请在操作卡片中确认或取消。",
+    )
 
 
 def _web_search(arguments: dict, context: ToolContext) -> ToolResult:
@@ -397,6 +512,25 @@ def build_tool_registry(db_path: str) -> ToolRegistry:
         ToolDefinition("list_applications", "读取当前用户的投递记录。", _object(), _list_applications),
         ToolDefinition("get_dashboard", "读取当前用户简历、匹配、面试和投递统计。", _object(), _dashboard),
         ToolDefinition("generate_career_report", "汇总当前用户求职数据形成阶段报告素材。", _object(), _career_report),
+        ToolDefinition("get_career_profile", "读取当前用户已确认的职业档案。", _object(), _career_profile),
+        ToolDefinition("get_opportunity", "读取当前用户指定的未删除投递机会。", _object({"opportunity_id": {"type": "integer"}}, ["opportunity_id"]), _opportunity),
+        ToolDefinition("get_training_insights", "汇总最近完成的面试、题库和语音训练质量，不返回回答、反馈全文或音频内容。", _object(), _training_insights),
+        ToolDefinition("list_action_items", "读取当前用户行动项，可按状态筛选。", _object({"status": {"type": "string", "enum": list(ACTION_STATUSES)}}), _list_action_items),
+        ToolDefinition("list_agent_actions", "读取当前用户的操作提案，只返回脱敏公开字段。", _object({"status": {"type": "string", "enum": sorted(PROPOSAL_STATUSES)}}), _list_agent_actions),
+        ToolDefinition(
+            "propose_career_action",
+            "创建待用户在界面确认的职业操作提案；本工具不会执行、确认或取消操作。",
+            _object(
+                {
+                    "action_type": {"type": "string", "enum": sorted(ALLOWED_ACTION_TYPES)},
+                    "arguments": {"type": "object"},
+                    "rationale": {"type": "string", "maxLength": 1000},
+                },
+                ["action_type", "arguments"],
+            ),
+            _propose_career_action,
+            read_only=False,
+        ),
         ToolDefinition("web_search", "搜索需要时效性的公开互联网信息。", _object({"query": {"type": "string", "minLength": 2, "maxLength": 200}}, ["query"]), _web_search),
         ToolDefinition("fetch_webpage", "读取指定公开网页的文本内容。", _object({"url": {"type": "string", "minLength": 8, "maxLength": 2000}}, ["url"]), _fetch_webpage),
     ]

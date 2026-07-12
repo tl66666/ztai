@@ -260,16 +260,27 @@ class ActionProposalService:
         return self.get(user_id, proposal_id)
 
     def list_pending(self, user_id: int) -> list[dict[str, Any]]:
+        return self.list_actions(user_id, status="pending")
+
+    def list_actions(
+        self, user_id: int, status: str | None = None
+    ) -> list[dict[str, Any]]:
         self._require_local_user(user_id)
         self._expire_all_pending()
+        if status is not None and status not in PROPOSAL_STATUSES:
+            raise ValueError("invalid proposal status")
+        where_status = " AND status = ?" if status is not None else ""
+        parameters: tuple[Any, ...] = (
+            (self.local_user_id, status) if status is not None else (self.local_user_id,)
+        )
         with connect(self.db_path) as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT * FROM agent_action_proposals
-                WHERE user_id = ? AND status = 'pending'
+                WHERE user_id = ?{where_status}
                 ORDER BY created_at, id
                 """,
-                (self.local_user_id,),
+                parameters,
             ).fetchall()
         return [self._from_row(row) for row in rows]
 

@@ -48,4 +48,5 @@ class AgentRunResult:
     conversation_id: str
     events: list[dict[str, Any]] = field(default_factory=list)
     tools_used: list[str] = field(default_factory=list)
+    action_proposals: list[dict[str, Any]] = field(default_factory=list)
     ai_used: bool = False

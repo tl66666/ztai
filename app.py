@@ -2037,6 +2037,7 @@ def agent_chat():
         "events": agent_result["events"],
         "agent_trace": agent_result["events"],
         "tools_used": agent_result["tools_used"],
+        "action_proposals": agent_result["action_proposals"],
         "iterations": max(1, len(agent_result["tools_used"])),
         "suggested_actions": agent_result["suggested_actions"],
         "provider": "structured-agent-runtime",

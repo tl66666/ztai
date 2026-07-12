@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import app as app_module
 
@@ -130,6 +131,30 @@ class AgentAPITests(unittest.TestCase):
         ).get_json()
 
         self.assertEqual(response["suggested_actions"][0]["page"], "tracker")
+
+    def test_chat_returns_proposals_and_message_history_restores_cards(self):
+        conversation_id = self.create_conversation()
+        local_client = type("LocalClient", (), {"api_key": ""})()
+
+        with patch(
+            "utils.agent_runtime.service.get_ai_client", return_value=local_client
+        ):
+            response = self.client.post(
+                "/api/agent/chat",
+                json={
+                    "user_id": 1,
+                    "conversation_id": conversation_id,
+                    "message": "创建投递，公司是星河科技，岗位是测试工程师",
+                },
+            ).get_json()
+
+        messages = self.messages(conversation_id).get_json()["messages"]
+        assistant = messages[-1]
+        self.assertEqual(len(response["action_proposals"]), 1)
+        self.assertEqual(
+            assistant["metadata"]["action_proposals"], response["action_proposals"]
+        )
+        self.assertNotEqual(response["action_proposals"], response["suggested_actions"])
 
 
 if __name__ == "__main__":

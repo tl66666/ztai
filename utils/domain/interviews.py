@@ -362,6 +362,93 @@ class InterviewService:
                 sessions.append(self._recovery_response(row))
         return sessions
 
+    def training_insights(self, user_id: int, limit: int = 5) -> dict[str, Any]:
+        """Return bounded quality metrics without answers, transcripts, or feedback."""
+        self._require_local_user(user_id)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+            raise ValueError("limit must be an integer between 1 and 20")
+        with connect(self.db_path) as conn:
+            interviews = self._recent_training_rows(conn, "interviews", limit)
+            practices = self._recent_training_rows(conn, "practice_records", limit)
+            audios = self._recent_training_rows(conn, "audio_records", limit)
+
+        interview_scores = [
+            score for row in interviews if (score := self._quality_score(row, "interview")) is not None
+        ]
+        practice_scores = [
+            score for row in practices if (score := self._quality_score(row, "practice")) is not None
+        ]
+        audio_scores = [
+            score for row in audios if (score := self._quality_score(row, "audio")) is not None
+        ]
+        return {
+            "interviews": self._quality_summary(interviews, interview_scores, "average_score"),
+            "practice": self._quality_summary(practices, practice_scores, "average_score"),
+            "audio": self._quality_summary(audios, audio_scores, "average_quality_score"),
+        }
+
+    def _recent_training_rows(
+        self, conn: sqlite3.Connection, table: str, limit: int
+    ) -> list[dict[str, Any]]:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()
+        if not exists:
+            return []
+        columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+        if "user_id" not in columns:
+            return []
+        ordering = "created_at DESC, id DESC" if "created_at" in columns else "id DESC"
+        rows = conn.execute(
+            f'SELECT * FROM "{table}" WHERE user_id = ? ORDER BY {ordering} LIMIT ?',
+            (self.local_user_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    @classmethod
+    def _quality_score(cls, row: dict[str, Any], kind: str) -> float | None:
+        direct = cls._bounded_score(row.get("score"))
+        if direct is not None:
+            return direct
+        if kind == "practice":
+            correct, total = row.get("correct_count"), row.get("total_count")
+            if isinstance(correct, (int, float)) and isinstance(total, (int, float)) and total > 0:
+                return cls._bounded_score(correct * 100 / total)
+        if kind == "audio":
+            raw = row.get("analysis_result")
+            try:
+                payload = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                payload = None
+            if isinstance(payload, dict):
+                for key in ("overall_score", "quality_score", "score"):
+                    score = cls._bounded_score(payload.get(key))
+                    if score is not None:
+                        return score
+                voice = payload.get("voice")
+                if isinstance(voice, dict):
+                    return cls._bounded_score(voice.get("overall_score"))
+        return None
+
+    @staticmethod
+    def _bounded_score(value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return round(float(value), 1) if 0 <= value <= 100 else None
+
+    @staticmethod
+    def _quality_summary(
+        rows: list[dict[str, Any]], scores: list[float], average_key: str
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "completed_count": len(rows),
+            "scored_count": len(scores),
+            average_key: round(sum(scores) / len(scores), 1) if scores else None,
+        }
+        timestamps = [str(row.get("created_at")) for row in rows if row.get("created_at")]
+        result["latest_completed_at"] = timestamps[0] if timestamps else None
+        return result
+
     def _response(self, row: sqlite3.Row, state: dict[str, Any]) -> dict[str, Any]:
         conversation = state.get("conversation")
         if not isinstance(conversation, list):
