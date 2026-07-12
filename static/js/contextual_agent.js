@@ -66,7 +66,6 @@
 
   function chatPayload(message, conversationId, context = {}) {
     const payload = {
-      user_id: 1,
       conversation_id: String(conversationId || ""),
       message: String(message || ""),
     };
@@ -116,7 +115,8 @@
         ${fields ? `<button type="button" class="ghost" data-agent-action="edit" ${busy ? "disabled" : ""}>保存修改</button>` : ""}
         <button type="button" class="primary" data-agent-action="confirm" ${busy ? "disabled" : ""}>确认执行</button>
         <button type="button" class="ghost" data-agent-action="cancel" ${busy ? "disabled" : ""}>取消</button>
-      </div>` : "";
+      </div>` : proposal?.hydrationRetry ? `
+      <div class="proposal-controls"><button type="button" class="ghost" data-agent-action="retry-hydration">重试加载</button></div>` : "";
     const result = proposal?.result?.id
       ? `<a class="proposal-result-link" href="${escapeHtml(resultHref(proposal.result))}" data-agent-result-link>${escapeHtml(resultLabel(proposal.result))}</a>`
       : "";
@@ -144,7 +144,7 @@
   }
 
   function statusLabel(status) {
-    return ({ pending: "等待确认", executing: "执行中", completed: "已完成", cancelled: "已取消", expired: "已过期", failed: "执行失败" })[status] || "状态未知";
+    return ({ pending: "等待确认", executing: "执行中", completed: "已完成", cancelled: "已取消", expired: "已过期", failed: "执行失败", stale: "提案不可用", forbidden: "无权访问", unavailable: "暂时无法加载" })[status] || "状态未知";
   }
 
   function riskLabel(risk) {
@@ -156,11 +156,56 @@
     return labels[result?.entity_type] || "查看结果";
   }
 
+  function resultRoute(result) {
+    const id = positiveId(result?.id);
+    if (!id) return null;
+    const routes = {
+      opportunity: { page: "tracker", module: "board", key: "opportunity" },
+      resume: { page: "resume", module: "manage", key: "resume" },
+      action_item: { page: "agent", module: null, key: "action" },
+      career_profile: { page: "home", module: null, key: "profile" },
+      career_report: { page: "agent", module: null, key: "report" },
+    };
+    return routes[result.entity_type] ? { ...routes[result.entity_type], id } : null;
+  }
+
   function resultHref(result) {
-    if (result?.entity_type === "opportunity") return `?page=tracker&module=board&opportunity=${positiveId(result.id) || ""}`;
-    if (result?.entity_type === "resume") return "?page=resume&module=manage";
-    if (result?.entity_type === "action_item") return "?page=agent";
-    return "?page=home";
+    const route = resultRoute(result);
+    if (!route) return "?page=home";
+    const params = new URLSearchParams({ page: route.page });
+    if (route.module) params.set("module", route.module);
+    params.set(route.key, String(route.id));
+    return `?${params.toString()}`;
+  }
+
+  function unavailableProposal(proposal, kind) {
+    const statuses = { not_found: "stale", forbidden: "forbidden", server: "unavailable", network: "unavailable" };
+    const messages = {
+      not_found: "该提案已不存在，不能继续操作。",
+      forbidden: "该提案不属于当前用户，不能继续操作。",
+      server: "提案状态暂时无法读取，请重试。",
+      network: "网络连接失败，无法确认提案最新状态。",
+    };
+    return {
+      ...proposal,
+      status: statuses[kind] || "unavailable",
+      editable: {},
+      error: messages[kind] || messages.server,
+      hydrationRetry: kind === "server" || kind === "network",
+      hydrationSource: proposal,
+    };
+  }
+
+  function hydrationFailureKind(response, error = null) {
+    if (error) return "network";
+    if (response?.http_status === 404) return "not_found";
+    if (response?.http_status === 403) return "forbidden";
+    return "server";
+  }
+
+  function isActiveOpportunity(status, canonicalStatuses = []) {
+    if (status === "已结束" || status === "已拒绝") return false;
+    return status === "Offer" || !canonicalStatuses.includes(status) || canonicalStatuses.includes(status);
   }
 
   return {
@@ -171,7 +216,11 @@
     normalizedContext,
     proposalHtml,
     proposalsFromMetadata,
+    resultRoute,
     resultHref,
     transitionProposal,
+    unavailableProposal,
+    hydrationFailureKind,
+    isActiveOpportunity,
   };
 });

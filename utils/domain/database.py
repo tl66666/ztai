@@ -61,7 +61,15 @@ def ensure_column(
         row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
     }
     if column not in columns:
-        conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {column_type}')
+        try:
+            conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {column_type}')
+        except sqlite3.OperationalError as exc:
+            refreshed = {
+                row[1]
+                for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+            }
+            if column not in refreshed or "duplicate column name" not in str(exc).lower():
+                raise
 
 
 def migrate_database(db_path: str | os.PathLike[str]) -> None:

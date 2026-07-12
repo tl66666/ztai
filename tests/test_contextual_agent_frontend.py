@@ -30,6 +30,15 @@ class ContextualAgentFrontendTests(unittest.TestCase):
         self.assertIn('id="agentCommandOpportunities"', html)
         self.assertIn('id="openAgentWorkspace"', html)
 
+    def test_context_chip_remove_control_meets_touch_target(self):
+        css = (ROOT / "static" / "css" / "style.css").read_text(encoding="utf-8")
+
+        self.assertRegex(
+            css,
+            r"\.agent-context-chip button\s*\{[^}]*width:\s*44px;[^}]*height:\s*44px;",
+        )
+        self.assertRegex(css, r"\.agent-context-chip\s*\{[^}]*min-height:\s*44px;")
+
     def test_contextual_agent_behavior_harness(self):
         completed = subprocess.run(
             ["node", str(ROOT / "tests" / "contextual_agent_ui.test.js")],

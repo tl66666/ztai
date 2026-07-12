@@ -159,7 +159,28 @@ class ContextBuilder:
     def _career_snapshot(
         self, user_id: int, query: str = "", entity_context: dict | None = None
     ) -> str:
-        entity_context = entity_context or {}
+        requested_context = entity_context or {}
+        resume_requested = "resume_id" in requested_context
+        opportunity_requested = "opportunity_id" in requested_context
+        entity_context = {
+            key: requested_context[key]
+            for key in ("module",)
+            if isinstance(requested_context.get(key), str)
+        }
+        with self._business_connection() as context_connection:
+            for key, table, extra in (
+                ("resume_id", "resumes", ""),
+                ("opportunity_id", "job_applications", " AND deleted_at IS NULL"),
+            ):
+                entity_id = requested_context.get(key)
+                if not isinstance(entity_id, int) or isinstance(entity_id, bool) or entity_id <= 0:
+                    continue
+                owned = context_connection.execute(
+                    f'SELECT 1 FROM "{table}" WHERE id = ? AND user_id = ?{extra}',
+                    (entity_id, user_id),
+                ).fetchone()
+                if owned is not None:
+                    entity_context[key] = entity_id
         sections: list[tuple[str, object]] = []
         sections.append(("ui_context", {
             key: entity_context[key]
@@ -245,8 +266,10 @@ class ContextBuilder:
                     safe_text(candidate["updated_at"], 100), candidate["id"],
                 )
             try:
-                relevant_opportunity = max(
-                    opportunity_rows, key=opportunity_relevance, default=None
+                relevant_opportunity = (
+                    None
+                    if opportunity_requested and "opportunity_id" not in entity_context
+                    else max(opportunity_rows, key=opportunity_relevance, default=None)
                 )
                 selected_resume_id = (
                     entity_context.get("resume_id")
@@ -267,7 +290,7 @@ class ContextBuilder:
                 ).fetchall()
                 by_id = {candidate["id"]: candidate for candidate in resume_rows}
                 row = by_id.get(selected_resume_id)
-                if row is None and resume_rows:
+                if row is None and resume_rows and not resume_requested:
                     row = max(
                         resume_rows,
                         key=lambda candidate: (

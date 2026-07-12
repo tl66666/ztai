@@ -1490,6 +1490,7 @@ h3 { font-size: 19px; margin-bottom: 0; }
   text-align: left;
 }
 .command-row:hover { border-color: rgba(37,99,235,0.32); background: rgba(255,255,255,0.84); }
+.is-result-highlight { outline: 3px solid rgba(37,99,235,0.28); outline-offset: 2px; }
 .command-row span { min-width: 0; }
 .command-row b, .command-row small { display: block; overflow-wrap: anywhere; }
 .command-row small { margin-top: 4px; color: var(--muted); }
@@ -1545,7 +1546,7 @@ h3 { font-size: 19px; margin-bottom: 0; }
 .agent-context-strip > span { color: var(--muted); font-size: 12px; font-weight: 800; }
 .agent-context-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .agent-context-chip {
-  min-height: 34px;
+  min-height: 44px;
   max-width: 100%;
   display: inline-flex;
   align-items: center;
@@ -1559,7 +1560,7 @@ h3 { font-size: 19px; margin-bottom: 0; }
   font-weight: 700;
   overflow-wrap: anywhere;
 }
-.agent-context-chip button { width: 34px; height: 34px; display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); }
+.agent-context-chip button { width: 44px; height: 44px; flex: 0 0 44px; display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); }
 .agent-context-chip svg { width: 15px; }
 .agent-context-empty { color: var(--muted); font-size: 13px; }
 .agent-drawer .agent-conversation-bar { grid-template-columns: auto minmax(0, 1fr) 44px 44px; margin: 12px 0; padding-bottom: 12px; border-color: var(--line); }

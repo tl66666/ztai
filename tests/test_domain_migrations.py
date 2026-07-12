@@ -2,15 +2,43 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from utils.domain.database import (
     APPLICATION_STATUSES,
     LEGACY_STATUS_MAP,
     connect,
+    ensure_column,
     migrate_database,
 )
+
+
+class _BarrierCursor:
+    def __init__(self, cursor, barrier):
+        self.cursor = cursor
+        self.barrier = barrier
+
+    def fetchall(self):
+        rows = self.cursor.fetchall()
+        self.barrier.wait(timeout=5)
+        return rows
+
+
+class _BarrierConnection:
+    def __init__(self, connection, barrier):
+        self.connection = connection
+        self.barrier = barrier
+        self.synchronized = False
+
+    def execute(self, sql, parameters=()):
+        cursor = self.connection.execute(sql, parameters)
+        if sql.startswith("PRAGMA table_info") and not self.synchronized:
+            self.synchronized = True
+            return _BarrierCursor(cursor, self.barrier)
+        return cursor
 
 
 EXPECTED_APPLICATION_STATUSES = (
@@ -95,6 +123,25 @@ def create_legacy_database(db_path):
 
 
 class DomainMigrationTests(unittest.TestCase):
+    def test_ensure_column_is_idempotent_under_concurrent_initialization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = os.path.join(directory, "concurrent-column.db")
+            with connect(db_path) as conn:
+                conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+            barrier = threading.Barrier(2)
+
+            def add_column():
+                with connect(db_path) as conn:
+                    ensure_column(_BarrierConnection(conn, barrier), "items", "note", "TEXT")
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [executor.submit(add_column) for _ in range(2)]
+                errors = [future.exception() for future in futures]
+
+            self.assertEqual(errors, [None, None])
+            with connect(db_path) as conn:
+                columns = [row[1] for row in conn.execute('PRAGMA table_info("items")')]
+            self.assertEqual(columns.count("note"), 1)
     def test_publishes_canonical_application_statuses_and_legacy_map(self):
         self.assertEqual(APPLICATION_STATUSES, EXPECTED_APPLICATION_STATUSES)
         self.assertEqual(LEGACY_STATUS_MAP["面试中"], "一面")

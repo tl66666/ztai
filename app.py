@@ -54,6 +54,15 @@ _agent_service = None
 _agent_action_service = None
 _interview_service = None
 AGENT_USER_ID = int(os.environ.get("JOBHUNTER_AGENT_USER_ID", "1"))
+AGENT_CONTEXT_MODULES = frozenset({
+    "home",
+    "resume", "resume:input", "resume:manage", "resume:analysis", "resume:export",
+    "resume:jd", "resume:skills",
+    "interview", "interview:mock", "interview:professional", "interview:practice",
+    "interview:records",
+    "tracker", "tracker:add", "tracker:board", "tracker:salary",
+    "agent",
+})
 
 
 CAREER_PROFILES = {
@@ -2017,35 +2026,50 @@ def agent_chat():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"success": False, "message": "消息必须是 1 到 12000 个字符"}), 400
+    if set(data) - {"message", "conversation_id", "context"}:
+        return jsonify({"success": False, "message": "请求只能包含消息、会话和上下文"}), 400
     raw_message = data.get("message")
     if not isinstance(raw_message, str):
         return jsonify({"success": False, "message": "消息必须是 1 到 12000 个字符"}), 400
     message = raw_message.strip()
     if not message or len(message) > 12000:
         return jsonify({"success": False, "message": "消息必须是 1 到 12000 个字符"}), 400
-    user_id = require_agent_user(data.get("user_id", AGENT_USER_ID))
-    if user_id is None:
-        return agent_access_denied()
-    context = data.get("context") or {}
+    conversation_id = data.get("conversation_id", "")
+    if not isinstance(conversation_id, str) or len(conversation_id) > 200:
+        return jsonify({"success": False, "message": "会话标识无效"}), 400
+    user_id = AGENT_USER_ID
+    context = data["context"] if "context" in data else {}
     if not isinstance(context, dict) or set(context) - {"module", "opportunity_id", "resume_id"}:
         return jsonify({"success": False, "message": "上下文只能包含当前模块和实体 ID"}), 400
     module = context.get("module")
-    if module is not None and (
-        not isinstance(module, str)
-        or not re.fullmatch(r"[a-z][a-z0-9_-]{0,49}(?::[a-z][a-z0-9_-]{0,49})?", module)
-    ):
-        return jsonify({"success": False, "message": "上下文只能包含当前模块和实体 ID"}), 400
+    if module is not None and module not in AGENT_CONTEXT_MODULES:
+        return jsonify({"success": False, "message": "上下文模块不存在"}), 400
     for field in ("opportunity_id", "resume_id"):
         value = context.get(field)
         if value is not None and (
             not isinstance(value, int) or isinstance(value, bool) or value <= 0
         ):
             return jsonify({"success": False, "message": "上下文只能包含当前模块和实体 ID"}), 400
+    with get_db() as conn:
+        ownership_checks = (
+            ("resume_id", "resumes", ""),
+            ("opportunity_id", "job_applications", " AND deleted_at IS NULL"),
+        )
+        for field, table, extra in ownership_checks:
+            entity_id = context.get(field)
+            if entity_id is None:
+                continue
+            owned = conn.execute(
+                f'SELECT 1 FROM "{table}" WHERE id = ? AND user_id = ?{extra}',
+                (entity_id, AGENT_USER_ID),
+            ).fetchone()
+            if owned is None:
+                return jsonify({"success": False, "message": "上下文实体不存在"}), 404
     try:
         agent_result = get_agent_service().chat(
             user_id=user_id,
             message=message,
-            conversation_id=str(data.get("conversation_id", "")),
+            conversation_id=conversation_id,
             context=context,
         )
     except ValueError:

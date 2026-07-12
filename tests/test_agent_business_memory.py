@@ -391,6 +391,28 @@ class AgentBusinessMemoryTests(unittest.TestCase):
         opportunities = snapshot.split("opportunities:", 1)[1].splitlines()[0]
         self.assertLess(opportunities.index("Selected Co"), opportunities.index("Recent Co"))
 
+    def test_missing_explicit_entity_ids_never_fall_back_or_remain_in_snapshot(self):
+        with connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO resumes (user_id,title,content,status) VALUES (1,'Latest Resume','x','active')"
+            )
+            conn.execute(
+                "INSERT INTO job_applications (user_id,company,job_title) VALUES (1,'Latest Co','Role')"
+            )
+        conversation = self.store.create_conversation(1, "Missing context")
+
+        snapshot = ContextBuilder(self.store, self.db_path).build(
+            1,
+            conversation.id,
+            "general advice",
+            entity_context={"opportunity_id": 999999, "resume_id": 999999},
+        ).career_snapshot
+
+        ui_context = snapshot.split("ui_context:", 1)[1].splitlines()[0]
+        selected_resume = snapshot.split("selected_resume:", 1)[1].splitlines()[0].strip()
+        self.assertNotIn("999999", ui_context)
+        self.assertEqual(selected_resume, "null")
+
     def test_snapshot_survives_blob_fields_and_keeps_healthy_rows(self):
         career = CareerService(self.db_path)
         healthy = career.create_opportunity(

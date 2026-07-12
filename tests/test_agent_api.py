@@ -39,12 +39,11 @@ class AgentAPITests(unittest.TestCase):
 
     def test_chat_creates_and_reuses_conversation(self):
         first = self.client.post(
-            "/api/agent/chat", json={"user_id": 1, "message": "你好"}
+            "/api/agent/chat", json={"message": "你好"}
         ).get_json()
         second = self.client.post(
             "/api/agent/chat",
             json={
-                "user_id": 1,
                 "conversation_id": first["conversation_id"],
                 "message": "看我的求职进度",
             },
@@ -66,7 +65,7 @@ class AgentAPITests(unittest.TestCase):
         for message in ("", "   ", {"not": "text"}, "x" * 12001):
             with self.subTest(kind=type(message).__name__, length=len(message)):
                 response = self.client.post(
-                    "/api/agent/chat", json={"user_id": 1, "message": message}
+                    "/api/agent/chat", json={"message": message}
                 )
                 payload = response.get_json()
                 self.assertEqual(response.status_code, 400)
@@ -84,12 +83,20 @@ class AgentAPITests(unittest.TestCase):
             "status": "completed", "events": [], "tools_used": [],
             "action_proposals": [], "suggested_actions": [],
         }
-        context = {"module": "resume:jd", "opportunity_id": 41, "resume_id": 7}
+        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+            resume_id = conn.execute(
+                "INSERT INTO resumes(user_id,title,content) VALUES (1,'Owned','content')"
+            ).lastrowid
+            opportunity_id = conn.execute(
+                "INSERT INTO job_applications(user_id,company,job_title) VALUES (1,'Owned','Role')"
+            ).lastrowid
+            conn.commit()
+        context = {"module": "resume:jd", "opportunity_id": opportunity_id, "resume_id": resume_id}
 
         with patch.object(app_module, "get_agent_service", return_value=service):
             response = self.client.post(
                 "/api/agent/chat",
-                json={"user_id": 1, "conversation_id": "conversation-1", "message": "分析差距", "context": context},
+                json={"conversation_id": "conversation-1", "message": "分析差距", "context": context},
             )
 
         self.assertEqual(response.status_code, 200)
@@ -97,7 +104,33 @@ class AgentAPITests(unittest.TestCase):
             user_id=1, message="分析差距", conversation_id="conversation-1", context=context
         )
 
-    def test_chat_rejects_client_supplied_entity_content_in_context(self):
+    def test_chat_rejects_client_identity_unknown_fields_and_bad_context_shapes(self):
+        invalid_bodies = (
+            {"user_id": 1, "message": "hello"},
+            {"message": "hello", "unexpected": True},
+        )
+        for body in invalid_bodies:
+            with self.subTest(body=body):
+                response = self.client.post("/api/agent/chat", json=body)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json()["message"], "请求只能包含消息、会话和上下文")
+
+        for context in (
+            [],
+            None,
+            "resume:jd",
+            {"module": "resume:unknown"},
+            {"module": "unknown:page"},
+            {"module": "resume:jd:extra"},
+        ):
+            with self.subTest(context=context):
+                response = self.client.post(
+                    "/api/agent/chat", json={"message": "hello", "context": context}
+                )
+                self.assertEqual(response.status_code, 400)
+                expected = "上下文模块不存在" if isinstance(context, dict) else "上下文只能包含当前模块和实体 ID"
+                self.assertEqual(response.get_json()["message"], expected)
+
         for context in (
             {"opportunity_id": 1, "company": "untrusted"},
             {"resume_id": 1, "resume_content": "private"},
@@ -106,10 +139,33 @@ class AgentAPITests(unittest.TestCase):
         ):
             with self.subTest(context=context):
                 response = self.client.post(
-                    "/api/agent/chat", json={"user_id": 1, "message": "hello", "context": context}
+                    "/api/agent/chat", json={"message": "hello", "context": context}
                 )
                 self.assertEqual(response.status_code, 400)
                 self.assertEqual(response.get_json()["message"], "上下文只能包含当前模块和实体 ID")
+
+    def test_chat_rejects_nonexistent_and_foreign_context_entities(self):
+        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+            foreign_resume = conn.execute(
+                "INSERT INTO resumes(user_id,title,content) VALUES (2,'Foreign','content')"
+            ).lastrowid
+            foreign_opportunity = conn.execute(
+                "INSERT INTO job_applications(user_id,company,job_title) VALUES (2,'Foreign','Role')"
+            ).lastrowid
+            conn.commit()
+
+        for context in (
+            {"resume_id": foreign_resume},
+            {"opportunity_id": foreign_opportunity},
+            {"resume_id": 999999},
+            {"opportunity_id": 999999},
+        ):
+            with self.subTest(context=context):
+                response = self.client.post(
+                    "/api/agent/chat", json={"message": "hello", "context": context}
+                )
+                self.assertEqual(response.status_code, 404)
+                self.assertEqual(response.get_json()["message"], "上下文实体不存在")
 
     def test_first_message_names_a_precreated_conversation(self):
         conversation_id = self.create_conversation(title="新对话")
@@ -117,7 +173,6 @@ class AgentAPITests(unittest.TestCase):
         self.client.post(
             "/api/agent/chat",
             json={
-                "user_id": 1,
                 "conversation_id": conversation_id,
                 "message": "准备杭州 Python 测试岗位",
             },
@@ -131,7 +186,7 @@ class AgentAPITests(unittest.TestCase):
         conversation_id = self.create_conversation(user_id=1)
         self.client.post(
             "/api/agent/chat",
-            json={"user_id": 1, "conversation_id": conversation_id, "message": "你好"},
+            json={"conversation_id": conversation_id, "message": "你好"},
         )
 
         response = self.messages(conversation_id, user_id=2)
@@ -144,7 +199,7 @@ class AgentAPITests(unittest.TestCase):
         for conversation_id in (first, second):
             self.client.post(
                 "/api/agent/chat",
-                json={"user_id": 1, "conversation_id": conversation_id, "message": "你好"},
+                json={"conversation_id": conversation_id, "message": "你好"},
             )
 
         response = self.client.post(
@@ -175,7 +230,8 @@ class AgentAPITests(unittest.TestCase):
         list_response = self.client.get("/api/agent/conversations/2")
 
         self.assertEqual(create_response.status_code, 403)
-        self.assertEqual(chat_response.status_code, 403)
+        self.assertEqual(chat_response.status_code, 400)
+        self.assertEqual(chat_response.get_json()["message"], "请求只能包含消息、会话和上下文")
         self.assertEqual(list_response.status_code, 403)
 
     def test_application_tool_suggests_the_existing_tracker_page(self):
@@ -184,7 +240,6 @@ class AgentAPITests(unittest.TestCase):
         response = self.client.post(
             "/api/agent/chat",
             json={
-                "user_id": 1,
                 "conversation_id": conversation_id,
                 "message": "查看我的投递记录",
             },
@@ -202,7 +257,6 @@ class AgentAPITests(unittest.TestCase):
             response = self.client.post(
                 "/api/agent/chat",
                 json={
-                    "user_id": 1,
                     "conversation_id": conversation_id,
                     "message": "创建投递，公司是星河科技，岗位是测试工程师",
                 },

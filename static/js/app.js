@@ -99,6 +99,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadAgentConversations();
   await applyInitialRouteFromQuery();
   await loadAgentCommandCenter();
+  await focusAgentResultFromQuery();
   syncAgentContext();
   lucide.createIcons();
 });
@@ -582,7 +583,7 @@ async function loadResumes() {
   $("resumeCount").textContent = state.resumes.length;
   $("resumeList").innerHTML = state.resumes.length
     ? state.resumes.map((resume) => `
-      <article class="list-item">
+      <article class="list-item" data-resume-id="${resume.id}" tabindex="-1">
         <b>${escapeHtml(resume.title)}</b>
         <small>${new Date(resume.updated_at || resume.created_at).toLocaleString()}${resume.file_type ? ` · 原件 ${escapeHtml(resume.file_type.toUpperCase())}` : ""}</small>
         <div class="list-actions">
@@ -2283,7 +2284,9 @@ function renderAgentCommandActions(actions, error = "") {
 function renderAgentCommandOpportunities() {
   const box = $("agentCommandOpportunities");
   if (!box) return;
-  const active = state.applications.filter((item) => !["已拒绝", "已放弃"].includes(item.status)).slice(0, 6);
+  const active = state.applications.filter((item) => (
+    ContextualAgent.isActiveOpportunity(item.status, state.applicationStatuses)
+  )).slice(0, 6);
   box.innerHTML = active.length ? active.map((item) => `
     <button type="button" class="command-row" onclick="closeAgentDrawer(); openOpportunityWorkspace(${Number(item.id)})">
       <span><b>${escapeHtml(item.company || "未命名公司")} / ${escapeHtml(item.job_title || "目标岗位")}</b><small>${escapeHtml(item.needs_status_review ? "待确认" : item.status || "未设置")}</small></span>
@@ -2409,17 +2412,25 @@ async function restoreAgentMessages() {
 }
 
 async function hydrateAgentProposals(proposals) {
-  return Promise.all(proposals.map(async (proposal) => {
-    let latest;
-    try {
-      latest = await api(`/agent/actions/${Number(proposal.id)}`);
-    } catch (_error) {
-      latest = { success: false };
-    }
-    const resolved = latest.success ? latest.action : proposal;
-    state.agentProposals.set(Number(resolved.id), resolved);
-    return resolved;
-  }));
+  return Promise.all(proposals.map(hydrateAgentProposal));
+}
+
+async function hydrateAgentProposal(proposal) {
+  let latest;
+  try {
+    latest = await api(`/agent/actions/${Number(proposal.id)}`);
+  } catch (_error) {
+    return ContextualAgent.unavailableProposal(
+      proposal, ContextualAgent.hydrationFailureKind(null, _error)
+    );
+  }
+  if (!latest.success) {
+    return ContextualAgent.unavailableProposal(
+      proposal, ContextualAgent.hydrationFailureKind(latest)
+    );
+  }
+  state.agentProposals.set(Number(latest.action.id), latest.action);
+  return latest.action;
 }
 
 function renderAgentProposals(proposals, messageNode) {
@@ -2466,6 +2477,14 @@ async function handleProposalClick(event) {
   const proposalId = Number(card?.dataset.proposalId);
   const actionName = button.dataset.agentAction;
   const proposal = state.agentProposals.get(proposalId);
+  if (card && proposal && actionName === "retry-hydration") {
+    const source = proposal.hydrationSource || proposal;
+    replaceProposalCard(card, { ...proposal, hydrationRetry: false, busy: true });
+    const hydrated = await hydrateAgentProposal(source);
+    const freshCard = $("chatLog").querySelector(`[data-proposal-id="${proposalId}"]`);
+    if (freshCard) replaceProposalCard(freshCard, hydrated);
+    return;
+  }
   if (!card || !proposal || proposal.status !== "pending") return;
   const body = actionName === "edit" ? proposalChanges(card, proposal) : {};
   const startEvent = `${actionName}_start`;
@@ -2497,6 +2516,37 @@ async function handleProposalClick(event) {
     next = ContextualAgent.transitionProposal(next, `${actionName}_error`, { error: "网络连接失败，请重试" });
     if (freshCard) replaceProposalCard(freshCard, next);
   }
+}
+
+async function focusAgentResultFromQuery() {
+  const params = new URLSearchParams(window.location.search);
+  const mappings = ["resume", "action", "profile", "report"];
+  const key = mappings.find((candidate) => params.has(candidate));
+  if (!key) return;
+  const id = Number(params.get(key));
+  if (!Number.isInteger(id) || id <= 0) return;
+  if (key === "resume") {
+    const card = document.querySelector(`[data-resume-id="${id}"]`);
+    if (!card) return toast("结果简历不存在或已归档");
+    card.classList.add("is-result-highlight");
+    card.focus({ preventScroll: true });
+    card.scrollIntoView({ block: "center", behavior: "smooth" });
+    return;
+  }
+  if (key === "action") {
+    const data = await api("/action-items");
+    const action = data.success ? (data.data || []).find((item) => Number(item.id) === id) : null;
+    if (action) {
+      $("agentActiveActions").insertAdjacentHTML("afterbegin", `
+        <div class="command-row is-result-highlight" tabindex="-1" id="focusedAgentResult"><span><b>${escapeHtml(action.title)}</b><small>${escapeHtml(action.status || "pending")} · 行动 #${id}</small></span></div>`);
+      $("focusedAgentResult").focus({ preventScroll: true });
+      return;
+    }
+  }
+  const labels = { action: "行动", profile: "求职目标", report: "求职报告" };
+  $("agentActiveActions")?.insertAdjacentHTML("afterbegin", `
+    <div class="command-empty is-result-highlight" id="focusedAgentResult" tabindex="-1"><b>已定位${labels[key]} #${id}</b><span>该结果由刚完成的 Agent 操作创建。</span></div>`);
+  $("focusedAgentResult")?.focus({ preventScroll: true });
 }
 
 async function refreshAfterAgentAction(result) {
