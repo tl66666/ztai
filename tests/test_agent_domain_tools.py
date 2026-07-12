@@ -3,8 +3,10 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from utils.agent_runtime.context import ContextBuilder
+from utils.agent_runtime.actions import ALLOWED_ACTION_TYPES
 from utils.agent_runtime.local_policy import LocalPolicy
 from utils.agent_runtime.memory import MemoryStore, create_agent_tables
 from utils.agent_runtime.models import AgentDecision
@@ -219,6 +221,127 @@ class AgentDomainToolTests(unittest.TestCase):
         self.assertEqual(proposal["properties"]["arguments"]["type"], "object")
         self.assertEqual(proposal["properties"]["rationale"]["maxLength"], 1000)
 
+    def test_proposal_schema_has_nine_exact_action_specific_branches(self):
+        schema = next(
+            item["function"]["parameters"]
+            for item in self.registry.schemas()
+            if item["function"]["name"] == "propose_career_action"
+        )
+        branches = {
+            branch["properties"]["action_type"]["const"]: branch
+            for branch in schema["oneOf"]
+        }
+
+        self.assertEqual(set(branches), set(ALLOWED_ACTION_TYPES))
+        self.assertFalse(schema["additionalProperties"])
+        opportunity = branches["create_opportunity"]["properties"]["arguments"]
+        self.assertEqual(set(opportunity["required"]), {"company", "job_title"})
+        self.assertFalse(opportunity["additionalProperties"])
+        metadata = branches["create_resume_version"]["properties"]["arguments"]["properties"]["metadata"]
+        changes = branches["update_opportunity"]["properties"]["arguments"]["properties"]["changes"]
+        report_content = branches["save_career_report"]["properties"]["arguments"]["properties"]["content"]
+        self.assertFalse(metadata["additionalProperties"])
+        self.assertFalse(changes["additionalProperties"])
+        self.assertIsInstance(report_content["additionalProperties"], dict)
+
+    def test_nested_invalid_arguments_are_rejected_before_proposal_executor(self):
+        invalid = (
+            {
+                "action_type": "create_opportunity",
+                "arguments": {"company": "Acme", "job_title": "Engineer", "unknown": True},
+            },
+            {
+                "action_type": "create_resume_version",
+                "arguments": {
+                    "resume_id": 1,
+                    "content": "body",
+                    "metadata": {"unknown": True},
+                },
+            },
+            {
+                "action_type": "save_career_report",
+                "arguments": {
+                    "report_type": "weekly",
+                    "content": {"summary": object()},
+                },
+            },
+            {
+                "action_type": "save_career_report",
+                "arguments": {
+                    "report_type": "weekly",
+                    "content": {"score": 10 ** 1000},
+                },
+            },
+        )
+        with patch(
+            "utils.agent_runtime.tools.ActionProposalService.propose"
+        ) as propose:
+            results = [
+                self.registry.execute("propose_career_action", item, user_id=1)
+                for item in invalid
+            ]
+
+        self.assertTrue(all(not item.ok for item in results))
+        self.assertEqual({item.error_code for item in results}, {"invalid_arguments"})
+        propose.assert_not_called()
+        with connect(self.db_path) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM agent_action_proposals").fetchone()[0], 0)
+
+    def test_remote_policy_receives_constrained_nested_proposal_schema(self):
+        client = SequenceClient([
+            {"success": True, "message": {"role": "assistant", "content": "完成。"}}
+        ])
+        state = type(
+            "State",
+            (),
+            {
+                "pending_decisions": [],
+                "model_messages": [],
+                "active_task": None,
+                "context_prompt": "",
+                "observations": [],
+                "user_message": "创建投递",
+                "deadline": 9999999999,
+            },
+        )()
+
+        RemoteModelPolicy(client).decide(state, self.registry.schemas())
+
+        schema = next(
+            item["function"]["parameters"]
+            for item in client.calls[0]["tools"]
+            if item["function"]["name"] == "propose_career_action"
+        )
+        create_branch = next(
+            item for item in schema["oneOf"]
+            if item["properties"]["action_type"].get("const") == "create_opportunity"
+        )
+        self.assertFalse(
+            create_branch["properties"]["arguments"]["additionalProperties"]
+        )
+
+    def test_shared_proposal_text_is_neutral_while_local_reply_names_rule_mode(self):
+        arguments = {
+            "action_type": "create_action_item",
+            "arguments": {"title": "准备面试"},
+            "rationale": "下一步",
+        }
+        shared = self.registry.execute("propose_career_action", arguments, user_id=1)
+        state = type(
+            "State",
+            (),
+            {
+                "observations": [{"display_text": shared.display_text}],
+                "active_task": None,
+                "user_message": "",
+                "context_prompt": "",
+            },
+        )()
+        local = LocalPolicy().decide(state, self.registry.schemas())
+
+        self.assertNotIn("本地规则模式", shared.display_text)
+        self.assertIn("本地规则模式", local.message)
+
     def test_orchestrator_attaches_and_persists_public_proposals_separately(self):
         store = MemoryStore(self.db_path)
         conversation = store.create_conversation(1, "proposal")
@@ -374,11 +497,13 @@ class AgentDomainToolTests(unittest.TestCase):
         result = orchestrator.run(1, conversation.id, "帮我创建面试准备行动项")
 
         self.assertEqual(result.reply, "已生成待确认操作。")
+        self.assertNotIn("本地规则模式", result.reply)
         self.assertEqual(len(result.action_proposals), 1)
         tool_message = next(
             item for item in client.calls[1]["messages"] if item["role"] == "tool"
         )
         self.assertNotIn("arguments", tool_message["content"])
+        self.assertNotIn("本地规则模式", tool_message["content"])
 
 
 if __name__ == "__main__":

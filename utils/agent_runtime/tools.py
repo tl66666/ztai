@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import ipaddress
 import json
+import math
 import random
 import re
 import socket
@@ -16,9 +17,9 @@ import requests
 from utils.agent_runtime.memory import ClosingConnection
 from utils.agent_runtime.models import ToolResult
 from utils.agent_runtime.actions import (
-    ALLOWED_ACTION_TYPES,
     PROPOSAL_STATUSES,
     ActionProposalService,
+    career_action_tool_schema,
 )
 from utils.ai_client import get_ai_client
 from utils.domain.career import ACTION_STATUSES, CareerService
@@ -58,39 +59,139 @@ class ToolDefinition:
 
 
 def _validate(schema: dict, arguments: dict) -> list[str]:
-    if not isinstance(arguments, dict):
-        return ["参数必须是对象"]
-    errors = []
-    properties = schema.get("properties", {})
-    for key in schema.get("required", []):
-        if key not in arguments or arguments[key] in (None, ""):
-            errors.append(f"缺少参数 {key}")
-    type_map = {
-        "string": str,
-        "integer": int,
-        "number": (int, float),
-        "boolean": bool,
-        "object": dict,
-        "array": list,
-    }
-    for key, value in arguments.items():
-        rule = properties.get(key)
-        if not rule:
-            if schema.get("additionalProperties") is False:
-                errors.append(f"不支持参数 {key}")
-            continue
-        expected = type_map.get(rule.get("type"))
-        if expected and (not isinstance(value, expected) or isinstance(value, bool) and rule.get("type") != "boolean"):
-            errors.append(f"参数 {key} 类型错误")
-            continue
-        if isinstance(value, str):
-            if len(value) < rule.get("minLength", 0):
-                errors.append(f"参数 {key} 太短")
-            if len(value) > rule.get("maxLength", 1000000):
-                errors.append(f"参数 {key} 太长")
-        if "enum" in rule and value not in rule["enum"]:
-            errors.append(f"参数 {key} 不在允许范围")
+    return _validate_schema_value(schema, arguments, "参数", schema, 0)
+
+
+def _validate_schema_value(
+    schema: dict,
+    value,
+    path: str,
+    root_schema: dict,
+    depth: int,
+) -> list[str]:
+    if depth > 20:
+        return [f"{path} 嵌套过深"]
+    if "$ref" in schema:
+        target = _resolve_local_ref(root_schema, schema["$ref"])
+        return _validate_schema_value(target, value, path, root_schema, depth + 1)
+
+    errors: list[str] = []
+    if "oneOf" in schema:
+        matches = [
+            branch
+            for branch in schema["oneOf"]
+            if not _validate_schema_value(branch, value, path, root_schema, depth + 1)
+        ]
+        if len(matches) != 1:
+            errors.append(f"{path} 不符合允许结构")
+            return errors
+
+    if "const" in schema and value != schema["const"]:
+        return [f"{path} 必须为 {schema['const']}"]
+    if "enum" in schema and value not in schema["enum"]:
+        return [f"{path} 不在允许范围"]
+
+    expected_types = schema.get("type")
+    if expected_types is not None:
+        if isinstance(expected_types, str):
+            expected_types = [expected_types]
+        if not any(_matches_schema_type(item, value) for item in expected_types):
+            return [f"{path} 类型错误"]
+
+    if isinstance(value, dict):
+        if len(value) < schema.get("minProperties", 0):
+            errors.append(f"{path} 字段不足")
+        if len(value) > schema.get("maxProperties", 1_000_000):
+            errors.append(f"{path} 字段过多")
+        properties = schema.get("properties", {})
+        property_names = schema.get("propertyNames")
+        if isinstance(property_names, dict):
+            for key in value:
+                errors.extend(
+                    _validate_schema_value(
+                        property_names, key, f"{path} 字段名", root_schema, depth + 1
+                    )
+                )
+        for key in schema.get("required", []):
+            if key not in value:
+                errors.append(f"缺少参数 {path}.{key}")
+        additional = schema.get("additionalProperties", True)
+        for key, item in value.items():
+            child_path = f"{path}.{key}"
+            if key in properties:
+                errors.extend(
+                    _validate_schema_value(
+                        properties[key], item, child_path, root_schema, depth + 1
+                    )
+                )
+            elif additional is False:
+                errors.append(f"不支持参数 {child_path}")
+            elif isinstance(additional, dict):
+                errors.extend(
+                    _validate_schema_value(
+                        additional, item, child_path, root_schema, depth + 1
+                    )
+                )
+    elif isinstance(value, list):
+        if len(value) < schema.get("minItems", 0):
+            errors.append(f"{path} 项目不足")
+        if len(value) > schema.get("maxItems", 1_000_000):
+            errors.append(f"{path} 项目过多")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                errors.extend(
+                    _validate_schema_value(
+                        item_schema,
+                        item,
+                        f"{path}[{index}]",
+                        root_schema,
+                        depth + 1,
+                    )
+                )
+    elif isinstance(value, str):
+        if len(value) < schema.get("minLength", 0):
+            errors.append(f"{path} 太短")
+        if len(value) > schema.get("maxLength", 1_000_000):
+            errors.append(f"{path} 太长")
+        pattern = schema.get("pattern")
+        if pattern and not re.fullmatch(pattern, value):
+            errors.append(f"{path} 格式错误")
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        if isinstance(value, float) and not math.isfinite(value):
+            errors.append(f"{path} 必须是有限数字")
+        if "minimum" in schema and value < schema["minimum"]:
+            errors.append(f"{path} 过小")
+        if "maximum" in schema and value > schema["maximum"]:
+            errors.append(f"{path} 过大")
     return errors
+
+
+def _resolve_local_ref(root_schema: dict, reference: str) -> dict:
+    if not reference.startswith("#/"):
+        return {}
+    current = root_schema
+    for part in reference[2:].split("/"):
+        current = current.get(part, {}) if isinstance(current, dict) else {}
+    return current if isinstance(current, dict) else {}
+
+
+def _matches_schema_type(expected: str, value) -> bool:
+    if expected == "null":
+        return value is None
+    if expected == "boolean":
+        return isinstance(value, bool)
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected == "string":
+        return isinstance(value, str)
+    if expected == "object":
+        return isinstance(value, dict)
+    if expected == "array":
+        return isinstance(value, list)
+    return True
 
 
 class ToolRegistry:
@@ -427,7 +528,7 @@ def _propose_career_action(arguments: dict, context: ToolContext) -> ToolResult:
     return ToolResult(
         True,
         data=public,
-        display_text=f"本地规则模式已生成待确认操作：{public['preview']}。请在操作卡片中确认或取消。",
+        display_text=f"已生成待确认操作：{public['preview']}。请在操作卡片中确认或取消。",
     )
 
 
@@ -520,14 +621,7 @@ def build_tool_registry(db_path: str) -> ToolRegistry:
         ToolDefinition(
             "propose_career_action",
             "创建待用户在界面确认的职业操作提案；本工具不会执行、确认或取消操作。",
-            _object(
-                {
-                    "action_type": {"type": "string", "enum": sorted(ALLOWED_ACTION_TYPES)},
-                    "arguments": {"type": "object"},
-                    "rationale": {"type": "string", "maxLength": 1000},
-                },
-                ["action_type", "arguments"],
-            ),
+            career_action_tool_schema(),
             _propose_career_action,
             read_only=False,
         ),
