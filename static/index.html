@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="icon" type="image/png" href="assets/images/logo.png" />
+  <link rel="icon" type="image/png" href="/assets/images/logo.png" />
   <title>职途AI | AI 智能体求职辅助 Web 系统</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,7 +13,7 @@
 <body>
   <aside class="sidebar">
     <button class="brand" data-page="home">
-      <img id="brandLogo" src="assets/images/logo%20(2).png" alt="职途AI" />
+      <img id="brandLogo" src="/assets/images/logo%20(2).png" alt="职途AI" />
       <span>职途<br><strong>AI</strong></span>
     </button>
     <nav class="nav">
@@ -77,7 +77,7 @@
 
     <section id="page-home" class="page active">
       <div class="hero anime-hero">
-        <img id="heroImage" src="assets/images/hero-bg%20(2).png" alt="AI 智能体求职辅助系统" />
+        <img id="heroImage" src="/assets/images/hero-bg%20(2).png" alt="AI 智能体求职辅助系统" />
         <div class="hero-copy">
           <p class="eyebrow">AI Agent × Resume × Interview</p>
           <h2>AI 智能体求职辅助 Web 系统</h2>
@@ -163,7 +163,7 @@
           <div id="nextActions" class="next-actions"></div>
         </section>
         <section class="panel poster-panel">
-          <img id="dashboardImage" src="assets/images/dashboard%20(2).png" alt="系统能力看板" />
+          <img id="dashboardImage" src="/assets/images/dashboard%20(2).png" alt="系统能力看板" />
         </section>
       </div>
     </section>
@@ -179,7 +179,7 @@
       </div>
       <div class="lab-grid">
         <section class="panel media-strip wide resume-visual">
-          <img id="resumeImage" src="assets/images/resume-analysis%20(2).png" alt="简历智能分析" />
+          <img id="resumeImage" src="/assets/images/resume-analysis%20(2).png" alt="简历智能分析" />
           <div>
             <p class="eyebrow">Resume Lab</p>
             <h3>简历解析、JD 匹配、技能图谱，一条线完成。</h3>
@@ -265,7 +265,7 @@
             <a href="https://www.liepin.com/" target="_blank" rel="noreferrer">去猎聘找 JD</a>
           </div>
           <div class="inline-visual">
-            <img id="jobMatchImage" src="assets/images/job-match%20(2).png" alt="JD 与简历匹配" />
+            <img id="jobMatchImage" src="/assets/images/job-match%20(2).png" alt="JD 与简历匹配" />
             <p>粘贴岗位 JD 后，系统会分析关键词、匹配度、风险点、改写建议和面试讲述要点。</p>
           </div>
           <div class="form-grid">
@@ -302,9 +302,9 @@
       </div>
       <div class="interview-grid">
         <section class="interview-stage module-panel" data-module-page="interview" data-module="mock">
-          <div class="stage-bg"><img id="interviewImage" src="assets/images/interview-scene%20(2).png" alt="模拟面试场景" /></div>
+          <div class="stage-bg"><img id="interviewImage" src="/assets/images/interview-scene%20(2).png" alt="模拟面试场景" /></div>
           <div class="interviewer-card">
-            <img id="interviewAvatar" src="assets/images/ai-avatar%20(2).png" alt="AI 面试官" />
+            <img id="interviewAvatar" src="/assets/images/ai-avatar%20(2).png" alt="AI 面试官" />
             <div>
               <p class="eyebrow" id="interviewStageLabel">待开始</p>
               <h3 id="currentQuestion">选择简历和岗位，开始一场完整模拟面试。</h3>
@@ -444,7 +444,7 @@
       </div>
       <div class="lab-grid">
         <section class="panel media-strip wide track-visual">
-          <img id="trackImage" src="assets/images/application-track%20(2).png" alt="投递追踪" />
+          <img id="trackImage" src="/assets/images/application-track%20(2).png" alt="投递追踪" />
           <div>
             <p class="eyebrow">Offer Pipeline</p>
             <h3>投递、笔试、面试、反馈，都放进一个看板。</h3>
@@ -457,9 +457,7 @@
           <input id="appCompany" class="input" placeholder="公司名称" />
           <input id="appJob" class="input" placeholder="岗位名称" />
           <div class="form-grid">
-            <select id="appStatus" class="input">
-              <option>已投递</option><option>简历筛选</option><option>笔试</option><option>一面</option><option>二面</option><option>HR 面</option><option>Offer</option><option>已拒绝</option>
-            </select>
+            <select id="appStatus" class="input"><option>已投递</option></select>
             <input id="appCity" class="input" placeholder="城市" />
           </div>
           <textarea id="appNotes" class="input textarea smallarea" placeholder="记录面试反馈、待办和薪资信息。"></textarea>
@@ -486,12 +484,35 @@
           <div id="salaryResult" class="result hidden"></div>
         </section>
       </div>
+      <section id="opportunityWorkspace" class="opportunity-workspace hidden" aria-labelledby="opportunityWorkspaceTitle">
+        <header class="opportunity-workspace-head">
+          <div>
+            <p class="eyebrow">Opportunity Workspace</p>
+            <h3 id="opportunityWorkspaceTitle">机会详情</h3>
+            <p id="opportunityWorkspaceSubtitle" class="module-copy"></p>
+          </div>
+          <button type="button" class="icon-button" id="closeOpportunityWorkspace" aria-label="关闭机会详情" title="关闭机会详情"><i data-lucide="x"></i></button>
+        </header>
+        <div id="opportunityWorkspaceError" class="workspace-message hidden" role="alert"></div>
+        <div class="opportunity-tabs" role="tablist" aria-label="机会详情视图">
+          <button type="button" id="opportunity-tab-overview" role="tab" aria-selected="true" aria-controls="opportunity-overview" tabindex="0">概览</button>
+          <button type="button" id="opportunity-tab-match" role="tab" aria-selected="false" aria-controls="opportunity-match" tabindex="-1">JD 与匹配</button>
+          <button type="button" id="opportunity-tab-resume" role="tab" aria-selected="false" aria-controls="opportunity-resume" tabindex="-1">简历版本</button>
+          <button type="button" id="opportunity-tab-interview" role="tab" aria-selected="false" aria-controls="opportunity-interview" tabindex="-1">面试准备</button>
+          <button type="button" id="opportunity-tab-timeline" role="tab" aria-selected="false" aria-controls="opportunity-timeline" tabindex="-1">时间线</button>
+        </div>
+        <div id="opportunity-overview" class="opportunity-panel" role="tabpanel" aria-labelledby="opportunity-tab-overview"></div>
+        <div id="opportunity-match" class="opportunity-panel hidden" role="tabpanel" aria-labelledby="opportunity-tab-match"></div>
+        <div id="opportunity-resume" class="opportunity-panel hidden" role="tabpanel" aria-labelledby="opportunity-tab-resume"></div>
+        <div id="opportunity-interview" class="opportunity-panel hidden" role="tabpanel" aria-labelledby="opportunity-tab-interview"></div>
+        <div id="opportunity-timeline" class="opportunity-panel hidden" role="tabpanel" aria-labelledby="opportunity-tab-timeline"></div>
+      </section>
     </section>
 
     <section id="page-agent" class="page">
       <div class="chat-shell">
         <section class="coach-profile">
-          <img id="coachAvatar" src="assets/images/ai-avatar%20(2).png" alt="AI 教练" />
+          <img id="coachAvatar" src="/assets/images/ai-avatar%20(2).png" alt="AI 教练" />
           <h3>JobHunter Coach</h3>
           <p>简历、JD、面试、谈薪都能一起推演。</p>
           <div class="quick-prompts">
@@ -550,7 +571,7 @@
 
   <div id="toast" class="toast hidden"></div>
   <div id="loadingLayer" class="loading-layer hidden">
-    <video id="loadingVideo" src="assets/images/loading%20(2).mp4" autoplay muted loop playsinline></video>
+    <video id="loadingVideo" src="/assets/images/loading%20(2).mp4" autoplay muted loop playsinline></video>
     <span>AI 正在整理你的求职策略...</span>
   </div>
 

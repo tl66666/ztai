@@ -2214,6 +2214,101 @@ def opportunity_timeline_api(opportunity_id):
     return jsonify({"success": True, "data": events})
 
 
+@app.route("/api/opportunities/<int:opportunity_id>/workspace")
+def opportunity_workspace_api(opportunity_id):
+    """Return the local user's opportunity workspace without resume/contact secrets."""
+    try:
+        opportunity = get_career_service().get_opportunity(AGENT_USER_ID, opportunity_id)
+        timeline = get_career_service().timeline(AGENT_USER_ID, opportunity_id)
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+
+    opportunity_fields = (
+        "id", "company", "job_title", "status", "city", "salary_min", "salary_max",
+        "notes", "applied_at", "next_action_at", "interview_at", "priority", "jd_text",
+        "resume_id", "created_at", "updated_at", "needs_status_review",
+    )
+    safe_opportunity = {
+        field: opportunity.get(field) for field in opportunity_fields if field in opportunity
+    }
+
+    with get_db() as conn:
+        resume = None
+        if opportunity.get("resume_id") is not None:
+            row = conn.execute(
+                """SELECT id, title, file_path, file_type, status, version_label,
+                          target_job_title, created_at, updated_at
+                   FROM resumes WHERE id = ? AND user_id = ?""",
+                (opportunity["resume_id"], AGENT_USER_ID),
+            ).fetchone()
+            if row:
+                resume = dict(row)
+                resume["has_original"] = bool(resume.pop("file_path", None))
+
+        match_rows = conn.execute(
+            """SELECT m.id, m.resume_id, m.job_title, m.match_score, m.analysis,
+                      m.details_json, m.created_at, r.title AS resume_title
+               FROM job_matches m
+               JOIN resumes r ON r.id = m.resume_id AND r.user_id = m.user_id
+               WHERE m.user_id = ? AND m.application_id = ?
+               ORDER BY m.created_at DESC, m.id DESC LIMIT 5""",
+            (AGENT_USER_ID, opportunity_id),
+        ).fetchall()
+        matches = []
+        for row in match_rows:
+            item = dict(row)
+            raw_details = item.pop("details_json", None)
+            try:
+                details = json.loads(raw_details or "{}")
+            except (TypeError, json.JSONDecodeError):
+                details = {}
+            item["details"] = details if isinstance(details, dict) else {}
+            matches.append(item)
+
+        interviews = [
+            dict(row)
+            for row in conn.execute(
+                """SELECT id, resume_id, job_title, mode, status, current_stage,
+                          score, feedback, started_at, completed_at, updated_at
+                   FROM interview_sessions
+                   WHERE user_id = ? AND application_id = ?
+                   ORDER BY started_at DESC, id DESC""",
+                (AGENT_USER_ID, opportunity_id),
+            ).fetchall()
+        ]
+        actions = [
+            dict(row)
+            for row in conn.execute(
+                """SELECT id, title, action_type, description, status, priority,
+                          due_at, completed_at, created_at, updated_at
+                   FROM action_items
+                   WHERE user_id = ? AND application_id = ?
+                   ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END,
+                            due_at, id""",
+                (AGENT_USER_ID, opportunity_id),
+            ).fetchall()
+        ]
+
+    safe_timeline = [
+        {
+            "id": event["id"],
+            "event_type": event["event_type"],
+            "source": event.get("source"),
+            "occurred_at": event["occurred_at"],
+        }
+        for event in timeline
+    ]
+    return jsonify({
+        "success": True,
+        "opportunity": safe_opportunity,
+        "resume": resume,
+        "matches": matches,
+        "interviews": interviews,
+        "actions": actions,
+        "timeline": safe_timeline,
+    })
+
+
 @app.route("/api/action-items", methods=["GET", "POST"])
 def action_items_api():
     service = get_career_service()
@@ -2251,6 +2346,8 @@ def create_application():
             "salary_min": data.get("salary_min"),
             "salary_max": data.get("salary_max"),
             "notes": data.get("notes", ""),
+            "jd_text": data.get("jd_text"),
+            "resume_id": data.get("resume_id"),
         }
         opportunity = get_career_service().create_opportunity(AGENT_USER_ID, values)
     except (PermissionError, LookupError, ValueError) as exc:
