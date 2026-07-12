@@ -203,6 +203,61 @@ class AgentBusinessMemoryTests(unittest.TestCase):
             self.store.search_memories(1, "no exact match", kind="semantic")
         self.assertLessEqual(self.store._last_search_candidate_count, 500)
 
+    def test_bounded_candidate_budgets_preserve_old_relevant_and_entity_rows(self):
+        old_time = "2020-01-01T00:00:00+00:00"
+        new_time = "2026-01-01T00:00:00+00:00"
+        with connect(self.db_path) as conn:
+            conn.executemany(
+                """
+                INSERT INTO agent_memories
+                    (user_id,kind,category,memory_key,value_json,confidence,status,
+                     related_entity_type,related_entity_id,created_at,updated_at)
+                VALUES (1,'semantic','role',?, ?,0.8,'confirmed',NULL,NULL,?,?)
+                """,
+                [
+                    (f"generic-{index}", json.dumps(f"backend role {index}"), new_time, new_time)
+                    for index in range(400)
+                ],
+            )
+            needle_id = conn.execute(
+                """
+                INSERT INTO agent_memories
+                    (user_id,kind,category,memory_key,value_json,confidence,status,created_at,updated_at)
+                VALUES (1,'semantic','archive','needle',?,0.7,'confirmed',?,?)
+                """,
+                (json.dumps("unique-needle-value"), old_time, old_time),
+            ).lastrowid
+            entity_id = conn.execute(
+                """
+                INSERT INTO agent_memories
+                    (user_id,kind,category,memory_key,value_json,confidence,status,
+                     related_entity_type,related_entity_id,created_at,updated_at)
+                VALUES (1,'semantic','role','entity-fit',?,0.7,'confirmed','opportunity','41',?,?)
+                """,
+                (json.dumps("backend role"), old_time, old_time),
+            ).lastrowid
+        create_agent_tables(self.db_path)
+        if self.store.fts_available():
+            native = self.store.search_memories(
+                1, "role unique-needle-value", kind="semantic", limit=8
+            )
+            self.assertIn(needle_id, [row["id"] for row in native])
+            self.assertLessEqual(self.store._last_search_candidate_count, 500)
+            entity = self.store.search_memories(
+                1, "opportunity 41 backend", kind="semantic", limit=8
+            )
+            self.assertEqual(entity[0]["id"], entity_id)
+            self.assertLessEqual(self.store._last_search_candidate_count, 500)
+
+        with patch.object(
+            self.store, "_fts_matches", side_effect=sqlite3.OperationalError("fallback")
+        ):
+            fallback = self.store.search_memories(
+                1, "unique-needle-value", kind="semantic", limit=8
+            )
+        self.assertIn(needle_id, [row["id"] for row in fallback])
+        self.assertLessEqual(self.store._last_search_candidate_count, 500)
+
     def test_context_snapshot_is_private_ranked_bounded_and_corruption_tolerant(self):
         career = CareerService(self.db_path)
         career.upsert_profile(

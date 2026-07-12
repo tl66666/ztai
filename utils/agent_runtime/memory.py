@@ -531,20 +531,34 @@ class MemoryStore:
             return False
 
     def _fts_matches(
-        self, connection: sqlite3.Connection, query: str, user_id: int, limit: int = 160
+        self,
+        connection: sqlite3.Connection,
+        query: str,
+        user_id: int,
+        limit: int = 160,
+        kind: str | None = None,
+        statuses: tuple[str, ...] = ("confirmed", "candidate"),
     ) -> dict[int, float]:
         terms = _search_terms(query)
         if not terms:
             return {}
         expression = " OR ".join('"' + term.replace('"', '""') + '"' for term in terms[:12])
+        clauses = ["agent_memories_fts MATCH ?", "f.user_id = ?", "m.user_id = ?"]
+        params: list = [expression, user_id, user_id]
+        if kind:
+            clauses.append("m.kind = ?")
+            params.append(kind)
+        clauses.append(f"m.status IN ({','.join('?' for _ in statuses)})")
+        params.extend(statuses)
         rows = connection.execute(
-            """
-            SELECT memory_id, bm25(agent_memories_fts) AS relevance
-            FROM agent_memories_fts
-            WHERE agent_memories_fts MATCH ? AND user_id = ?
+            f"""
+            SELECT f.memory_id, bm25(agent_memories_fts) AS relevance
+            FROM agent_memories_fts AS f
+            JOIN agent_memories AS m ON m.id = f.memory_id
+            WHERE {' AND '.join(clauses)}
             ORDER BY relevance LIMIT ?
             """,
-            (expression, user_id, limit),
+            [*params, limit],
         ).fetchall()
         return {int(row["memory_id"]): -float(row["relevance"]) for row in rows}
 
@@ -568,10 +582,18 @@ class MemoryStore:
         normalized = " ".join((query or "").casefold().split())
         terms = _search_terms(normalized)
         candidate_cap = max(50, min(MAX_SEARCH_CANDIDATES, limit * 20))
+        entity_budget = max(8, candidate_cap // 5)
+        key_budget = max(6, candidate_cap // 10)
+        category_budget = max(6, candidate_cap // 10)
+        recent_budget = max(8, min(candidate_cap // 10, limit * 3))
+        primary_budget = max(
+            8,
+            candidate_cap - entity_budget - key_budget - category_budget - recent_budget,
+        )
         with self._connect() as connection:
             try:
                 fts_scores = self._fts_matches(
-                    connection, query, user_id, candidate_cap
+                    connection, query, user_id, primary_budget, kind, statuses
                 )
                 fts_enabled = True
             except sqlite3.OperationalError:
@@ -581,35 +603,70 @@ class MemoryStore:
             raw_tokens = re.findall(
                 r"[a-z0-9_]+|[\u4e00-\u9fff]+", normalized
             )[:MAX_EXACT_QUERY_TOKENS]
-            exact_conditions = []
-            exact_params: list = []
             numeric_tokens = [token for token in raw_tokens if token.isdigit()]
+            entity_ids: list[int] = []
             if numeric_tokens:
-                exact_conditions.append(
-                    f"related_entity_id IN ({','.join('?' for _ in numeric_tokens)})"
-                )
-                exact_params.extend(numeric_tokens)
-            if raw_tokens:
-                placeholders = ",".join("?" for _ in raw_tokens)
-                exact_conditions.extend(
-                    [f"lower(memory_key) IN ({placeholders})", f"lower(category) IN ({placeholders})"]
-                )
-                exact_params.extend(raw_tokens)
-                exact_params.extend(raw_tokens)
-            exact_ids: list[int] = []
-            if exact_conditions:
-                exact_ids = [
+                placeholders = ",".join("?" for _ in numeric_tokens)
+                entity_ids = [
                     row[0] for row in connection.execute(
                         f"""
                         SELECT id FROM agent_memories
-                        WHERE {' AND '.join(clauses)} AND ({' OR '.join(exact_conditions)})
+                        WHERE {' AND '.join(clauses)}
+                          AND related_entity_id IN ({placeholders})
                         ORDER BY updated_at DESC, id DESC LIMIT ?
                         """,
-                        [*params, *exact_params, candidate_cap],
+                        [*params, *numeric_tokens, entity_budget],
                     ).fetchall()
                 ]
 
-            recent_limit = candidate_cap if not fts_enabled else max(20, limit * 3)
+            def exact_field_ids(column: str, budget: int) -> list[int]:
+                if not raw_tokens:
+                    return []
+                placeholders = ",".join("?" for _ in raw_tokens)
+                return [
+                    row[0] for row in connection.execute(
+                        f"""
+                        SELECT id FROM agent_memories
+                        WHERE {' AND '.join(clauses)}
+                          AND lower({column}) IN ({placeholders})
+                        ORDER BY updated_at DESC, id DESC LIMIT ?
+                        """,
+                        [*params, *raw_tokens, budget],
+                    ).fetchall()
+                ]
+
+            key_ids = exact_field_ids("memory_key", key_budget)
+            category_ids = exact_field_ids("category", category_budget)
+
+            query_value_ids: list[int] = []
+            if not fts_enabled:
+                patterns = []
+                if normalized:
+                    patterns.append(normalized)
+                patterns.extend(sorted(terms, key=len, reverse=True))
+                for term in dict.fromkeys(patterns):
+                    if len(query_value_ids) >= primary_budget:
+                        break
+                    escaped = (
+                        term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                    )
+                    pattern = f"%{escaped}%"
+                    remaining = primary_budget - len(query_value_ids)
+                    matched = connection.execute(
+                        f"""
+                        SELECT id FROM agent_memories
+                        WHERE {' AND '.join(clauses)} AND (
+                            lower(value_json) LIKE ? ESCAPE '\\'
+                            OR lower(memory_key) LIKE ? ESCAPE '\\'
+                            OR lower(category) LIKE ? ESCAPE '\\'
+                        )
+                        ORDER BY updated_at DESC, id DESC LIMIT ?
+                        """,
+                        [*params, pattern, pattern, pattern, remaining],
+                    ).fetchall()
+                    query_value_ids.extend(row[0] for row in matched)
+                    query_value_ids = list(dict.fromkeys(query_value_ids))
+
             confirmed_fill = " AND status = 'confirmed'" if fts_enabled else ""
             recent_ids = [
                 row[0] for row in connection.execute(
@@ -618,12 +675,13 @@ class MemoryStore:
                     WHERE {' AND '.join(clauses)}{confirmed_fill}
                     ORDER BY updated_at DESC, id DESC LIMIT ?
                     """,
-                    [*params, recent_limit],
+                    [*params, recent_budget],
                 ).fetchall()
             ]
             candidate_ids = list(dict.fromkeys([
-                *exact_ids, *fts_scores.keys(), *recent_ids,
-            ]))[:candidate_cap]
+                *(fts_scores.keys() if fts_enabled else query_value_ids),
+                *entity_ids, *key_ids, *category_ids, *recent_ids,
+            ]))
             if candidate_ids:
                 id_placeholders = ",".join("?" for _ in candidate_ids)
                 rows = connection.execute(
@@ -646,6 +704,10 @@ class MemoryStore:
                 row["related_entity_id"]
                 and str(row["related_entity_id"]).casefold() in terms
                 and (not row["related_entity_type"] or str(row["related_entity_type"]).casefold() in normalized)
+            )
+            normalized_value_text = str(row["value_json"] or "").strip('"').casefold()
+            value_query_hit = bool(
+                len(normalized_value_text) >= 2 and normalized_value_text in normalized
             )
             exact_field = any(
                 term and term in terms
@@ -671,6 +733,7 @@ class MemoryStore:
             )
             return (
                 entity_exact,
+                value_query_hit,
                 exact_field,
                 reverse_hit,
                 overlap_signature,
