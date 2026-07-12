@@ -8,7 +8,7 @@ function deferred() {
 }
 
 async function main() {
-  const conversationGate = AgentUI.createLatestRequestGate();
+  const conversationGate = AgentUI.createConversationEpoch();
   const slowMessagesA = deferred();
   const slowHydrationA = deferred();
   const conversationCommits = [];
@@ -32,6 +32,95 @@ async function main() {
   assert.deepEqual(conversationCommits, [
     { conversationId: "B", hydrated: ["B current"] },
   ], "slow A hydration cannot overwrite or mix into conversation B");
+
+  const sendEpoch = AgentUI.createConversationEpoch();
+  const sendHydration = deferred();
+  const sendResponse = deferred();
+  const sendCommits = [];
+  let selectedConversation = "A";
+  const staleRestore = (async () => {
+    const request = sendEpoch.begin("A");
+    const hydrated = await sendHydration.promise;
+    if (sendEpoch.isCurrent(request, selectedConversation)) sendCommits.push(hydrated);
+  })();
+  sendEpoch.invalidate();
+  sendCommits.push("A user message");
+  const send = (async () => {
+    const response = await sendResponse.promise;
+    if (selectedConversation === "A" && response.conversation_id === "A") {
+      sendCommits.push(response.reply);
+    }
+  })();
+  sendHydration.resolve("stale restored history");
+  selectedConversation = "B";
+  sendEpoch.begin("B");
+  sendResponse.resolve({ conversation_id: "A", reply: "stale A reply" });
+  await Promise.all([staleRestore, send]);
+  assert.deepEqual(
+    sendCommits,
+    ["A user message"],
+    "send invalidates restore and an A response cannot commit after switching to B",
+  );
+
+  for (const local of [
+    { id: 9, status: "completed", preview: "confirmed result" },
+    { id: 9, status: "cancelled", preview: "cancelled result" },
+    { id: 9, status: "expired", preview: "expired result" },
+    { id: 9, status: "failed", preview: "failed result" },
+  ]) {
+    const merged = AgentUI.mergeProposalState(
+      local,
+      { id: 9, status: "pending", preview: "stale restore" },
+      { currentEpoch: 2, incomingEpoch: 1 },
+    );
+    assert.deepEqual(merged, local, `${local.status} cannot be downgraded to pending`);
+  }
+  const edited = { id: 9, status: "pending", preview: "new edited preview" };
+  assert.deepEqual(
+    AgentUI.mergeProposalState(
+      edited,
+      { id: 9, status: "pending", preview: "old preview" },
+      { currentEpoch: 3, incomingEpoch: 1 },
+    ),
+    edited,
+    "old hydration cannot overwrite a newer edit preview",
+  );
+  const revisionTwo = { id: 9, status: "pending", preview: "revision 2", revision: 2 };
+  assert.deepEqual(
+    AgentUI.mergeProposalState(
+      revisionTwo,
+      { id: 9, status: "pending", preview: "revision 1", revision: 1 },
+      { currentEpoch: 3, incomingEpoch: 3 },
+    ),
+    revisionTwo,
+  );
+  const newerTimestamp = {
+    id: 9, status: "pending", preview: "newer", updated_at: "2026-07-12T10:00:00Z",
+  };
+  assert.deepEqual(
+    AgentUI.mergeProposalState(
+      newerTimestamp,
+      { id: 9, status: "pending", preview: "older", updated_at: "2026-07-12T09:00:00Z" },
+      { currentEpoch: 3, incomingEpoch: 3 },
+    ),
+    newerTimestamp,
+  );
+
+  const mutationEpoch = AgentUI.createConversationEpoch();
+  const staleProposalHydration = deferred();
+  const proposalCommits = [];
+  const restoreProposal = (async () => {
+    const request = mutationEpoch.begin("A");
+    const staleProposal = await staleProposalHydration.promise;
+    if (mutationEpoch.isCurrent(request, "A")) proposalCommits.push(staleProposal);
+  })();
+  mutationEpoch.invalidate();
+  proposalCommits.push({ id: 9, status: "completed", preview: "local terminal" });
+  staleProposalHydration.resolve({ id: 9, status: "pending", preview: "old restore" });
+  await restoreProposal;
+  assert.deepEqual(proposalCommits, [
+    { id: 9, status: "completed", preview: "local terminal" },
+  ], "proposal mutation invalidates outstanding restore DOM and Map commit");
 
   const commandGate = AgentUI.createLatestRequestGate();
   const oldPendingFetch = deferred();

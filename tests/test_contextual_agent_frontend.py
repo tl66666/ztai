@@ -90,13 +90,30 @@ class ContextualAgentFrontendTests(unittest.TestCase):
             script.index("async function focusAgentResultFromQuery")
         ]
 
-        self.assertIn("agentConversationRestoreGate.begin(conversationId)", restore_flow)
-        self.assertIn("agentConversationRestoreGate.isCurrent", restore_flow)
+        send_flow = script[
+            script.index("async function sendAgentMessage"):
+            script.index("async function generateCareerReport")
+        ]
+
+        self.assertIn("agentConversationEpoch.begin(conversationId)", restore_flow)
+        self.assertIn("agentConversationEpoch.isCurrent", restore_flow)
         self.assertNotIn("state.agentProposals.set", restore_flow)
         self.assertIn("agentCommandCenterGate.begin", command_flow)
         self.assertIn("agentCommandCenterGate.isCurrent", command_flow)
+        self.assertIn("renderAgentCommandActions(mergedActions", command_flow)
         self.assertIn("const commandRefresh = loadAgentCommandCenter()", proposal_flow)
         self.assertIn("await commandRefresh", proposal_flow)
+        self.assertLess(
+            send_flow.index("agentConversationEpoch.invalidate()"),
+            send_flow.index('appendMessage(message, "user")'),
+        )
+        self.assertIn("data.conversation_id !== conversationId", send_flow)
+        self.assertLess(
+            send_flow.index("data.conversation_id !== conversationId"),
+            send_flow.index("if (!data.success)"),
+        )
+        self.assertGreaterEqual(proposal_flow.count("advanceAgentProposalMutation()"), 3)
+        self.assertIn("mergeAgentProposal", command_flow)
 
 
 if __name__ == "__main__":

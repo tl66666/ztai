@@ -19,7 +19,8 @@ class AgentFrontendContractTests(unittest.TestCase):
         self.assertIn("JOBHUNTER_AGENT_CONVERSATION", javascript)
         self.assertIn("loadAgentConversations", javascript)
         self.assertIn("restoreAgentMessages", javascript)
-        self.assertIn("conversation_id: state.agentConversationId", javascript)
+        self.assertIn("conversation_id: conversationId", javascript)
+        self.assertIn("data.conversation_id !== conversationId", javascript)
 
     def test_agent_ui_does_not_label_events_as_private_reasoning(self):
         javascript = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")

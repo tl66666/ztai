@@ -84,6 +84,41 @@
     };
   }
 
+  function createConversationEpoch() {
+    return createLatestRequestGate();
+  }
+
+  const TERMINAL_PROPOSAL_STATUSES = new Set([
+    "completed", "cancelled", "expired", "failed",
+  ]);
+
+  function proposalVersion(proposal) {
+    const revision = proposal?.revision == null ? NaN : Number(proposal.revision);
+    if (Number.isFinite(revision)) return revision;
+    const updatedAt = Date.parse(proposal?.updated_at || "");
+    return Number.isFinite(updatedAt) ? updatedAt : null;
+  }
+
+  function mergeProposalState(current, incoming, options = {}) {
+    if (!current) return incoming;
+    if (!incoming || positiveId(current.id) !== positiveId(incoming.id)) return current;
+    if (
+      TERMINAL_PROPOSAL_STATUSES.has(String(current.status))
+      && !TERMINAL_PROPOSAL_STATUSES.has(String(incoming.status))
+    ) return current;
+    const currentEpoch = Number(options.currentEpoch) || 0;
+    const incomingEpoch = Number(options.incomingEpoch) || 0;
+    if (incomingEpoch < currentEpoch) return current;
+    const currentVersion = proposalVersion(current);
+    const incomingVersion = proposalVersion(incoming);
+    if (
+      currentVersion !== null
+      && incomingVersion !== null
+      && incomingVersion < currentVersion
+    ) return current;
+    return { ...current, ...incoming };
+  }
+
   function chatPayload(message, conversationId, context = {}) {
     const payload = {
       conversation_id: String(conversationId || ""),
@@ -265,6 +300,7 @@
   return {
     chatPayload,
     createContextStore,
+    createConversationEpoch,
     createLatestRequestGate,
     escapeHtml,
     flattenEditable,
@@ -277,6 +313,7 @@
     unavailableProposal,
     hydrationFailureKind,
     isActiveOpportunity,
+    mergeProposalState,
     resultLookupState,
     profileResultHtml,
   };

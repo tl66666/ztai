@@ -39,6 +39,8 @@ const state = {
   agentConversationId: localStorage.getItem(JOBHUNTER_AGENT_CONVERSATION) || "",
   agentDrawerOpener: null,
   agentProposals: new Map(),
+  agentProposalEpochs: new Map(),
+  agentProposalMutationEpoch: 0,
   agentConversationProposalIds: new Set(),
   agentCommandProposalIds: new Set(),
   currentPage: "home",
@@ -47,7 +49,7 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 const agentContext = ContextualAgent.createContextStore();
-const agentConversationRestoreGate = ContextualAgent.createLatestRequestGate();
+const agentConversationEpoch = ContextualAgent.createConversationEpoch();
 const agentCommandCenterGate = ContextualAgent.createLatestRequestGate();
 const {
   applicationPayloadForJob,
@@ -2255,20 +2257,26 @@ function handleAgentDrawerKeydown(event) {
 
 async function loadAgentCommandCenter() {
   const request = agentCommandCenterGate.begin("command-center");
+  const proposalEpoch = state.agentProposalMutationEpoch;
   let data;
   try {
     data = await api("/agent/actions");
   } catch (_error) {
     data = { success: false, actions: [] };
   }
-  if (!agentCommandCenterGate.isCurrent(request, "command-center")) return;
+  if (
+    !agentCommandCenterGate.isCurrent(request, "command-center")
+    || proposalEpoch !== state.agentProposalMutationEpoch
+  ) return;
   const actions = data.success ? data.actions || [] : [];
   state.agentCommandProposalIds.forEach((proposalId) => {
     if (!state.agentConversationProposalIds.has(proposalId)) state.agentProposals.delete(proposalId);
   });
-  state.agentCommandProposalIds = new Set(actions.map((proposal) => Number(proposal.id)));
-  actions.forEach((proposal) => state.agentProposals.set(Number(proposal.id), proposal));
-  renderAgentCommandActions(actions, data.success ? "" : "待确认操作暂时无法加载");
+  const mergedActions = actions
+    .map((proposal) => mergeAgentProposal(proposal, proposalEpoch))
+    .filter((proposal) => proposal?.status === "pending");
+  state.agentCommandProposalIds = new Set(mergedActions.map((proposal) => Number(proposal.id)));
+  renderAgentCommandActions(mergedActions, data.success ? "" : "待确认操作暂时无法加载");
   renderAgentCommandOpportunities();
 }
 
@@ -2319,11 +2327,14 @@ async function sendAgentMessage() {
   const message = input.value.trim();
   if (!message) return;
   if (!state.agentConversationId) await createAgentConversation();
+  const conversationId = state.agentConversationId;
+  if (!conversationId) return;
+  agentConversationEpoch.invalidate();
   appendMessage(message, "user");
   input.value = "";
   const chatRequest = {
-    ...ContextualAgent.chatPayload(message, state.agentConversationId, agentContext.payload()),
-    conversation_id: state.agentConversationId,
+    ...ContextualAgent.chatPayload(message, conversationId, agentContext.payload()),
+    conversation_id: conversationId,
   };
   const data = await withLoading(
     () => api("/agent/chat", {
@@ -2332,14 +2343,14 @@ async function sendAgentMessage() {
     }),
     "AI 教练正在读取上下文并处理任务..."
   );
+  if (state.agentConversationId !== conversationId || (data.success && data.conversation_id !== conversationId)) return;
   if (!data.success) return toast(data.message || "AI 教练暂时不可用");
-  state.agentConversationId = data.conversation_id;
-  localStorage.setItem(JOBHUNTER_AGENT_CONVERSATION, state.agentConversationId);
+  localStorage.setItem(JOBHUNTER_AGENT_CONVERSATION, conversationId);
   const reply = data.reply || data.message || "我暂时没想好，换个问法试试。";
   appendMessage(reply, "bot", { proposals: data.action_proposals || [] });
   renderAgentEvents(data.events || [], data.status);
   renderAgentSuggestedActions(data.suggested_actions || []);
-  await loadAgentConversations(state.agentConversationId, false);
+  await loadAgentConversations(conversationId, false);
   await loadAgentCommandCenter();
 }
 
@@ -2384,7 +2395,7 @@ async function createAgentConversation() {
     body: { user_id: USER_ID, title: "新对话" },
   });
   if (!data.success) return toast(data.message || "新建会话失败");
-  agentConversationRestoreGate.invalidate();
+  agentConversationEpoch.invalidate();
   state.agentConversationId = data.conversation.id;
   localStorage.setItem(JOBHUNTER_AGENT_CONVERSATION, state.agentConversationId);
   await loadAgentConversations(state.agentConversationId, false);
@@ -2400,7 +2411,7 @@ async function clearAgentConversation() {
     body: { user_id: USER_ID },
   });
   if (!data.success) return toast(data.message || "清空失败");
-  agentConversationRestoreGate.invalidate();
+  agentConversationEpoch.invalidate();
   renderAgentWelcome();
   toast("当前会话已清空");
 }
@@ -2408,10 +2419,10 @@ async function clearAgentConversation() {
 async function restoreAgentMessages() {
   const conversationId = state.agentConversationId;
   if (!conversationId) {
-    agentConversationRestoreGate.invalidate();
+    agentConversationEpoch.invalidate();
     return renderAgentWelcome();
   }
-  const request = agentConversationRestoreGate.begin(conversationId);
+  const request = agentConversationEpoch.begin(conversationId);
   let data;
   try {
     data = await api(
@@ -2420,17 +2431,17 @@ async function restoreAgentMessages() {
   } catch (_error) {
     data = { success: false, messages: [] };
   }
-  if (!agentConversationRestoreGate.isCurrent(request, state.agentConversationId)) return;
+  if (!agentConversationEpoch.isCurrent(request, state.agentConversationId)) return;
   if (!data.success || !data.messages?.length) return renderAgentWelcome();
   const preparedMessages = [];
   for (const message of data.messages) {
     const proposals = message.role === "assistant"
       ? await hydrateAgentProposals(ContextualAgent.proposalsFromMetadata(message.metadata))
       : [];
-    if (!agentConversationRestoreGate.isCurrent(request, state.agentConversationId)) return;
+    if (!agentConversationEpoch.isCurrent(request, state.agentConversationId)) return;
     preparedMessages.push({ message, proposals });
   }
-  if (!agentConversationRestoreGate.isCurrent(request, state.agentConversationId)) return;
+  if (!agentConversationEpoch.isCurrent(request, state.agentConversationId)) return;
   state.agentConversationProposalIds.forEach((proposalId) => {
     if (!state.agentCommandProposalIds.has(proposalId)) state.agentProposals.delete(proposalId);
   });
@@ -2471,9 +2482,31 @@ function renderAgentProposals(proposals, messageNode) {
   if (!messageNode || !proposals.length) return;
   proposals.forEach((proposal) => {
     state.agentConversationProposalIds.add(Number(proposal.id));
-    state.agentProposals.set(Number(proposal.id), proposal);
-    messageNode.insertAdjacentHTML("beforeend", ContextualAgent.proposalHtml(proposal));
+    const merged = mergeAgentProposal(proposal, state.agentProposalMutationEpoch);
+    messageNode.insertAdjacentHTML("beforeend", ContextualAgent.proposalHtml(merged));
   });
+}
+
+function mergeAgentProposal(proposal, incomingEpoch = state.agentProposalMutationEpoch) {
+  const proposalId = Number(proposal?.id);
+  if (!Number.isInteger(proposalId) || proposalId <= 0) return proposal;
+  const current = state.agentProposals.get(proposalId);
+  const currentEpoch = state.agentProposalEpochs.get(proposalId) || 0;
+  const merged = ContextualAgent.mergeProposalState(current, proposal, {
+    currentEpoch,
+    incomingEpoch,
+  });
+  if (merged !== current) {
+    state.agentProposals.set(proposalId, merged);
+    state.agentProposalEpochs.set(proposalId, Math.max(currentEpoch, incomingEpoch));
+  }
+  return merged;
+}
+
+function advanceAgentProposalMutation() {
+  state.agentProposalMutationEpoch += 1;
+  agentConversationEpoch.invalidate();
+  return state.agentProposalMutationEpoch;
 }
 
 function proposalError(data, fallback) {
@@ -2499,10 +2532,11 @@ function proposalChanges(card, proposal) {
   return changes;
 }
 
-function replaceProposalCard(card, proposal) {
-  state.agentProposals.set(Number(proposal.id), proposal);
-  card.outerHTML = ContextualAgent.proposalHtml(proposal);
+function replaceProposalCard(card, proposal, incomingEpoch = state.agentProposalMutationEpoch) {
+  const merged = mergeAgentProposal(proposal, incomingEpoch);
+  card.outerHTML = ContextualAgent.proposalHtml(merged);
   if (window.lucide) lucide.createIcons();
+  return merged;
 }
 
 async function handleProposalClick(event) {
@@ -2513,18 +2547,20 @@ async function handleProposalClick(event) {
   const actionName = button.dataset.agentAction;
   const proposal = state.agentProposals.get(proposalId);
   if (card && proposal && actionName === "retry-hydration") {
+    const hydrationEpoch = advanceAgentProposalMutation();
     const source = proposal.hydrationSource || proposal;
-    replaceProposalCard(card, { ...proposal, hydrationRetry: false, busy: true });
+    replaceProposalCard(card, { ...proposal, hydrationRetry: false, busy: true }, hydrationEpoch);
     const hydrated = await hydrateAgentProposal(source);
     const freshCard = $("chatLog").querySelector(`[data-proposal-id="${proposalId}"]`);
-    if (freshCard) replaceProposalCard(freshCard, hydrated);
+    if (freshCard) replaceProposalCard(freshCard, hydrated, hydrationEpoch);
     return;
   }
   if (!card || !proposal || proposal.status !== "pending") return;
+  const mutationEpoch = advanceAgentProposalMutation();
   const body = actionName === "edit" ? proposalChanges(card, proposal) : {};
   const startEvent = `${actionName}_start`;
   let next = ContextualAgent.transitionProposal(proposal, startEvent);
-  replaceProposalCard(card, next);
+  replaceProposalCard(card, next, mutationEpoch);
   try {
     const data = await api(`/agent/actions/${proposalId}/${actionName}`, { method: "POST", body });
     const freshCard = $("chatLog").querySelector(`[data-proposal-id="${proposalId}"]`);
@@ -2532,11 +2568,12 @@ async function handleProposalClick(event) {
       next = ContextualAgent.transitionProposal(next, `${actionName}_error`, {
         error: proposalError(data, "操作失败，请重试"),
       });
-      if (freshCard) replaceProposalCard(freshCard, next);
+      if (freshCard) replaceProposalCard(freshCard, next, mutationEpoch);
       return;
     }
+    const successEpoch = advanceAgentProposalMutation();
     next = ContextualAgent.transitionProposal(next, `${actionName}_success`, { action: data.action });
-    if (freshCard) replaceProposalCard(freshCard, next);
+    if (freshCard) replaceProposalCard(freshCard, next, successEpoch);
     const commandRefresh = loadAgentCommandCenter();
     if (actionName === "confirm") {
       await refreshAfterAgentAction(next.result);
@@ -2550,7 +2587,7 @@ async function handleProposalClick(event) {
   } catch (_error) {
     const freshCard = $("chatLog").querySelector(`[data-proposal-id="${proposalId}"]`);
     next = ContextualAgent.transitionProposal(next, `${actionName}_error`, { error: "网络连接失败，请重试" });
-    if (freshCard) replaceProposalCard(freshCard, next);
+    if (freshCard) replaceProposalCard(freshCard, next, mutationEpoch);
   }
 }
 
