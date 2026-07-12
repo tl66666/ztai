@@ -141,6 +141,7 @@ class ActionProposalService:
         self._require_local_user(user_id)
         if not isinstance(allowed_changes, dict):
             raise ValueError("edit changes must be an object")
+        self._validate_json_keys(allowed_changes, "edit changes")
         proposal = self.get(user_id, proposal_id)
         if proposal["status"] != "pending":
             raise self._state_error(proposal["status"])
@@ -153,8 +154,20 @@ class ActionProposalService:
             merged_changes.update(allowed_changes)
             merged["changes"] = merged_changes
         elif proposal["action_type"] == "create_resume_version" and "metadata" in allowed_changes:
+            metadata_changes = allowed_changes["metadata"]
+            if not isinstance(metadata_changes, dict):
+                raise ValueError("edit metadata must be an object")
+            if set(metadata_changes) - self._editable_resume_metadata_fields():
+                raise ValueError("edit contains metadata fields that are not allowed")
             metadata = dict(merged.get("metadata", {}))
-            metadata.update(allowed_changes["metadata"])
+            metadata.update(metadata_changes)
+            merged.update(
+                {
+                    field: value
+                    for field, value in allowed_changes.items()
+                    if field != "metadata"
+                }
+            )
             merged["metadata"] = metadata
         else:
             merged.update(allowed_changes)
@@ -317,6 +330,7 @@ class ActionProposalService:
     def _validate(self, action_type: str, arguments: Any) -> dict[str, Any]:
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
+        self._validate_json_keys(arguments, "arguments")
         result = self._normalize(arguments)
         allowed = self._all_fields(action_type)
         unknown = set(result) - allowed
@@ -423,30 +437,60 @@ class ActionProposalService:
         return fields[action_type]
 
     def _editable_fields(self, action_type: str) -> set[str]:
-        fields = self._all_fields(action_type)
-        if action_type == "update_opportunity":
-            return self._all_fields("create_opportunity")
-        return fields - {"resume_id", "opportunity_id", "application_id", "action_id"}
+        fields = {
+            "set_career_goal": self._all_fields("set_career_goal"),
+            "create_opportunity": self._all_fields("create_opportunity") - {"resume_id"},
+            "create_resume_version": {"content", "metadata"},
+            "link_opportunity_resume": set(),
+            "create_interview_plan": {"title", "description", "due_at"},
+            "create_action_item": {
+                "title", "type", "description", "status", "priority", "due_date", "due_at"
+            },
+            "complete_action_item": {"evidence"},
+            "update_opportunity": self._all_fields("create_opportunity") - {"resume_id"},
+            "save_career_report": self._all_fields("save_career_report"),
+        }
+        return fields[action_type]
+
+    @staticmethod
+    def _editable_resume_metadata_fields() -> set[str]:
+        return {"version_label", "target_job_title", "status", "source_type", "title"}
 
     def _preview(self, action_type: str, arguments: dict[str, Any]) -> str:
         if action_type == "set_career_goal":
             return f"Update career goal fields: {', '.join(sorted(arguments))}"
         if action_type == "create_opportunity":
-            return f"Create opportunity {arguments['company']} / {arguments['job_title']}"
+            preview = f"Create opportunity {arguments['company']} / {arguments['job_title']}"
+            if arguments.get("resume_id") is not None:
+                preview += f" using resume #{arguments['resume_id']}"
+            return preview
         if action_type == "create_resume_version":
             label = arguments.get("metadata", {}).get("version_label") or "new version"
-            return f"Create resume version {label} from resume #{arguments['resume_id']} (content redacted)"
+            preview = f"Create resume version {label} from resume #{arguments['resume_id']}"
+            application_id = arguments.get("metadata", {}).get("application_id")
+            if application_id is not None:
+                preview += f" for application #{application_id}"
+            return preview + " (content redacted)"
         if action_type == "link_opportunity_resume":
             return f"Link opportunity #{arguments['opportunity_id']} to resume #{arguments['resume_id']}"
         if action_type == "create_interview_plan":
             return f"Create interview preparation action for opportunity #{arguments['opportunity_id']}"
         if action_type == "create_action_item":
-            return f"Create action item: {arguments['title']}"
+            preview = f"Create action item: {arguments['title']}"
+            opportunity_id = arguments.get(
+                "opportunity_id", arguments.get("application_id")
+            )
+            if opportunity_id is not None:
+                preview += f" for opportunity #{opportunity_id}"
+            return preview
         if action_type == "complete_action_item":
             return f"Complete action item #{arguments['action_id']}"
         if action_type == "update_opportunity":
             fields = ", ".join(sorted(arguments["changes"]))
-            return f"Update opportunity #{arguments['opportunity_id']} fields: {fields} (sensitive values redacted)"
+            preview = f"Update opportunity #{arguments['opportunity_id']} fields: {fields}"
+            if arguments["changes"].get("resume_id") is not None:
+                preview += f" using resume #{arguments['changes']['resume_id']}"
+            return preview + " (sensitive values redacted)"
         return f"Save {arguments['report_type']} career report (content redacted)"
 
     @staticmethod
@@ -871,6 +915,16 @@ class ActionProposalService:
                 self._validate_json_value(item, f"{name}.{key}", depth + 1)
             return
         raise ValueError(f"{name} contains an unsupported value")
+
+    def _validate_json_keys(self, value: Any, name: str) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise ValueError(f"{name} has an invalid field name")
+                self._validate_json_keys(item, f"{name}.{key}")
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                self._validate_json_keys(item, f"{name}[{index}]")
 
     def _required_text(self, values: dict[str, Any], field: str, limit: int):
         values[field] = self._text(values.get(field), field, limit, required=True)

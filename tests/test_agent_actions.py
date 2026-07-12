@@ -400,6 +400,174 @@ class AgentActionServiceTests(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "edit"):
                 self.service.edit(1, proposal["id"], changes)
 
+    def test_nested_relationship_retarget_edits_are_rejected_without_mutation(self):
+        with connect(self.db_path) as conn:
+            first_opportunity = conn.execute(
+                "INSERT INTO job_applications (user_id, company, job_title) VALUES (1, 'One', 'Role')"
+            ).lastrowid
+            second_opportunity = conn.execute(
+                "INSERT INTO job_applications (user_id, company, job_title) VALUES (1, 'Two', 'Role')"
+            ).lastrowid
+            second_resume = conn.execute(
+                "INSERT INTO resumes (user_id, title, content) VALUES (1, 'Other', 'private')"
+            ).lastrowid
+
+        resume_proposal = self.propose(
+            "create_resume_version",
+            {
+                "resume_id": self.resume_id,
+                "content": "original content",
+                "metadata": {
+                    "version_label": "v2",
+                    "application_id": first_opportunity,
+                },
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "edit"):
+            self.service.edit(
+                1,
+                resume_proposal["id"],
+                {"metadata": {"application_id": second_opportunity}},
+            )
+        self.assertEqual(
+            self.service.get(1, resume_proposal["id"]), resume_proposal
+        )
+
+        edited_resume = self.service.edit(
+            1,
+            resume_proposal["id"],
+            {"content": "revised content", "metadata": {"version_label": "v3"}},
+        )
+        self.assertEqual(edited_resume["arguments"]["resume_id"], self.resume_id)
+        self.assertEqual(
+            edited_resume["arguments"]["metadata"]["application_id"],
+            first_opportunity,
+        )
+        self.assertEqual(
+            edited_resume["idempotency_key"], resume_proposal["idempotency_key"]
+        )
+
+        opportunity_proposal = self.propose(
+            "update_opportunity",
+            {
+                "opportunity_id": first_opportunity,
+                "changes": {"resume_id": self.resume_id, "notes": "original"},
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "edit"):
+            self.service.edit(
+                1, opportunity_proposal["id"], {"resume_id": second_resume}
+            )
+        self.assertEqual(
+            self.service.get(1, opportunity_proposal["id"]), opportunity_proposal
+        )
+
+        edited_opportunity = self.service.edit(
+            1, opportunity_proposal["id"], {"notes": "safe revision"}
+        )
+        self.assertEqual(
+            edited_opportunity["arguments"]["opportunity_id"], first_opportunity
+        )
+        self.assertEqual(
+            edited_opportunity["arguments"]["changes"]["resume_id"], self.resume_id
+        )
+        self.assertEqual(
+            edited_opportunity["idempotency_key"],
+            opportunity_proposal["idempotency_key"],
+        )
+
+    def test_previews_identify_relationship_targets_without_sensitive_content(self):
+        with connect(self.db_path) as conn:
+            opportunity_id = conn.execute(
+                "INSERT INTO job_applications (user_id, company, job_title) VALUES (1, 'Owned', 'Role')"
+            ).lastrowid
+
+        cases = [
+            (
+                "create_opportunity",
+                {
+                    "company": "Acme",
+                    "job_title": "Engineer",
+                    "resume_id": self.resume_id,
+                    "jd_text": "SECRET-JD",
+                },
+                f"resume #{self.resume_id}",
+            ),
+            (
+                "create_resume_version",
+                {
+                    "resume_id": self.resume_id,
+                    "content": "SECRET-RESUME",
+                    "metadata": {"application_id": opportunity_id},
+                },
+                f"application #{opportunity_id}",
+            ),
+            (
+                "create_action_item",
+                {
+                    "title": "Research",
+                    "opportunity_id": opportunity_id,
+                    "description": "SECRET-ACTION",
+                },
+                f"opportunity #{opportunity_id}",
+            ),
+            (
+                "update_opportunity",
+                {
+                    "opportunity_id": opportunity_id,
+                    "changes": {
+                        "resume_id": self.resume_id,
+                        "notes": "SECRET-NOTES",
+                    },
+                },
+                f"resume #{self.resume_id}",
+            ),
+        ]
+        for action_type, arguments, target in cases:
+            with self.subTest(action_type=action_type):
+                preview = self.propose(action_type, arguments)["preview"]
+                self.assertIn(target, preview)
+                self.assertNotIn("SECRET", preview)
+
+    def test_non_string_json_keys_are_rejected_recursively_before_persistence(self):
+        invalid_payloads = [
+            (
+                "save_career_report",
+                {
+                    "report_type": "weekly",
+                    "content": {"items": [{1: "numeric", "1": "string"}]},
+                },
+            ),
+            (
+                "save_career_report",
+                {"report_type": "weekly", "content": {"nested": [{True: "x"}]}},
+            ),
+            (
+                "create_resume_version",
+                {
+                    "resume_id": self.resume_id,
+                    "content": "content",
+                    "metadata": {1: "invalid"},
+                },
+            ),
+            (
+                "set_career_goal",
+                {1: "numeric", "1": "string", "target_role": "Engineer"},
+            ),
+        ]
+        for action_type, arguments in invalid_payloads:
+            with self.subTest(action_type=action_type):
+                with self.assertRaisesRegex(ValueError, "field name"):
+                    self.propose(action_type, arguments)
+
+        with connect(self.db_path) as conn:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM agent_action_proposals"
+                ).fetchone()[0],
+                0,
+            )
+
     def test_confirm_maps_every_allowed_action_through_career_service(self):
         opportunity = self.service.confirm(
             1,
