@@ -19,9 +19,12 @@ class FakeWindow {
 async function main() {
   const browser = new FakeWindow("http://localhost/?page=home");
   const outcomes = new Map();
+  const transitions = [];
   const state = { page: null, module: null, current: null, loads: [], closes: [], notices: [] };
   const controller = createOpportunityHistoryController({
     window: browser,
+    defaultModule: (page) => ({ resume: "input", interview: "mock", tracker: "add" })[page] || null,
+    onRouteTransition: (previous, next) => transitions.push([previous, next]),
     showPage: (page) => { state.page = page; },
     showModule: (page, module) => { state.page = page; state.module = module; },
     loadWorkspace: async (id) => {
@@ -61,8 +64,18 @@ async function main() {
   assert.equal(state.current, 11, "shared URL refresh must restore the workspace");
   assert.equal(browser.entries.length, beforeRefresh, "refresh sync must not push history");
 
+  const beforeStaleIndex = browser.index;
   outcomes.set(404, { status: "stale" }); await controller.open(404);
   assert.equal(state.current, null); assert.equal(new URL(browser.location.href).searchParams.has("opportunity"), false);
+  assert.equal(browser.index, beforeStaleIndex + 1, "404 cleanup must replace its deep link without another history entry");
+  assert.equal(state.loads.filter((id) => id === 404).length, 1, "404 cleanup must not fetch the workspace twice");
+  assert.equal(state.module, "add", "404 cleanup must immediately render the default module from its page-only URL");
+  await controller.navigate("resume", { module: "input" });
+  assert.deepEqual(
+    transitions.at(-1)[0],
+    { page: "tracker", module: "add", opportunityId: null, hasOpportunity: false },
+    "the active route after cleanup must equal a fresh parse of the cleaned page-only URL",
+  );
   outcomes.set(403, { status: "forbidden" }); await controller.open(403);
   assert.equal(state.notices.at(-1), "forbidden"); assert.equal(new URL(browser.location.href).searchParams.has("opportunity"), false);
   outcomes.set(500, { status: "retryable" }); await controller.open(500);

@@ -62,19 +62,24 @@
       else if (historyMode === "replace") windowObject.history.replaceState({}, "", url);
     }
 
-    async function activate(rawRoute, settings = {}) {
+    function applyRoute(rawRoute) {
       const route = resolveRoute(rawRoute);
       const previous = activeRoute;
+      if (previous) options.onRouteTransition?.(previous, route);
+      activeRoute = route;
+      if (route.page) options.showPage(route.page);
+      if (route.page && route.module) options.showModule?.(route.page, route.module);
+      return route;
+    }
+
+    async function activate(rawRoute, settings = {}) {
       const generation = ++activationGeneration;
       const request = {
         generation,
         isCurrent: () => generation === activationGeneration,
         routeDriven: true,
       };
-      if (previous) options.onRouteTransition?.(previous, route);
-      activeRoute = route;
-      if (route.page) options.showPage(route.page);
-      if (route.page && route.module) options.showModule?.(route.page, route.module);
+      const route = applyRoute(rawRoute);
       if (route.page === "tracker" && route.opportunityId !== null) {
         let result;
         try {
@@ -87,7 +92,7 @@
         if (status === "stale" || status === "forbidden") {
           options.closeWorkspace({ routeDriven: true, page: route.page });
           removeOpportunityFromUrl();
-          activeRoute = { ...route, opportunityId: null, hasOpportunity: false };
+          applyRoute({ ...route, module: null, opportunityId: null, hasOpportunity: false });
           if (status === "forbidden") options.notifyForbidden?.(result);
           else options.notifyStale?.(result);
         } else if (status === "retryable") {
@@ -96,7 +101,10 @@
         return result;
       }
       options.closeWorkspace({ routeDriven: true, page: route.page, ...(settings.closeContext || {}) });
-      if (route.hasOpportunity) removeOpportunityFromUrl();
+      if (route.hasOpportunity) {
+        removeOpportunityFromUrl();
+        applyRoute({ ...route, module: null, opportunityId: null, hasOpportunity: false });
+      }
       return { status: "ok" };
     }
 
