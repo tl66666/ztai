@@ -87,10 +87,12 @@ class InterviewService:
         mode: str,
         career_profile: str | None,
         application_id: int | None = None,
+        action_id: int | None = None,
     ) -> dict[str, Any]:
         self._require_local_user(user_id)
         resume_id = self._optional_id(resume_id, "resume_id")
         application_id = self._optional_id(application_id, "application_id")
+        action_id = self._optional_id(action_id, "action_id")
         job_title = self._text(job_title, "job_title", 300, required=True)
         jd = self._text(jd, "jd", 200_000) or ""
         mode = self._text(mode, "mode", 100) or "standard"
@@ -110,6 +112,16 @@ class InterviewService:
                 )
                 if "deleted_at" in opportunity.keys() and opportunity["deleted_at"]:
                     raise LookupError("opportunity not found")
+            if action_id is not None:
+                if application_id is None:
+                    raise ValueError("interview action requires an opportunity")
+                action = self._owned_resource(conn, "action_items", action_id, "action item")
+                if action["status"] not in {"pending", "in_progress"}:
+                    raise ValueError("interview action item is not active")
+                if action["action_type"] not in {"interview", "interview_plan", "mock_interview"}:
+                    raise ValueError("action item is not an interview action")
+                if action["application_id"] != application_id:
+                    raise ValueError("interview action item opportunity does not match")
 
             profile_key = self.profile_selector(requested_profile, resume_content, job_title)
             profile_key = self._text(profile_key, "career_profile", 100, required=True)
@@ -138,6 +150,7 @@ class InterviewService:
                 "current_question": question,
                 "last_feedback": None,
                 "processed_submissions": {},
+                "action_id": action_id,
             }
             cursor = conn.execute(
                 """
@@ -160,7 +173,10 @@ class InterviewService:
                 conn,
                 session_id,
                 "interview.started",
-                {"resume_id": resume_id, "application_id": application_id, "mode": mode},
+                {
+                    "resume_id": resume_id, "application_id": application_id,
+                    "mode": mode, "action_id": action_id,
+                },
             )
             row = conn.execute(
                 "SELECT * FROM interview_sessions WHERE id = ?", (session_id,)
@@ -326,7 +342,10 @@ class InterviewService:
                     conn,
                     session_id,
                     "interview.completed",
-                    {"score": score, "answer_count": len(candidates)},
+                    {
+                        "score": score, "answer_count": len(candidates),
+                        "action_id": state.get("action_id"),
+                    },
                 )
             row = conn.execute(
                 "SELECT * FROM interview_sessions WHERE id = ?", (session_id,)

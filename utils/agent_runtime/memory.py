@@ -9,6 +9,10 @@ import uuid
 from utils.agent_runtime.models import Conversation, Message
 
 
+MAX_SEARCH_CANDIDATES = 500
+MAX_EXACT_QUERY_TOKENS = 24
+
+
 AGENT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_conversations (
     id TEXT PRIMARY KEY,
@@ -115,6 +119,56 @@ def _normalized_value(value) -> str:
     return json.dumps(normalize(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _fts_searchable(category, memory_key, value_json, entity_type, entity_id) -> str:
+    try:
+        value = json.loads(value_json or "null")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        value = value_json
+    parts: list[str] = []
+
+    def collect(item) -> None:
+        if isinstance(item, dict):
+            for key in sorted(item, key=str):
+                collect(key)
+                collect(item[key])
+        elif isinstance(item, list):
+            for child in item:
+                collect(child)
+        elif item is not None:
+            text = (
+                item.decode("utf-8", errors="replace")
+                if isinstance(item, bytes) else str(item)
+            )
+            text = " ".join(text.casefold().split())
+            if text:
+                parts.append(text)
+
+    for item in (category, memory_key, value, entity_type, entity_id):
+        collect(item)
+    original = " ".join(parts)
+    return " ".join([original, *_search_terms(original)]).strip()
+
+
+def _sync_fts_row(connection: sqlite3.Connection, memory_id: int) -> None:
+    row = connection.execute(
+        """
+        SELECT id,user_id,category,memory_key,value_json,
+               related_entity_type,related_entity_id
+        FROM agent_memories WHERE id = ?
+        """,
+        (memory_id,),
+    ).fetchone()
+    connection.execute("DELETE FROM agent_memories_fts WHERE rowid = ?", (memory_id,))
+    if row:
+        connection.execute(
+            "INSERT INTO agent_memories_fts(rowid,searchable,user_id,memory_id) VALUES (?,?,?,?)",
+            (
+                row[0], _fts_searchable(row[2], row[3], row[4], row[5], row[6]),
+                row[1], row[0],
+            ),
+        )
+
+
 class ClosingConnection(sqlite3.Connection):
     def __exit__(self, exc_type, exc_value, traceback):
         result = super().__exit__(exc_type, exc_value, traceback)
@@ -128,49 +182,36 @@ def create_agent_tables(db_path: str) -> None:
         try:
             connection.executescript(
                 """
+                DROP TRIGGER IF EXISTS agent_memories_fts_insert;
+                DROP TRIGGER IF EXISTS agent_memories_fts_delete;
+                DROP TRIGGER IF EXISTS agent_memories_fts_update;
                 CREATE VIRTUAL TABLE IF NOT EXISTS agent_memories_fts USING fts5(
                     searchable, user_id UNINDEXED, memory_id UNINDEXED
                 );
-                CREATE TRIGGER IF NOT EXISTS agent_memories_fts_insert
-                AFTER INSERT ON agent_memories BEGIN
-                    INSERT INTO agent_memories_fts(rowid, searchable, user_id, memory_id)
-                    VALUES (
-                        new.id,
-                        new.category || ' ' || new.memory_key || ' ' || new.value_json || ' ' ||
-                        COALESCE(new.related_entity_type, '') || ' ' || COALESCE(new.related_entity_id, ''),
-                        new.user_id,
-                        new.id
-                    );
-                END;
-                CREATE TRIGGER IF NOT EXISTS agent_memories_fts_delete
-                AFTER DELETE ON agent_memories BEGIN
-                    DELETE FROM agent_memories_fts WHERE rowid = old.id;
-                END;
-                CREATE TRIGGER IF NOT EXISTS agent_memories_fts_update
-                AFTER UPDATE ON agent_memories BEGIN
-                    DELETE FROM agent_memories_fts WHERE rowid = old.id;
-                    INSERT INTO agent_memories_fts(rowid, searchable, user_id, memory_id)
-                    VALUES (
-                        new.id,
-                        new.category || ' ' || new.memory_key || ' ' || new.value_json || ' ' ||
-                        COALESCE(new.related_entity_type, '') || ' ' || COALESCE(new.related_entity_id, ''),
-                        new.user_id,
-                        new.id
-                    );
-                END;
                 """
             )
             connection.execute("DELETE FROM agent_memories_fts")
-            connection.execute(
+            cursor = connection.execute(
                 """
-                INSERT INTO agent_memories_fts(rowid, searchable, user_id, memory_id)
-                SELECT id,
-                       category || ' ' || memory_key || ' ' || value_json || ' ' ||
-                       COALESCE(related_entity_type, '') || ' ' || COALESCE(related_entity_id, ''),
-                       user_id, id
-                FROM agent_memories
+                SELECT id,user_id,category,memory_key,value_json,
+                       related_entity_type,related_entity_id
+                FROM agent_memories ORDER BY id
                 """
             )
+            while True:
+                rows = cursor.fetchmany(500)
+                if not rows:
+                    break
+                connection.executemany(
+                    "INSERT INTO agent_memories_fts(rowid,searchable,user_id,memory_id) VALUES (?,?,?,?)",
+                    [
+                        (
+                            row[0], _fts_searchable(row[2], row[3], row[4], row[5], row[6]),
+                            row[1], row[0],
+                        )
+                        for row in rows
+                    ],
+                )
         except sqlite3.OperationalError:
             pass
 
@@ -178,6 +219,7 @@ def create_agent_tables(db_path: str) -> None:
 class MemoryStore:
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._last_search_candidate_count = 0
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, factory=ClosingConnection)
@@ -444,7 +486,12 @@ class MemoryStore:
                     timestamp, timestamp,
                 ),
             )
-            return cursor.lastrowid
+            memory_id = cursor.lastrowid
+            try:
+                _sync_fts_row(connection, memory_id)
+            except sqlite3.OperationalError:
+                pass
+            return memory_id
 
     def list_memories(
         self,
@@ -483,7 +530,9 @@ class MemoryStore:
         except sqlite3.OperationalError:
             return False
 
-    def _fts_matches(self, connection: sqlite3.Connection, query: str, user_id: int) -> dict[int, float]:
+    def _fts_matches(
+        self, connection: sqlite3.Connection, query: str, user_id: int, limit: int = 160
+    ) -> dict[int, float]:
         terms = _search_terms(query)
         if not terms:
             return {}
@@ -493,9 +542,9 @@ class MemoryStore:
             SELECT memory_id, bm25(agent_memories_fts) AS relevance
             FROM agent_memories_fts
             WHERE agent_memories_fts MATCH ? AND user_id = ?
-            ORDER BY relevance LIMIT 100
+            ORDER BY relevance LIMIT ?
             """,
-            (expression, user_id),
+            (expression, user_id, limit),
         ).fetchall()
         return {int(row["memory_id"]): -float(row["relevance"]) for row in rows}
 
@@ -518,15 +567,75 @@ class MemoryStore:
         params.extend(statuses)
         normalized = " ".join((query or "").casefold().split())
         terms = _search_terms(normalized)
+        candidate_cap = max(50, min(MAX_SEARCH_CANDIDATES, limit * 20))
         with self._connect() as connection:
-            rows = connection.execute(
-                f"SELECT * FROM agent_memories WHERE {' AND '.join(clauses)}",
-                params,
-            ).fetchall()
             try:
-                fts_scores = self._fts_matches(connection, query, user_id)
+                fts_scores = self._fts_matches(
+                    connection, query, user_id, candidate_cap
+                )
+                fts_enabled = True
             except sqlite3.OperationalError:
                 fts_scores = {}
+                fts_enabled = False
+
+            raw_tokens = re.findall(
+                r"[a-z0-9_]+|[\u4e00-\u9fff]+", normalized
+            )[:MAX_EXACT_QUERY_TOKENS]
+            exact_conditions = []
+            exact_params: list = []
+            numeric_tokens = [token for token in raw_tokens if token.isdigit()]
+            if numeric_tokens:
+                exact_conditions.append(
+                    f"related_entity_id IN ({','.join('?' for _ in numeric_tokens)})"
+                )
+                exact_params.extend(numeric_tokens)
+            if raw_tokens:
+                placeholders = ",".join("?" for _ in raw_tokens)
+                exact_conditions.extend(
+                    [f"lower(memory_key) IN ({placeholders})", f"lower(category) IN ({placeholders})"]
+                )
+                exact_params.extend(raw_tokens)
+                exact_params.extend(raw_tokens)
+            exact_ids: list[int] = []
+            if exact_conditions:
+                exact_ids = [
+                    row[0] for row in connection.execute(
+                        f"""
+                        SELECT id FROM agent_memories
+                        WHERE {' AND '.join(clauses)} AND ({' OR '.join(exact_conditions)})
+                        ORDER BY updated_at DESC, id DESC LIMIT ?
+                        """,
+                        [*params, *exact_params, candidate_cap],
+                    ).fetchall()
+                ]
+
+            recent_limit = candidate_cap if not fts_enabled else max(20, limit * 3)
+            confirmed_fill = " AND status = 'confirmed'" if fts_enabled else ""
+            recent_ids = [
+                row[0] for row in connection.execute(
+                    f"""
+                    SELECT id FROM agent_memories
+                    WHERE {' AND '.join(clauses)}{confirmed_fill}
+                    ORDER BY updated_at DESC, id DESC LIMIT ?
+                    """,
+                    [*params, recent_limit],
+                ).fetchall()
+            ]
+            candidate_ids = list(dict.fromkeys([
+                *exact_ids, *fts_scores.keys(), *recent_ids,
+            ]))[:candidate_cap]
+            if candidate_ids:
+                id_placeholders = ",".join("?" for _ in candidate_ids)
+                rows = connection.execute(
+                    f"""
+                    SELECT * FROM agent_memories
+                    WHERE {' AND '.join(clauses)} AND id IN ({id_placeholders})
+                    """,
+                    [*params, *candidate_ids],
+                ).fetchall()
+            else:
+                rows = []
+        self._last_search_candidate_count = len(rows)
 
         def rank(row: sqlite3.Row) -> tuple:
             searchable = " ".join(
@@ -633,6 +742,13 @@ class MemoryStore:
             cursor = connection.execute(
                 "DELETE FROM agent_memories WHERE id = ? AND user_id = ?", (memory_id, user_id)
             )
+            if cursor.rowcount:
+                try:
+                    connection.execute(
+                        "DELETE FROM agent_memories_fts WHERE rowid = ?", (memory_id,)
+                    )
+                except sqlite3.OperationalError:
+                    pass
         return cursor.rowcount > 0
 
     @staticmethod

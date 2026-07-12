@@ -331,6 +331,43 @@ class InterviewPersistenceTests(unittest.TestCase):
         self.assertEqual(source_session_id, session_id)
         self.assertEqual(completion_events, 1)
 
+    def test_completion_uses_persisted_exact_action_id(self):
+        from utils.domain.career import CareerService
+
+        career = CareerService(self.db_path)
+        opportunity = career.create_opportunity(
+            1, {"company": "Acme", "job_title": "Backend Engineer"}
+        )
+        exact = career.create_action_item(
+            1, {"opportunity_id": opportunity["id"], "title": "Mock one", "type": "mock_interview"}
+        )
+        duplicate = career.create_action_item(
+            1, {"opportunity_id": opportunity["id"], "title": "Mock two", "type": "mock_interview"}
+        )
+        session_id = self.start(
+            application_id=opportunity["id"], action_id=exact["id"]
+        )["session_id"]
+        for index in range(5):
+            self.service.answer(1, session_id, f"Answer {index} with enough detail")
+        rows = {row["id"]: row for row in career.list_action_items(1)}
+        self.assertEqual(rows[exact["id"]]["status"], "completed")
+        self.assertEqual(rows[duplicate["id"]]["status"], "pending")
+        with connect(self.db_path) as conn:
+            state = json.loads(
+                conn.execute(
+                    "SELECT conversation_json FROM interview_sessions WHERE id = ?", (session_id,)
+                ).fetchone()[0]
+            )
+            payload = json.loads(
+                conn.execute(
+                    "SELECT payload_json FROM domain_events WHERE aggregate_id = ? "
+                    "AND event_type = 'interview.completed'",
+                    (str(session_id),),
+                ).fetchone()[0]
+            )
+        self.assertEqual(state["action_id"], exact["id"])
+        self.assertEqual(payload["action_id"], exact["id"])
+
     def test_open_list_excludes_completed_sessions(self):
         open_id = self.start(job_title="Open role")["session_id"]
         completed_id = self.start(job_title="Completed role")["session_id"]

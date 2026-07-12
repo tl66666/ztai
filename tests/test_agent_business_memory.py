@@ -169,6 +169,40 @@ class AgentBusinessMemoryTests(unittest.TestCase):
         self.store.delete_memory(1, replacement)
         self.assertEqual(self.store.search_memories(1, "杭州", kind="semantic"), [])
 
+    def test_search_materializes_a_bounded_candidate_window_at_scale(self):
+        timestamp = "2026-01-01T00:00:00+00:00"
+        with connect(self.db_path) as conn:
+            conn.executemany(
+                """
+                INSERT INTO agent_memories
+                    (user_id,kind,category,memory_key,value_json,confidence,status,created_at,updated_at)
+                VALUES (1,'semantic','scale',?, ?,0.5,'confirmed',?,?)
+                """,
+                [
+                    (f"key-{index}", json.dumps(f"memory {index}"), timestamp, timestamp)
+                    for index in range(3000)
+                ],
+            )
+        target_id = self.store.upsert_memory(
+            1, "semantic", "role", "target", "后端开发", 0.9, "confirmed"
+        )
+        create_agent_tables(self.db_path)
+        if self.store.fts_available():
+            with connect(self.db_path) as conn:
+                searchable = conn.execute(
+                    "SELECT searchable FROM agent_memories_fts WHERE memory_id = ?", (target_id,)
+                ).fetchone()[0]
+            self.assertRegex(searchable, r"(?:^|\s)后端(?:\s|$)")
+            self.assertEqual(
+                self.store.search_memories(1, "后端岗位", kind="semantic")[0]["id"], target_id
+            )
+            self.assertLessEqual(self.store._last_search_candidate_count, 500)
+        with patch.object(
+            self.store, "_fts_matches", side_effect=sqlite3.OperationalError("fallback")
+        ):
+            self.store.search_memories(1, "no exact match", kind="semantic")
+        self.assertLessEqual(self.store._last_search_candidate_count, 500)
+
     def test_context_snapshot_is_private_ranked_bounded_and_corruption_tolerant(self):
         career = CareerService(self.db_path)
         career.upsert_profile(
@@ -233,6 +267,42 @@ class AgentBusinessMemoryTests(unittest.TestCase):
             self.assertIn(expected, snapshot)
         self.assertLess(snapshot.index("Acme"), snapshot.find("opportunities") + 1000)
 
+    def test_snapshot_survives_blob_fields_and_keeps_healthy_rows(self):
+        career = CareerService(self.db_path)
+        healthy = career.create_opportunity(
+            1, {"company": "Healthy Co", "job_title": "Engineer", "priority": 5}
+        )
+        career.create_action_item(1, {"title": "Healthy action", "type": "follow_up"})
+        with connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO job_applications
+                    (user_id,company,job_title,status,updated_at,deleted_at)
+                VALUES (1,?,?,?, ?,NULL)
+                """,
+                (sqlite3.Binary(b"\xffbad"), sqlite3.Binary(b"\xfetitle"), "已投递", sqlite3.Binary(b"\xffdate")),
+            )
+            conn.execute(
+                "INSERT INTO resumes (user_id,title,content,status,updated_at) VALUES (1,?,'x','draft',?)",
+                (sqlite3.Binary(b"\xffresume"), sqlite3.Binary(b"\xffdate")),
+            )
+            conn.execute(
+                "INSERT INTO action_items (user_id,title,action_type,status,updated_at) VALUES (1,?,'follow_up','pending',?)",
+                (sqlite3.Binary(b"\xffaction"), sqlite3.Binary(b"\xffdate")),
+            )
+            conn.execute(
+                "INSERT INTO domain_events (user_id,aggregate_type,aggregate_id,event_type,payload_json,occurred_at) "
+                "VALUES (1,?,?,?, ?,?)",
+                (sqlite3.Binary(b"\xffagg"), "1", sqlite3.Binary(b"\xffevent"), sqlite3.Binary(b"\xffjson"), sqlite3.Binary(b"\xffdate")),
+            )
+        conversation = self.store.create_conversation(1, "Corrupt")
+        snapshot = ContextBuilder(self.store, self.db_path).build(
+            1, conversation.id, f"Healthy Co opportunity {healthy['id']}"
+        ).career_snapshot
+        self.assertIn("Healthy Co", snapshot)
+        self.assertIn("Healthy action", snapshot)
+        self.assertLessEqual(len(snapshot), 8000)
+
     def test_snapshot_prefers_relevant_newer_non_archived_resume_and_only_active_actions(self):
         career = CareerService(self.db_path)
         with connect(self.db_path) as conn:
@@ -280,20 +350,26 @@ class AgentBusinessMemoryTests(unittest.TestCase):
             1, {"opportunity_id": opportunity["id"], "title": "Version", "type": "resume_version"}
         )
         wrong = career.create_action_item(1, {"title": "Unlinked", "type": "resume_version"})
+        duplicate = career.create_action_item(
+            1, {"opportunity_id": opportunity["id"], "title": "Other version", "type": "resume_version"}
+        )
         generic = career.create_action_item(
             1, {"opportunity_id": opportunity["id"], "title": "Generic", "type": "follow_up"}
         )
         with connect(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             apply_event_to_actions(
-                conn, 1, "resume.version_created", "opportunity", opportunity["id"], {"resume_id": 7}
+                conn, 1, "resume.version_created", "opportunity", opportunity["id"],
+                {"resume_id": 7, "action_id": exact["id"]}
             )
             apply_event_to_actions(
-                conn, 1, "resume.version_created", "opportunity", opportunity["id"], {"resume_id": 7}
+                conn, 1, "resume.version_created", "opportunity", opportunity["id"],
+                {"resume_id": 7, "action_id": exact["id"]}
             )
         rows = {row["id"]: row for row in career.list_action_items(1)}
         self.assertEqual(rows[exact["id"]]["status"], "completed")
         self.assertEqual(rows[wrong["id"]]["status"], "pending")
+        self.assertEqual(rows[duplicate["id"]]["status"], "pending")
         self.assertEqual(rows[generic["id"]]["status"], "pending")
         self.assertIn("resume.version_created", rows[exact["id"]]["completion_evidence"])
         self.assertEqual(rows[exact["id"]]["source"], "domain_event")
@@ -344,7 +420,8 @@ class AgentBusinessMemoryTests(unittest.TestCase):
         with patch("utils.domain.career.apply_event_to_actions", side_effect=RuntimeError("feedback failed")):
             with self.assertRaisesRegex(RuntimeError, "feedback failed"):
                 career.create_resume_version(
-                    1, source_resume, "tailored", {"application_id": opportunity["id"]}
+                    1, source_resume, "tailored",
+                    {"application_id": opportunity["id"], "action_id": action["id"]}
                 )
         self.assertEqual(career.list_action_items(1)[0]["status"], "pending")
         with connect(self.db_path) as conn:
@@ -353,7 +430,8 @@ class AgentBusinessMemoryTests(unittest.TestCase):
                 0,
             )
         career.create_resume_version(
-            1, source_resume, "tailored", {"application_id": opportunity["id"]}
+            1, source_resume, "tailored",
+            {"application_id": opportunity["id"], "action_id": action["id"]}
         )
         conversation = self.store.create_conversation(1, "After event")
         snapshot = ContextBuilder(self.store, self.db_path).build(1, conversation.id, "actions").career_snapshot
@@ -403,7 +481,8 @@ class AgentBusinessMemoryTests(unittest.TestCase):
                 (opportunity["id"],),
             ).lastrowid
             InterviewService(self.db_path)._write_event(
-                conn, session_id, "interview.completed", {"score": 77}
+                conn, session_id, "interview.completed",
+                {"score": 77, "action_id": interview_action["id"]}
             )
         statuses = {row["id"]: row["status"] for row in career.list_action_items(1)}
         self.assertEqual(statuses[interview_action["id"]], "completed")

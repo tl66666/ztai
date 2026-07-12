@@ -10,6 +10,38 @@ from utils.agent_runtime.memory import ClosingConnection, MemoryStore
 from utils.domain.career import CareerService
 
 
+def safe_text(value, maxlen: int = 500) -> str:
+    if value is None:
+        return ""
+    try:
+        if isinstance(value, bytes):
+            result = value.decode("utf-8", errors="replace")
+        elif isinstance(value, str):
+            result = value
+        elif isinstance(value, (int, float, bool)):
+            result = str(value)
+        else:
+            result = str(value)
+    except Exception:
+        result = "[unreadable]"
+    return result[:max(0, maxlen)]
+
+
+def _json_safe(value):
+    if isinstance(value, dict):
+        return {
+            safe_text(key, 100): _json_safe(item)
+            for key, item in list(value.items())[:100]
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value[:100]]
+    if isinstance(value, str):
+        return safe_text(value, 1000)
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    return safe_text(value)
+
+
 FACT_PATTERNS = {
     "target_city": re.compile(r"(?:想去|目标城市(?:是|为)?|优先考虑)\s*([\u4e00-\u9fa5]{2,8})"),
     "target_role": re.compile(r"(?:目标岗位(?:是|为)?|想找|应聘)\s*([^，,。；;\n]{2,30})"),
@@ -156,32 +188,54 @@ class ContextBuilder:
                 "counts",
                 f"简历 {counts['简历']} 份；投递 {counts['投递']} 条；面试训练 {counts['面试训练']} 次",
             ))
+            normalized_query = safe_text(query, 1000).casefold()
+            query_tokens = set(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", normalized_query))
             try:
+                mentioned_ids = [token for token in query_tokens if token.isdigit()]
+                id_order = (
+                    f"id IN ({','.join('?' for _ in mentioned_ids)})"
+                    if mentioned_ids else "0"
+                )
                 opportunity_rows = connection.execute(
-                    """
-                    SELECT id, company, job_title, resume_id
+                    f"""
+                    SELECT id,company,job_title,status,city,priority,resume_id,
+                           next_action_at,interview_at,deadline_at,updated_at
                     FROM job_applications
                     WHERE user_id = ? AND deleted_at IS NULL
+                    ORDER BY
+                        CASE
+                            WHEN {id_order} THEN 3
+                            WHEN typeof(company) = 'text' AND company != ''
+                                 AND instr(?, lower(company)) > 0 THEN 2
+                            WHEN typeof(job_title) = 'text' AND job_title != ''
+                                 AND instr(?, lower(job_title)) > 0 THEN 1
+                            ELSE 0
+                        END DESC,
+                        priority DESC, updated_at DESC, id DESC LIMIT 100
                     """,
-                    (user_id,),
+                    (user_id, *mentioned_ids, normalized_query, normalized_query),
                 ).fetchall()
-                normalized_query = (query or "").casefold()
-                query_tokens = set(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", normalized_query))
+            except sqlite3.Error:
+                opportunity_rows = []
 
-                def opportunity_relevance(candidate: sqlite3.Row) -> int:
-                    return (
-                        int(str(candidate["id"]) in query_tokens)
-                        + int(bool(candidate["company"]) and candidate["company"].casefold() in normalized_query)
-                        + int(bool(candidate["job_title"]) and candidate["job_title"].casefold() in normalized_query)
-                    )
-
+            def opportunity_relevance(candidate: sqlite3.Row) -> tuple:
+                company = safe_text(candidate["company"], 300).casefold()
+                job_title = safe_text(candidate["job_title"], 300).casefold()
+                return (
+                    int(str(candidate["id"]) in query_tokens)
+                    + int(bool(company) and company in normalized_query)
+                    + int(bool(job_title) and job_title in normalized_query),
+                    int(candidate["priority"] or 0) if isinstance(candidate["priority"], (int, float)) else 0,
+                    safe_text(candidate["updated_at"], 100), candidate["id"],
+                )
+            try:
                 relevant_opportunity = max(
                     opportunity_rows, key=opportunity_relevance, default=None
                 )
                 selected_resume_id = (
                     relevant_opportunity["resume_id"]
                     if relevant_opportunity is not None
-                    and opportunity_relevance(relevant_opportunity) > 0
+                    and opportunity_relevance(relevant_opportunity)[0] > 0
                     else None
                 )
                 resume_rows = connection.execute(
@@ -189,6 +243,7 @@ class ContextBuilder:
                     SELECT id, title, version_label, target_job_title, status, updated_at
                     FROM resumes
                     WHERE user_id = ? AND COALESCE(status, 'active') != 'archived'
+                    ORDER BY id DESC LIMIT 100
                     """,
                     (user_id,),
                 ).fetchall()
@@ -202,37 +257,35 @@ class ContextBuilder:
                         ),
                     )
                 sections.append(("selected_resume", {
-                    "id": row["id"], "title": row["title"], "version": row["version_label"],
-                    "target": row["target_job_title"], "status": row["status"],
-                    "updated": row["updated_at"],
+                    "id": row["id"], "title": safe_text(row["title"], 300),
+                    "version": safe_text(row["version_label"], 100),
+                    "target": safe_text(row["target_job_title"], 300),
+                    "status": safe_text(row["status"], 50),
+                    "updated": safe_text(row["updated_at"], 100),
                 } if row else None))
-            except sqlite3.Error:
+            except (sqlite3.Error, TypeError, ValueError):
                 sections.append(("selected_resume", None))
 
             opportunities = []
             try:
-                rows = connection.execute(
-                    """
-                    SELECT id, company, job_title, status, city, priority,
-                           next_action_at, interview_at, deadline_at, updated_at
-                    FROM job_applications
-                    WHERE user_id = ? AND deleted_at IS NULL
-                      AND COALESCE(status, '') NOT IN ('已拒绝', '已结束')
-                    """,
-                    (user_id,),
-                ).fetchall()
-                normalized_query = (query or "").casefold()
-                query_tokens = set(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", normalized_query))
-
-                def relevance(row: sqlite3.Row) -> tuple:
-                    return (
-                        int(str(row["id"]) in query_tokens)
-                        + int(bool(row["company"]) and row["company"].casefold() in normalized_query)
-                        + int(bool(row["job_title"]) and row["job_title"].casefold() in normalized_query),
-                        int(row["priority"] or 0), row["updated_at"] or "", row["id"],
-                    )
-
-                opportunities = [dict(row) for row in sorted(rows, key=relevance, reverse=True)[:5]]
+                active_rows = [
+                    row for row in opportunity_rows
+                    if safe_text(row["status"], 50) not in {"已拒绝", "已结束"}
+                ]
+                opportunities = []
+                for row in sorted(active_rows, key=opportunity_relevance, reverse=True)[:5]:
+                    opportunities.append({
+                        "id": row["id"],
+                        "company": safe_text(row["company"], 300),
+                        "job_title": safe_text(row["job_title"], 300),
+                        "status": safe_text(row["status"], 50),
+                        "city": safe_text(row["city"], 200),
+                        "priority": row["priority"] if isinstance(row["priority"], (int, float)) else 0,
+                        "next_action_at": safe_text(row["next_action_at"], 100),
+                        "interview_at": safe_text(row["interview_at"], 100),
+                        "deadline_at": safe_text(row["deadline_at"], 100),
+                        "updated_at": safe_text(row["updated_at"], 100),
+                    })
             except (sqlite3.Error, TypeError, ValueError):
                 opportunities = []
             sections.append(("opportunities", opportunities))
@@ -251,14 +304,17 @@ class ContextBuilder:
                 actions = []
                 for row in rows:
                     action = {
-                        key: row[key]
+                        key: (
+                            row[key] if isinstance(row[key], (int, float))
+                            else safe_text(row[key], 500)
+                        )
                         for key in (
                             "id", "application_id", "title", "type", "status",
                             "priority", "due_at", "completed_at", "source",
                         )
                     }
                     if row["source"] == "domain_event" and row["completion_evidence"]:
-                        action["evidence"] = str(row["completion_evidence"])[:500]
+                        action["evidence"] = safe_text(row["completion_evidence"], 500)
                     actions.append(action)
                 sections.append(("action_items", actions))
             except sqlite3.Error:
@@ -276,18 +332,20 @@ class ContextBuilder:
                 ).fetchall()
                 for row in rows:
                     outcome = {
-                        "type": row["event_type"], "aggregate": row["aggregate_type"],
-                        "id": row["aggregate_id"], "at": row["occurred_at"],
+                        "type": safe_text(row["event_type"], 100),
+                        "aggregate": safe_text(row["aggregate_type"], 100),
+                        "id": safe_text(row["aggregate_id"], 100),
+                        "at": safe_text(row["occurred_at"], 100),
                     }
                     try:
                         payload = json.loads(row["payload_json"] or "{}")
-                    except (TypeError, ValueError, json.JSONDecodeError):
+                    except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
                         payload = {}
                     if isinstance(payload, dict):
                         for key in ("status", "score", "report_type", "answer_count", "fields"):
                             value = payload.get(key)
                             if isinstance(value, (str, int, float, bool, list)):
-                                outcome[key] = value
+                                outcome[key] = _json_safe(value)
                     recent_events.append(outcome)
                 sections.append(("recent_outcomes", recent_events))
             except sqlite3.Error:
@@ -305,7 +363,7 @@ class ContextBuilder:
             sections.insert(3, ("readiness", {}))
 
         rendered = "\n".join(
-            f"{name}: {json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}"
+            f"{name}: {json.dumps(_json_safe(value), ensure_ascii=False, sort_keys=True, separators=(',', ':'))}"
             for name, value in sections
         )
         return rendered[:8000]
@@ -317,6 +375,7 @@ class ContextBuilder:
 
     @staticmethod
     def _parsed_timestamp(value) -> datetime:
+        value = safe_text(value, 100)
         if not value:
             return datetime.min.replace(tzinfo=timezone.utc)
         try:

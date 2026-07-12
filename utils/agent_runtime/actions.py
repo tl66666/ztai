@@ -160,6 +160,7 @@ def _career_action_argument_schemas() -> dict[str, dict[str, Any]]:
             "status": {"type": "string", "enum": list(RESUME_STATUSES)},
             "source_type": {"type": "string", "enum": list(RESUME_SOURCE_TYPES)},
             "title": _schema_text(300),
+            "action_id": _schema_integer(1),
         }
     )
     action_item_properties = {
@@ -601,6 +602,24 @@ class ActionProposalService:
             application_id = result["metadata"].get("application_id")
             if application_id is not None:
                 self._check_owned("job_applications", application_id, "opportunity", True)
+            action_id = result["metadata"].get("action_id")
+            if action_id is not None:
+                with connect(self.db_path) as conn:
+                    action = conn.execute(
+                        """
+                        SELECT action_type,status,application_id FROM action_items
+                        WHERE id = ? AND user_id = ?
+                        """,
+                        (action_id, self.local_user_id),
+                    ).fetchone()
+                if action is None:
+                    raise LookupError("action item not found")
+                if action["status"] not in {"pending", "in_progress"}:
+                    raise ValueError("resume action item is not active")
+                if action["action_type"] not in {"create_resume_version", "resume_version"}:
+                    raise ValueError("action item is not a resume version action")
+                if application_id is None or action["application_id"] != application_id:
+                    raise ValueError("resume action item opportunity does not match")
         elif action_type == "link_opportunity_resume":
             self._required_id(result, "opportunity_id")
             self._required_id(result, "resume_id")
@@ -1130,7 +1149,7 @@ class ActionProposalService:
     def _validate_resume_metadata(self, metadata: dict[str, Any]) -> None:
         permitted = {
             "version_label", "target_job_title", "application_id", "status",
-            "source_type", "title",
+            "source_type", "title", "action_id",
         }
         unknown = set(metadata) - permitted
         if unknown:
@@ -1148,6 +1167,10 @@ class ActionProposalService:
             )
             if metadata["application_id"] <= 0:
                 raise ValueError("application_id must be positive")
+        if metadata.get("action_id") is not None:
+            metadata["action_id"] = self._integer(metadata["action_id"], "action_id")
+            if metadata["action_id"] <= 0:
+                raise ValueError("action_id must be positive")
 
     def _validate_action_item_fields(self, values: dict[str, Any]) -> None:
         if values.get("status", "pending") not in ACTION_STATUSES:

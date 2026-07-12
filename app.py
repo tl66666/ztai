@@ -1336,6 +1336,7 @@ def start_interview_session():
             data.get("mode", "standard"),
             data.get("career_profile") or data.get("profile"),
             data.get("application_id"),
+            data.get("action_id"),
         )
     except (InterviewConflictError, PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)

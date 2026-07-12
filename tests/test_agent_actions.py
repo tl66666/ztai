@@ -173,6 +173,40 @@ class AgentActionServiceTests(unittest.TestCase):
         )
         self.assertIn("action_id", report_branch["properties"]["arguments"]["properties"])
 
+    def test_resume_action_link_is_owned_related_active_and_frozen(self):
+        with connect(self.db_path) as conn:
+            opportunity_id = conn.execute(
+                "INSERT INTO job_applications (user_id,company,job_title) VALUES (1,'Acme','Engineer')"
+            ).lastrowid
+            other_opportunity_id = conn.execute(
+                "INSERT INTO job_applications (user_id,company,job_title) VALUES (1,'Other','Engineer')"
+            ).lastrowid
+            action_id = conn.execute(
+                "INSERT INTO action_items (user_id,application_id,title,action_type,status) "
+                "VALUES (1,?,'Resume','resume_version','pending')",
+                (opportunity_id,),
+            ).lastrowid
+            wrong_link_id = conn.execute(
+                "INSERT INTO action_items (user_id,application_id,title,action_type,status) "
+                "VALUES (1,?,'Other resume','resume_version','pending')",
+                (other_opportunity_id,),
+            ).lastrowid
+        arguments = {
+            "resume_id": self.resume_id,
+            "content": "tailored",
+            "metadata": {"application_id": opportunity_id, "action_id": action_id},
+        }
+        proposal = self.propose("create_resume_version", arguments)
+        with self.assertRaisesRegex(ValueError, "not allowed"):
+            self.service.edit(
+                1, proposal["id"], {"metadata": {"action_id": wrong_link_id}}
+            )
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            self.propose(
+                "create_resume_version",
+                {**arguments, "metadata": {"application_id": opportunity_id, "action_id": wrong_link_id}},
+            )
+
     def test_all_action_schemas_reject_unknown_and_invalid_values_before_persisting(self):
         with connect(self.db_path) as conn:
             opportunity_id = conn.execute(

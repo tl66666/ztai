@@ -828,6 +828,7 @@ class CareerService:
             "status",
             "source_type",
             "title",
+            "action_id",
         }
         unknown = set(metadata) - permitted
         if unknown:
@@ -854,6 +855,18 @@ class CareerService:
             application_id = metadata.get("application_id")
             if application_id is not None and not self._owned_opportunity(conn, application_id):
                 raise LookupError("opportunity not found")
+            action_id = metadata.get("action_id")
+            if action_id is not None:
+                action_id = self._integer(action_id, "action_id")
+                action = self._owned_row(conn, "action_items", action_id)
+                if not action:
+                    raise LookupError("action item not found")
+                if action["status"] not in {"pending", "in_progress"}:
+                    raise ValueError("resume action item is not active")
+                if action["action_type"] not in {"create_resume_version", "resume_version"}:
+                    raise ValueError("action item is not a resume version action")
+                if application_id is None or action["application_id"] != application_id:
+                    raise ValueError("resume action item opportunity does not match")
             title = metadata.get("title") or metadata.get("version_label") or source_row["title"]
             cursor = conn.execute(
                 """
@@ -888,6 +901,7 @@ class CareerService:
                         "parent_resume_id": resume_id,
                         "version_label": metadata.get("version_label"),
                         "source_type": source_type,
+                        "action_id": action_id,
                     },
                     source,
                     "resume",

@@ -24,6 +24,9 @@ def apply_event_to_actions(
     action_types = _EVENT_ACTION_TYPES.get(event_type)
     if not action_types:
         return 0
+    action_id = _integer_id((payload or {}).get("action_id"))
+    if action_id is None:
+        return 0
 
     application_id: int | None = None
     if event_type == "resume.version_created" and aggregate_type == "opportunity":
@@ -34,9 +37,8 @@ def apply_event_to_actions(
             (aggregate_id, user_id),
         ).fetchone()
         application_id = row[0] if row else None
-    elif event_type == "career_report.saved" and aggregate_type == "career_report":
-        action_id = _integer_id((payload or {}).get("action_id"))
-        if action_id is None:
+    elif event_type == "career_report.saved":
+        if aggregate_type != "career_report":
             return 0
     else:
         return 0
@@ -61,10 +63,9 @@ def apply_event_to_actions(
     params: list[Any] = [user_id]
     clauses.append(f"action_type IN ({placeholders})")
     params.extend(action_types)
-    if event_type == "career_report.saved":
-        clauses.append("id = ?")
-        params.append(action_id)
-    else:
+    clauses.append("id = ?")
+    params.append(action_id)
+    if event_type != "career_report.saved":
         clauses.append("application_id = ?")
         params.append(application_id)
     cursor = conn.execute(
