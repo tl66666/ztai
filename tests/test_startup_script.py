@@ -63,6 +63,14 @@ class StartupScriptContractTests(unittest.TestCase):
         self.assertIn("launcher.log", self.launcher)
         self.assertIn("server.log", self.launcher)
         self.assertIn("server.pid", self.launcher)
+        self.assertIn("server.url", self.launcher)
+
+    def test_repeated_double_click_reuses_the_healthy_local_server(self):
+        self.assertIn("Open-RunningProjectServer", self.launcher)
+        self.assertIn("JobHunter is already ready", self.launcher)
+        self.assertIn(r"^http://127\.0\.0\.1:", self.launcher)
+        self.assertIn("/api/config/ai-status", self.launcher)
+        self.assertIn("Start-Process $runningUrl", self.launcher)
 
     def test_launcher_checks_supported_python_pip_and_health_endpoint(self):
         self.assertRegex(self.launcher, r"(?i)Get-Command\s+py\b")
@@ -85,8 +93,11 @@ class StartupScriptContractTests(unittest.TestCase):
         self.assertIn('%~dp0start-jobhunter.ps1', self.batch)
         self.assertRegex(self.batch, r"(?i)-ExecutionPolicy\s+Bypass")
         self.assertIn("%*", self.batch)
-        self.assertRegex(self.batch, r"(?i)exit\s+/b\s+%errorlevel%")
-        self.assertNotRegex(self.batch, r"(?im)^\s*pause\s*$")
+        self.assertIn('set "EXIT_CODE=%errorlevel%"', self.batch)
+        self.assertRegex(self.batch, r"(?i)exit\s+/b\s+%EXIT_CODE%")
+        self.assertIn('if "%~1"=="" pause', self.batch)
+        self.assertIn("Startup failed", self.batch)
+        self.assertIn("output\\runtime\\launcher.log", self.batch)
 
     def test_clean_path_smoke_script_is_present_and_safety_bounded(self):
         smoke = SMOKE_SCRIPT.read_text(encoding="utf-8-sig")

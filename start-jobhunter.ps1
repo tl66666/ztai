@@ -15,6 +15,7 @@ $LauncherLog = Join-Path $RuntimePath "launcher.log"
 $ServerLog = Join-Path $RuntimePath "server.log"
 $ServerErrorLog = Join-Path $RuntimePath "server-error.log"
 $PidFile = Join-Path $RuntimePath "server.pid"
+$ServerUrlFile = Join-Path $RuntimePath "server.url"
 $HealthTimeoutSeconds = 60
 $flaskProcess = $null
 $script:LaunchMutex = $null
@@ -120,6 +121,37 @@ function Test-Dependencies {
     return ($LASTEXITCODE -eq 0)
 }
 
+function Open-RunningProjectServer {
+    if (-not (Test-Path -LiteralPath $ServerUrlFile)) {
+        return $false
+    }
+
+    $runningUrl = (Get-Content -LiteralPath $ServerUrlFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if (-not $runningUrl -or $runningUrl -notmatch '^http://127\.0\.0\.1:(\d{4,5})$') {
+        return $false
+    }
+    $runningPort = [int]$Matches[1]
+    if ($runningPort -lt 1024 -or $runningPort -gt 65535) {
+        return $false
+    }
+
+    try {
+        $response = Invoke-WebRequest -Uri "$runningUrl/api/config/ai-status" -UseBasicParsing -TimeoutSec 3
+        if ($response.StatusCode -ne 200) {
+            return $false
+        }
+    } catch {
+        return $false
+    }
+
+    Write-Host "JobHunter is already ready: $runningUrl" -ForegroundColor Green
+    if (-not $NoBrowser) {
+        Start-Process $runningUrl
+        Write-Host "Opened the existing JobHunter page." -ForegroundColor Green
+    }
+    return $true
+}
+
 function Acquire-LauncherMutex {
     $canonical = [System.IO.Path]::GetFullPath($ProjectPath).TrimEnd('\').ToUpperInvariant()
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($canonical)
@@ -164,6 +196,7 @@ function Stop-OwnedServer {
         $recordedPid = (Get-Content -LiteralPath $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
         if ($script:flaskProcess -and "$recordedPid" -eq "$($script:flaskProcess.Id)") {
             Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $ServerUrlFile -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -173,8 +206,13 @@ try {
         throw "This launcher must be in the same project directory as app.py."
     }
 
-    Acquire-LauncherMutex
     New-Item -ItemType Directory -Path $RuntimePath -Force | Out-Null
+    if (-not $Diagnostics -and (Open-RunningProjectServer)) {
+        exit 0
+    }
+    if (-not $Diagnostics) {
+        Acquire-LauncherMutex
+    }
     Write-LauncherMessage "JobHunter project: $ProjectPath" Cyan
 
     $pythonRuntime = Find-Python
@@ -264,6 +302,7 @@ try {
     }
 
     Write-LauncherMessage "JobHunter is ready: $serviceUrl" Green
+    $serviceUrl | Out-File -FilePath $ServerUrlFile -Encoding ascii
     if (-not $NoBrowser) {
         Start-Process $serviceUrl
         Write-LauncherMessage "Opened the system default browser." Green

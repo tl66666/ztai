@@ -36,10 +36,23 @@ class ShowcaseContractTests(unittest.TestCase):
         cls.parser.feed(cls.html)
 
     def test_first_view_names_product_and_contextual_agent(self):
-        hero = self.html.split("</header>", 1)[0]
+        hero = self.html.split("</section>", 1)[0]
         self.assertRegex(hero, r"JobHunter|职途\s*AI")
-        self.assertIn("上下文求职 Agent", hero)
-        self.assertIn("agent-workbench.webp", hero)
+        self.assertRegex(hero, r"Agent|Career OS")
+        self.assertIn("career-motion-panel.mp4", hero)
+        self.assertRegex(hero, r"hero-bg(?:%20\(2\))?\.png")
+
+    def test_original_cinematic_visual_system_is_preserved(self):
+        for phrase in (
+            "liquid",
+            "Instrument Serif",
+            "Anime Theme",
+            "Glass Theme",
+            "career-hero-loop.mp4",
+            "双主题视觉系统",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, self.html)
 
     def test_showcase_explains_real_workflow_and_agent_boundary(self):
         for phrase in (
@@ -79,6 +92,9 @@ class ShowcaseContractTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, self.html)
+        self.assertNotIn("13 个工具", self.html)
+        self.assertNotIn("ReAct Agent", self.html)
+        self.assertNotIn("最近 20 条消息", self.html)
 
     def test_agent_feature_uses_desktop_web_evidence_as_its_primary_visual(self):
         agent_section = self.html.split('id="agent"', 1)[1].split("</section>", 1)[0]
@@ -134,7 +150,7 @@ class ShowcaseContractTests(unittest.TestCase):
             if tag == "img" and attribute == "src" and "assets/showcase/" in reference
         ]
         self.assertGreaterEqual(len(screenshot_refs), 4)
-        self.assertIn("assets/showcase/agent-workbench.webp", screenshot_refs)
+        self.assertIn("assets/showcase/agent-local-desktop.webp", screenshot_refs)
         for reference in screenshot_refs:
             with self.subTest(reference=reference):
                 self.assertNotIn("output/", reference)
@@ -146,7 +162,7 @@ class ShowcaseContractTests(unittest.TestCase):
             "GitHub Pages",
             "静态项目展示",
             "不能在此直接使用 Agent",
-            "Python 288/288",
+            "Python 291/291",
             "本机缺少 Firefox",
             "PASS",
             "SKIP",
@@ -178,6 +194,10 @@ class ShowcaseContractTests(unittest.TestCase):
         self.assertRegex(self.html, r"overflow-x:\s*(?:clip|hidden)")
         self.assertRegex(self.html, r"img\s*\{[^}]*height:\s*auto", "screenshots must retain their natural aspect ratio")
         self.assertIn("@media (max-width: 640px)", self.html)
+
+    def test_mobile_anchor_targets_clear_the_fixed_navigation(self):
+        mobile_css = self.html.split("@media (max-width: 640px)", 1)[1].split("</style>", 1)[0]
+        self.assertRegex(mobile_css, r"\.section\s*\{[^}]*scroll-margin-top:\s*260px")
 
 
 if __name__ == "__main__":

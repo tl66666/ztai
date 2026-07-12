@@ -2,6 +2,8 @@
 
 This audit covers the static product showcase only. The main application assets under `static/assets/images` remain untouched unless a reference audit proved an exact duplicate was safe to remove.
 
+The current page deliberately retains the original cinematic composition: `career-motion-panel.mp4` drives the first-viewport Hero, `career-hero-loop.mp4` closes the page, and the Anime/Glass background assets remain part of the theme comparison. The Agent material was added inside that established visual system rather than replacing it.
+
 ## Byte Baseline
 
 | Checkpoint | `static/assets` bytes |
@@ -31,6 +33,7 @@ The source files were real Playwright screenshots. Pillow 12.2 converted them to
 - **Moved in the previous showcase commit:** four exact duplicate module screenshots moved from `static/assets/images/showcase/` to `static/assets/showcase/`; SHA-256 was unchanged. The old paths are now absent because the new showcase is their only reference.
 - **Added in this fix:** `agent-local-desktop.webp`, captured from an isolated no-API-Key desktop run. It shows the real four-tool career diagnosis, deterministic synthesis and user-facing tool trace.
 - **Removed in this fix:** `agent-mobile.webp` (21,362 bytes, SHA-256 `103047FCA80FFDFDEFA09D62F0B4B6DA3CC761CA18FAF62DC273C1AA5651D2FC`) after the Agent section moved back to desktop Web evidence; responsive behavior remains covered by browser tests rather than a primary showcase image.
+- **Retained from the original showcase:** both local MP4 backgrounds and the Anime/Glass theme images. Each video has a local poster, and reduced-motion users receive a static fallback.
 - **Deleted after reference audit:** `static/assets/images/success (2).mp4` (373,943 bytes, SHA-256 `5609AA7549607C1F36D717FE018F940AA043C20483603631108ED875A4129FCD`). `rg` and tracked-file search found no source or dynamic reference; no other `success` asset was removed.
 - **Retained:** `coach.png`, all non-showcase dynamic application assets, and the original logo source. The large logo is no longer used as a favicon.
 
