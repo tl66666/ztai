@@ -63,6 +63,12 @@ class StartupScriptContractTests(unittest.TestCase):
         self.assertIn("JOBHUNTER_PORT", self.launcher)
         self.assertIn("use_reloader=False", self.launcher)
 
+    def test_port_selection_wraps_safely_after_65535(self):
+        self.assertIn("65535", self.launcher)
+        self.assertRegex(self.launcher, r"(?i)wrap|回绕")
+        self.assertRegex(self.launcher, r"(?i)1024")
+        self.assertIn("BoundaryPort", SMOKE_SCRIPT.read_text(encoding="utf-8-sig"))
+
     def test_batch_launcher_forwards_arguments_and_exit_code(self):
         self.assertIn('%~dp0start-jobhunter.ps1', self.batch)
         self.assertRegex(self.batch, r"(?i)-ExecutionPolicy\s+Bypass")

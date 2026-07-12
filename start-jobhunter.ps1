@@ -85,13 +85,22 @@ function Test-PortFree {
 function Find-FreePort {
     param([Parameter(Mandatory = $true)][int]$PreferredPort)
 
-    $lastPort = [Math]::Min(65535, $PreferredPort + 100)
-    for ($candidate = $PreferredPort; $candidate -le $lastPort; $candidate++) {
+    # Probe the requested port upward, then wrap through the unprivileged range.
+    # Binding is the source of truth; no process lookup or termination is used.
+    for ($candidate = $PreferredPort; $candidate -le 65535; $candidate++) {
         if (Test-PortFree $candidate) {
             return $candidate
         }
     }
-    throw "Ports $PreferredPort through $lastPort are busy. Other programs will not be stopped; choose another range with -Port."
+    $wrapStart = 1024
+    if ($PreferredPort -gt $wrapStart) {
+        for ($candidate = $wrapStart; $candidate -lt $PreferredPort; $candidate++) {
+            if (Test-PortFree $candidate) {
+                return $candidate
+            }
+        }
+    }
+    throw "Port $PreferredPort and every safe fallback port are busy. Other programs will not be stopped; choose another -Port."
 }
 
 function Test-Dependencies {

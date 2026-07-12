@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$BoundaryPort)
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -33,7 +33,8 @@ try {
         Copy-Item -LiteralPath $source -Destination $destination
     }
 
-    $sentinelListener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $sentinelCandidate = if ($BoundaryPort) { 65535 } else { 0 }
+    $sentinelListener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $sentinelCandidate)
     $sentinelListener.Start()
     $preferredPort = ([System.Net.IPEndPoint]$sentinelListener.LocalEndpoint).Port
     $launcher = Join-Path $TempRoot "start-jobhunter.ps1"
