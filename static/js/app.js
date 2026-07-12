@@ -2526,6 +2526,7 @@ async function focusAgentResultFromQuery() {
   const id = Number(params.get(key));
   if (!Number.isInteger(id) || id <= 0) return;
   $("focusedAgentResult")?.remove();
+  $("agentResultFocus")?.classList.add("hidden");
   if (key === "resume") {
     const card = document.querySelector(`[data-resume-id="${id}"]`);
     if (!card) return toast("结果简历不存在或已归档");
@@ -2566,25 +2567,22 @@ async function focusAgentResultFromQuery() {
   }
   const lookup = ContextualAgent.resultLookupState(id, response);
   if (lookup.status !== "located") return renderAgentResultLookup(key, id, lookup);
-  if (key === "profile") {
-    const target = $("careerProfileSelect")?.closest(".theme-block") || $("careerProfileSelect");
-    target?.classList.add("is-result-highlight");
-    target?.setAttribute("data-profile-id", String(id));
-    $("careerProfileSelect")?.focus({ preventScroll: true });
-    toast(`已定位求职目标 #${id}`);
-    return;
-  }
   renderAgentResultLookup(key, id, lookup);
 }
 
 function renderAgentResultLookup(key, id, lookup) {
   const labels = { action: "行动", profile: "求职目标", report: "求职报告" };
-  const host = key === "profile" ? $("nextActions") : $("agentActiveActions");
+  const host = key === "profile" ? $("agentResultFocus") : $("agentActiveActions");
   if (!host) return;
+  host.classList.remove("hidden");
   if (lookup.status === "located") {
     const entity = lookup.entity || {};
-    host.insertAdjacentHTML("afterbegin", `
-      <div class="command-row is-result-highlight" id="focusedAgentResult" tabindex="-1"><span><b>${escapeHtml(entity.title || labels[key])}</b><small>已验证 ${escapeHtml(labels[key])} #${id}</small></span></div>`);
+    if (key === "profile") {
+      host.innerHTML = ContextualAgent.profileResultHtml(lookup.entity);
+    } else {
+      host.insertAdjacentHTML("afterbegin", `
+        <div class="command-row is-result-highlight" id="focusedAgentResult" tabindex="-1"><span><b>${escapeHtml(entity.title || labels[key])}</b><small>已验证 ${escapeHtml(labels[key])} #${id}</small></span></div>`);
+    }
   } else {
     const message = lookup.status === "missing" ? "结果不存在或已失效" : "结果暂时无法读取";
     host.insertAdjacentHTML("afterbegin", `

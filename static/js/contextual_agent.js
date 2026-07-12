@@ -220,6 +220,28 @@
       : { status: "missing", retry: false, entity: null };
   }
 
+  function profileResultHtml(profile) {
+    const id = positiveId(profile?.id);
+    if (!id) return "";
+    const targetRole = typeof profile.target_role === "string" && profile.target_role.trim()
+      ? profile.target_role.trim()
+      : "未设置";
+    const cities = Array.isArray(profile.cities)
+      ? profile.cities.map((city) => String(city).trim()).filter(Boolean).join("、")
+      : "";
+    const salary = profile.salary && typeof profile.salary === "object" && !Array.isArray(profile.salary)
+      ? [profile.salary.min, profile.salary.max].filter((value) => value !== undefined && value !== null && value !== "").join(" - ")
+      : "";
+    return `<article class="profile-result-summary is-result-highlight" id="focusedAgentResult" data-profile-id="${id}" tabindex="-1">
+      <header><b>求职画像 #${id}</b><small>已验证 Agent 结果</small></header>
+      <dl>
+        <div><dt>目标岗位</dt><dd>${escapeHtml(targetRole)}</dd></div>
+        <div><dt>目标城市</dt><dd>${escapeHtml(cities || "未设置")}</dd></div>
+        <div><dt>期望薪资</dt><dd>${escapeHtml(salary || "未设置")}</dd></div>
+      </dl>
+    </article>`;
+  }
+
   return {
     chatPayload,
     createContextStore,
@@ -235,5 +257,6 @@
     hydrationFailureKind,
     isActiveOpportunity,
     resultLookupState,
+    profileResultHtml,
   };
 });

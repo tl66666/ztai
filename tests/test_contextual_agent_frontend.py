@@ -30,6 +30,18 @@ class ContextualAgentFrontendTests(unittest.TestCase):
         self.assertIn('id="agentCommandOpportunities"', html)
         self.assertIn('id="openAgentWorkspace"', html)
 
+    def test_profile_result_uses_a_dedicated_entity_summary_not_the_preset_select(self):
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        result_flow = script[
+            script.index("async function focusAgentResultFromQuery"):
+            script.index("async function refreshAfterAgentAction")
+        ]
+
+        self.assertIn('id="agentResultFocus"', html)
+        self.assertIn("ContextualAgent.profileResultHtml(lookup.entity)", result_flow)
+        self.assertNotIn('$("careerProfileSelect")', result_flow)
+
     def test_context_chip_remove_control_meets_touch_target(self):
         css = (ROOT / "static" / "css" / "style.css").read_text(encoding="utf-8")
 

@@ -728,6 +728,19 @@ h3 { font-size: 19px; margin-bottom: 0; }
   gap: 10px;
   margin-top: 16px;
 }
+.agent-result-focus { margin-top: 16px; }
+.profile-result-summary {
+  padding: 16px;
+  border: 1px solid rgba(37,99,235,0.24);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.72);
+}
+.profile-result-summary header { display: flex; justify-content: space-between; gap: 12px; }
+.profile-result-summary header small { color: var(--muted); }
+.profile-result-summary dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0 0; }
+.profile-result-summary dl div { min-width: 0; }
+.profile-result-summary dt { color: var(--muted); font-size: 0.78rem; }
+.profile-result-summary dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 .next-action-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

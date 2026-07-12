@@ -133,4 +133,21 @@ assert.deepEqual(
   { status: "unavailable", retry: true, entity: null },
 );
 
+const profileResult = AgentUI.profileResultHtml({
+  id: 7,
+  target_role: '<img src=x onerror="owned()">Backend Engineer',
+  cities: ["Shanghai", "<script>owned()</script>"],
+  salary: { min: 20, max: 30 },
+});
+assert.ok(profileResult.includes('id="focusedAgentResult"'));
+assert.ok(profileResult.includes('data-profile-id="7"'));
+assert.ok(profileResult.includes("Backend Engineer"));
+assert.ok(profileResult.includes("Shanghai"));
+assert.ok(profileResult.includes("20"));
+assert.ok(profileResult.includes("30"));
+assert.ok(profileResult.includes("&lt;img"));
+assert.ok(profileResult.includes("&lt;script&gt;"));
+assert.ok(!profileResult.includes("<img"));
+assert.ok(!profileResult.includes("<script>"));
+
 console.log("contextual agent behavior tests passed");
