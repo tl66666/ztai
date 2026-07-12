@@ -53,11 +53,18 @@
     return payload;
   }
 
+  function routeLeavesFlow(previous, next, page, module) {
+    const wasInFlow = previous?.page === page && previous?.module === module;
+    const remainsInFlow = next?.page === page && next?.module === module;
+    return wasInFlow && !remainsInFlow;
+  }
+
   return {
     applicationPayloadForJob,
     buildApplicationHandoff,
     buildInterviewHandoff,
     buildInterviewStartPayload,
     buildMatchPayload,
+    routeLeavesFlow,
   };
 }));

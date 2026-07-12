@@ -22,6 +22,7 @@ const state = {
   applicationStatuses: [],
   currentOpportunityId: null,
   currentOpportunityWorkspace: null,
+  opportunityLoadGeneration: 0,
   pendingApplicationHandoff: null,
   interviewOpportunityHandoff: null,
   matchOpportunityId: null,
@@ -44,9 +45,12 @@ const {
   buildInterviewHandoff,
   buildInterviewStartPayload,
   buildMatchPayload,
+  routeLeavesFlow,
 } = OpportunityHandoffs;
 const opportunityHistory = OpportunityHistory.createOpportunityHistoryController({
   window,
+  defaultModule: defaultModuleForPage,
+  onRouteTransition: handleRouteTransition,
   showPage: (page) => {
     if ($(`page-${page}`)) renderPage(page);
   },
@@ -111,7 +115,6 @@ function renderPage(page) {
     agent: "AI 教练",
   };
   $("pageTitle").textContent = titles[page] || "JobHunter AI";
-  activateCurrentPageDefaultModule(page);
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -426,19 +429,7 @@ function renderModule(page, module) {
   if (button) filterModules(page, module, button);
 }
 
-function activeRoute() {
-  const page = document.querySelector(".page.active")?.id.replace("page-", "") || "home";
-  const module = document.querySelector(`[data-filter-page="${page}"] [data-section-filter].active`)
-    ?.dataset.sectionFilter.split(":")[1] || null;
-  return { page, module };
-}
-
 function navigateToRoute(page, module = null, options = {}) {
-  const current = activeRoute();
-  if (state.pendingApplicationHandoff && current.page === "tracker" && current.module === "add"
-      && (page !== "tracker" || module !== "add")) clearApplicationHandoff();
-  if (state.matchOpportunityId && current.page === "resume" && current.module === "jd"
-      && (page !== "resume" || module !== "jd")) clearMatchOpportunityLink();
   return opportunityHistory.navigate(page, { module, historyMode: options.historyMode || "push" });
 }
 
@@ -446,12 +437,21 @@ function jumpToModule(page, module) {
   return navigateToRoute(page, module);
 }
 
-function activateCurrentPageDefaultModule(page) {
-  const activeButton = document.querySelector(`[data-filter-page="${page}"] [data-section-filter].active`)
-    || document.querySelector(`[data-filter-page="${page}"] [data-section-filter]`);
-  if (!activeButton) return;
-  const [, module] = activeButton.dataset.sectionFilter.split(":");
-  filterModules(page, module, activeButton);
+function defaultModuleForPage(page) {
+  return document.querySelector(`[data-filter-page="${page}"] [data-section-filter]`)
+    ?.dataset.sectionFilter.split(":")[1] || null;
+}
+
+function handleRouteTransition(previous, next) {
+  if (state.pendingApplicationHandoff && routeLeavesFlow(previous, next, "tracker", "add")) {
+    clearApplicationHandoff();
+  }
+  if (state.matchOpportunityId && routeLeavesFlow(previous, next, "resume", "jd")) {
+    clearMatchOpportunityLink();
+  }
+  if (state.interviewOpportunityHandoff && routeLeavesFlow(previous, next, "interview", "mock")) {
+    state.interviewOpportunityHandoff = null;
+  }
 }
 
 function renderModelOptions(providerId, selectedModel = "") {
@@ -1777,10 +1777,6 @@ async function loadApplications() {
 }
 
 async function openOpportunityWorkspace(id, options = {}) {
-  const current = activeRoute();
-  if (state.pendingApplicationHandoff && current.page === "tracker" && current.module === "add") {
-    clearApplicationHandoff();
-  }
   if (options.updateUrl !== false && document.activeElement instanceof HTMLElement) {
     state.opportunityOpener = document.activeElement;
   }
@@ -1788,9 +1784,13 @@ async function openOpportunityWorkspace(id, options = {}) {
   return opportunityHistory.open(id, { historyMode });
 }
 
-async function loadOpportunityWorkspace(id) {
+async function loadOpportunityWorkspace(id, request = {}) {
   const opportunityId = Number(id);
   if (!Number.isInteger(opportunityId) || opportunityId <= 0) return false;
+  const generation = ++state.opportunityLoadGeneration;
+  const isCurrent = () => generation === state.opportunityLoadGeneration
+    && state.currentOpportunityId === opportunityId
+    && (!request.isCurrent || request.isCurrent());
   state.currentOpportunityId = opportunityId;
   const boardButton = document.querySelector('[data-section-filter="tracker:board"]');
   if (boardButton) filterModules("tracker", "board", boardButton);
@@ -1803,11 +1803,12 @@ async function loadOpportunityWorkspace(id) {
   try {
     workspace = await api(`/opportunities/${opportunityId}/workspace`);
   } catch (_error) {
+    if (!isCurrent()) return { status: "superseded" };
     showOpportunityWorkspaceError(opportunityId, "网络连接失败，请检查连接后重试。");
     return { status: "retryable" };
   }
-  if (!workspace.success || state.currentOpportunityId !== opportunityId) {
-    if (state.currentOpportunityId !== opportunityId) return undefined;
+  if (!isCurrent()) return { status: "superseded" };
+  if (!workspace.success) {
     if ([404, 410].includes(workspace.http_status)) return { status: "stale" };
     if (workspace.http_status === 403) return { status: "forbidden" };
     showOpportunityWorkspaceError(opportunityId, "机会详情暂时无法加载，请稍后重试。");
@@ -1837,6 +1838,7 @@ function retryOpportunityWorkspace(opportunityId) {
 
 function resetOpportunityWorkspaceView(context = {}) {
   const wasOpen = state.currentOpportunityId !== null || !$("opportunityWorkspace").classList.contains("hidden");
+  state.opportunityLoadGeneration += 1;
   state.currentOpportunityId = null;
   state.currentOpportunityWorkspace = null;
   $("opportunityWorkspace").classList.add("hidden");

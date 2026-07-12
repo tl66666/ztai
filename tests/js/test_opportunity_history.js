@@ -76,6 +76,25 @@ async function main() {
   await controller.close({ historyMode: "push", restoreFocus: true });
   assert.equal(state.closes.at(-1).restoreFocus, true);
   assert.equal(new URL(browser.location.href).searchParams.has("opportunity"), false);
+
+  const pageOnlyBrowser = new FakeWindow("http://localhost/?page=resume");
+  const pageOnlyState = { page: null, module: "jd" };
+  const pageOnlyController = createOpportunityHistoryController({
+    window: pageOnlyBrowser,
+    defaultModule: (page) => ({ resume: "input", interview: "mock", tracker: "add" })[page] || null,
+    showPage: (page) => { pageOnlyState.page = page; },
+    showModule: (_page, module) => { pageOnlyState.module = module; },
+    loadWorkspace: async () => ({ status: "ok" }),
+    closeWorkspace: () => {},
+  });
+  pageOnlyController.bind();
+  await pageOnlyController.sync();
+  assert.deepEqual([pageOnlyState.page, pageOnlyState.module], ["resume", "input"], "page-only refresh must render the default module");
+  await pageOnlyController.navigate("resume", { module: "jd" });
+  await pageOnlyController.navigate("interview");
+  assert.equal(pageOnlyState.module, "mock", "page-only navigation must not retain the previous in-memory module");
+  await pageOnlyBrowser.back();
+  assert.deepEqual([pageOnlyState.page, pageOnlyState.module], ["resume", "jd"], "Back must restore the URL module");
   console.log("opportunity history quality behavior: ok");
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

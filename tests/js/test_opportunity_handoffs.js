@@ -5,6 +5,7 @@ const {
   buildInterviewHandoff,
   buildInterviewStartPayload,
   buildMatchPayload,
+  routeLeavesFlow,
 } = require("../../static/js/opportunity_handoffs.js");
 
 const interview = buildInterviewHandoff({
@@ -29,4 +30,26 @@ assert.deepEqual(
   { resume_id: 101, job_title: "Role A", application_id: 11 },
 );
 assert.deepEqual(buildMatchPayload({ resume_id: 101 }, null), { resume_id: 101 });
+
+assert.equal(typeof routeLeavesFlow, "function", "route cleanup must use a shared flow-boundary helper");
+assert.equal(
+  routeLeavesFlow({ page: "tracker", module: "add" }, { page: "resume", module: "input" }, "tracker", "add"),
+  true,
+  "Back or Forward away from the application flow must clear its whole handoff",
+);
+assert.equal(
+  routeLeavesFlow({ page: "tracker", module: "board" }, { page: "tracker", module: "add" }, "tracker", "add"),
+  false,
+  "entering a flow must preserve the handoff prepared immediately before navigation",
+);
+assert.equal(
+  routeLeavesFlow({ page: "interview", module: "mock" }, { page: "interview", module: "mock" }, "interview", "mock"),
+  false,
+  "re-activating the current operation must not clear it",
+);
+assert.equal(
+  routeLeavesFlow({ page: "interview", module: "mock" }, { page: "interview", module: "practice" }, "interview", "mock"),
+  true,
+  "leaving the interview module must clear its handoff",
+);
 console.log("opportunity handoff behavior: ok");

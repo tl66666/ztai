@@ -22,6 +22,21 @@
   function createOpportunityHistoryController(options) {
     const windowObject = options.window;
     let bound = false;
+    let activeRoute = null;
+    let activationGeneration = 0;
+
+    function resolveRoute(route) {
+      const resolved = {
+        page: route.page || null,
+        module: route.module || null,
+        opportunityId: route.opportunityId || null,
+        hasOpportunity: Boolean(route.hasOpportunity),
+      };
+      if (resolved.page && !resolved.module && resolved.opportunityId === null) {
+        resolved.module = options.defaultModule?.(resolved.page) || null;
+      }
+      return resolved;
+    }
 
     function routeUrl(page, settings = {}) {
       const url = new URL(windowObject.location.href);
@@ -41,20 +56,38 @@
       windowObject.history.replaceState({}, "", url);
     }
 
-    async function activate(route) {
+    function writeRoute(url, historyMode) {
+      if (new URL(windowObject.location.href).href === url.href) return;
+      if (historyMode === "push") windowObject.history.pushState({}, "", url);
+      else if (historyMode === "replace") windowObject.history.replaceState({}, "", url);
+    }
+
+    async function activate(rawRoute, settings = {}) {
+      const route = resolveRoute(rawRoute);
+      const previous = activeRoute;
+      const generation = ++activationGeneration;
+      const request = {
+        generation,
+        isCurrent: () => generation === activationGeneration,
+        routeDriven: true,
+      };
+      if (previous) options.onRouteTransition?.(previous, route);
+      activeRoute = route;
       if (route.page) options.showPage(route.page);
       if (route.page && route.module) options.showModule?.(route.page, route.module);
       if (route.page === "tracker" && route.opportunityId !== null) {
         let result;
         try {
-          result = await options.loadWorkspace(route.opportunityId, { routeDriven: true });
+          result = await options.loadWorkspace(route.opportunityId, request);
         } catch (error) {
-          result = { status: "retryable", error };
+          result = request.isCurrent() ? { status: "retryable", error } : { status: "superseded" };
         }
+        if (!request.isCurrent()) return { status: "superseded" };
         const status = result === true ? "ok" : result === false ? "stale" : result?.status;
         if (status === "stale" || status === "forbidden") {
           options.closeWorkspace({ routeDriven: true, page: route.page });
           removeOpportunityFromUrl();
+          activeRoute = { ...route, opportunityId: null, hasOpportunity: false };
           if (status === "forbidden") options.notifyForbidden?.(result);
           else options.notifyStale?.(result);
         } else if (status === "retryable") {
@@ -62,7 +95,7 @@
         }
         return result;
       }
-      options.closeWorkspace({ routeDriven: true, page: route.page });
+      options.closeWorkspace({ routeDriven: true, page: route.page, ...(settings.closeContext || {}) });
       if (route.hasOpportunity) removeOpportunityFromUrl();
       return { status: "ok" };
     }
@@ -80,16 +113,14 @@
       }
       const historyMode = settings.historyMode || "push";
       const url = routeUrl("tracker", { opportunityId: id });
-      if (historyMode === "push") windowObject.history.pushState({}, "", url);
-      else if (historyMode === "replace") windowObject.history.replaceState({}, "", url);
+      writeRoute(url, historyMode);
       return activate({ page: "tracker", module: null, opportunityId: id, hasOpportunity: true });
     }
 
     async function navigate(page, settings = {}) {
       const historyMode = settings.historyMode || "push";
       const url = routeUrl(page, settings);
-      if (historyMode === "push") windowObject.history.pushState({}, "", url);
-      else if (historyMode === "replace") windowObject.history.replaceState({}, "", url);
+      writeRoute(url, historyMode);
       return activate({
         page, module: settings.module || null,
         opportunityId: settings.opportunityId || null,
@@ -103,16 +134,21 @@
     }
 
     async function close(settings = {}) {
-      options.closeWorkspace({
-        routeDriven: !settings.restoreFocus,
-        restoreFocus: Boolean(settings.restoreFocus),
-        page: settings.page || "tracker",
-      });
       const historyMode = settings.historyMode || "replace";
-      if (historyMode === "none") return;
       const url = routeUrl(settings.page || "tracker", { module: settings.module || "board" });
-      if (historyMode === "push") windowObject.history.pushState({}, "", url);
-      else windowObject.history.replaceState({}, "", url);
+      if (historyMode !== "none") writeRoute(url, historyMode);
+      return activate({
+        page: settings.page || "tracker",
+        module: settings.module || "board",
+        opportunityId: null,
+        hasOpportunity: false,
+      }, {
+        closeContext: {
+          routeDriven: !settings.restoreFocus,
+          restoreFocus: Boolean(settings.restoreFocus),
+          page: settings.page || "tracker",
+        },
+      });
     }
 
     function bind() {

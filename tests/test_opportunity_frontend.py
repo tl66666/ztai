@@ -84,6 +84,13 @@ class OpportunityFrontendContractTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_opportunity_loads_are_latest_request_wins_behaviorally(self):
+        result = subprocess.run(
+            ["node", str(ROOT / "tests" / "js" / "test_opportunity_load_generation.js")],
+            cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_quality_handoffs_errors_and_focus_are_wired(self):
         self.assertIn('id="applicationHandoffNotice"', self.html)
         self.assertIn('id="clearApplicationHandoff"', self.html)
@@ -95,7 +102,8 @@ class OpportunityFrontendContractTests(unittest.TestCase):
             "interviewOpportunityHandoff", "pendingApplicationHandoff", "matchOpportunityId",
             "buildInterviewStartPayload", "applicationPayloadForJob", "buildMatchPayload",
             "retryOpportunityWorkspace", "opportunityWorkspaceError", "opportunityOpener",
-            "focus({ preventScroll: true })", "navigateToRoute",
+            "focus({ preventScroll: true })", "navigateToRoute", "onRouteTransition",
+            "routeLeavesFlow", "opportunityLoadGeneration", "request.isCurrent",
         ):
             self.assertIn(token, self.script)
         self.assertNotIn("application_id: state.currentOpportunityId", self.script)
