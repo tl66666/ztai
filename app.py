@@ -10,6 +10,8 @@ import sqlite3
 import subprocess
 import tempfile
 import uuid
+import warnings
+from urllib.parse import urlsplit
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
@@ -32,7 +34,16 @@ EXPORT_FOLDER = os.path.join(BASE_DIR, "exports")
 ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "txt", "png", "jpg", "jpeg"}
 
 app = Flask(__name__, static_folder="static")
-CORS(app)
+LOCAL_PORT = int(os.environ.get("JOBHUNTER_PORT", "5000"))
+LOOPBACK_ORIGINS = {
+    f"http://localhost:{LOCAL_PORT}",
+    f"http://127.0.0.1:{LOCAL_PORT}",
+}
+CORS(
+    app,
+    resources={r"/api/*": {"origins": sorted(LOOPBACK_ORIGINS)}},
+    supports_credentials=False,
+)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -1816,21 +1827,39 @@ def agent_action_error(exc: Exception):
     if isinstance(exc, ActionProposalError):
         status = exc.http_status
         code = exc.code
+        if status >= 500:
+            app.logger.exception("Agent action failed with code %s", code)
+            message = "The action could not be completed safely."
+        else:
+            message = str(exc)
     elif isinstance(exc, PermissionError):
         status, code = 403, "forbidden"
+        message = "The proposal is not available to the local user."
     elif isinstance(exc, LookupError):
         status, code = 404, "not_found"
-    else:
+        message = "The proposal was not found."
+    elif isinstance(exc, ValueError):
         status, code = 400, "invalid_request"
-    return jsonify({"success": False, "error": {"code": code, "message": str(exc)}}), status
+        message = str(exc)
+    else:
+        app.logger.exception("Unexpected agent action API failure", exc_info=exc)
+        status, code = 500, "internal_error"
+        message = "The action could not be completed safely."
+    return jsonify({"success": False, "error": {"code": code, "message": message}}), status
 
 
 def agent_action_user(data=None):
-    value = request.args.get("user_id", AGENT_USER_ID) if data is None else data.get("user_id", AGENT_USER_ID)
-    user_id = require_agent_user(value)
-    if user_id is None:
-        raise PermissionError("operation is restricted to the local user")
-    return user_id
+    from utils.agent_runtime.actions import ActionProposalError
+
+    if "user_id" in request.args or (isinstance(data, dict) and "user_id" in data):
+        raise ActionProposalError(
+            "user_id_not_allowed", "user_id is controlled by the server", 400
+        )
+    return AGENT_USER_ID
+
+
+def public_agent_action(action):
+    return get_agent_action_service().public(action)
 
 
 @app.route("/api/agent/actions", methods=["GET"])
@@ -1840,7 +1869,10 @@ def list_agent_actions():
         status = request.args.get("status", "pending")
         if status != "pending":
             raise ValueError("only pending actions can be listed")
-        return jsonify({"success": True, "actions": get_agent_action_service().list_pending(user_id)})
+        actions = get_agent_action_service().list_pending(user_id)
+        return jsonify(
+            {"success": True, "actions": [public_agent_action(item) for item in actions]}
+        )
     except Exception as exc:
         return agent_action_error(exc)
 
@@ -1850,28 +1882,43 @@ def get_agent_action(proposal_id):
     try:
         user_id = agent_action_user()
         action = get_agent_action_service().get(user_id, proposal_id)
-        return jsonify({"success": True, "action": action})
+        return jsonify({"success": True, "action": public_agent_action(action)})
     except Exception as exc:
         return agent_action_error(exc)
 
 
 def agent_action_json_body():
+    if not request.is_json:
+        raise ValueError("Content-Type must be application/json")
     data = request.get_json(silent=True)
-    if data is None and not request.data:
-        return {}
     if not isinstance(data, dict):
         raise ValueError("JSON body must be an object")
     return data
 
 
+def require_local_action_origin():
+    from utils.agent_runtime.actions import ActionProposalError
+
+    supplied = request.headers.get("Origin")
+    if not supplied:
+        referer = request.headers.get("Referer")
+        if referer:
+            parsed = urlsplit(referer)
+            supplied = f"{parsed.scheme}://{parsed.netloc}"
+    if supplied and supplied not in LOOPBACK_ORIGINS:
+        raise ActionProposalError(
+            "foreign_origin", "state changes require a local UI origin", 403
+        )
+
+
 @app.route("/api/agent/actions/<int:proposal_id>/edit", methods=["POST"])
 def edit_agent_action(proposal_id):
     try:
+        require_local_action_origin()
         data = agent_action_json_body()
         user_id = agent_action_user(data)
-        changes = {key: value for key, value in data.items() if key != "user_id"}
-        action = get_agent_action_service().edit(user_id, proposal_id, changes)
-        return jsonify({"success": True, "action": action})
+        action = get_agent_action_service().edit(user_id, proposal_id, data)
+        return jsonify({"success": True, "action": public_agent_action(action)})
     except Exception as exc:
         return agent_action_error(exc)
 
@@ -1879,12 +1926,19 @@ def edit_agent_action(proposal_id):
 @app.route("/api/agent/actions/<int:proposal_id>/confirm", methods=["POST"])
 def confirm_agent_action(proposal_id):
     try:
+        require_local_action_origin()
         data = agent_action_json_body()
         user_id = agent_action_user(data)
-        if set(data) - {"user_id"}:
+        if data:
             raise ValueError("confirm does not accept changes")
         action = get_agent_action_service().confirm(user_id, proposal_id)
-        return jsonify({"success": True, "action": action, "result": action["result"]})
+        return jsonify(
+            {
+                "success": True,
+                "action": public_agent_action(action),
+                "result": action["result"],
+            }
+        )
     except Exception as exc:
         return agent_action_error(exc)
 
@@ -1892,12 +1946,13 @@ def confirm_agent_action(proposal_id):
 @app.route("/api/agent/actions/<int:proposal_id>/cancel", methods=["POST"])
 def cancel_agent_action(proposal_id):
     try:
+        require_local_action_origin()
         data = agent_action_json_body()
         user_id = agent_action_user(data)
-        if set(data) - {"user_id"}:
+        if data:
             raise ValueError("cancel does not accept changes")
         action = get_agent_action_service().cancel(user_id, proposal_id)
-        return jsonify({"success": True, "action": action})
+        return jsonify({"success": True, "action": public_agent_action(action)})
     except Exception as exc:
         return agent_action_error(exc)
 
@@ -2651,6 +2706,12 @@ def resume_templates():
 
 if __name__ == "__main__":
     init_db()
-    print("JobHunter AI running at http://localhost:5000")
+    host = os.environ.get("JOBHUNTER_HOST", "127.0.0.1")
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        warnings.warn(
+            "JOBHUNTER_HOST exposes a single-user local application; use only on a trusted network.",
+            RuntimeWarning,
+        )
+    print(f"JobHunter AI running at http://{host}:{LOCAL_PORT}")
     print("Providers: GLM / DeepSeek / Kimi, with local fallback.")
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=True, host=host, port=LOCAL_PORT)

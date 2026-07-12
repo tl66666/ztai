@@ -5,6 +5,7 @@ import math
 import os
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -75,6 +76,7 @@ class ActionProposalService:
         db_path: str | os.PathLike[str],
         career_service: CareerService | None = None,
         local_user_id: int = 1,
+        claim_failpoint: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.db_path = os.fspath(db_path)
         self.local_user_id = int(local_user_id)
@@ -82,6 +84,7 @@ class ActionProposalService:
         self.career_service = career_service or CareerService(
             self.db_path, local_user_id=self.local_user_id
         )
+        self._claim_failpoint = claim_failpoint
 
     def propose(
         self,
@@ -201,7 +204,7 @@ class ActionProposalService:
                 return proposal
             receipt = self._receipt_result(proposal)
             if receipt is not None:
-                self._finalize_completed(proposal_id, receipt)
+                self._finalize_or_uncertain(proposal_id, receipt)
                 return self.get(user_id, proposal_id)
             if proposal["status"] == "pending":
                 claimed = self._claim_pending(proposal_id)
@@ -213,8 +216,10 @@ class ActionProposalService:
                 )
             else:
                 raise self._state_error(proposal["status"])
-            if claimed != 1:
+            if claimed is None:
                 return self._resolve_competing_confirm(user_id, proposal_id)
+
+            proposal = claimed
 
             source = self._receipt_source(proposal)
             try:
@@ -224,14 +229,14 @@ class ActionProposalService:
             except Exception as exc:
                 receipt = self._receipt_result(proposal)
                 if receipt is not None:
-                    self._finalize_completed(proposal_id, receipt)
+                    self._finalize_or_uncertain(proposal_id, receipt)
                     return self.get(user_id, proposal_id)
                 self._mark_failed(proposal_id)
                 raise ActionProposalError(
-                    "execution_failed", f"action execution failed: {exc}", 422
+                    "execution_failed", "action execution failed", 500
                 ) from exc
 
-            self._finalize_completed(proposal_id, result)
+            self._finalize_or_uncertain(proposal_id, result)
             return self.get(user_id, proposal_id)
 
     def cancel(self, user_id: int, proposal_id: int) -> dict[str, Any]:
@@ -537,10 +542,17 @@ class ActionProposalService:
         with _LOCKS_GUARD:
             return _PROPOSAL_LOCKS.setdefault(key, threading.Lock())
 
-    def _claim_pending(self, proposal_id: int) -> int:
+    def _claim_pending(self, proposal_id: int) -> dict[str, Any] | None:
         executing_at = self._iso(self._now())
         with connect(self.db_path) as conn:
-            return conn.execute(
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM agent_action_proposals WHERE id = ? AND user_id = ?",
+                (proposal_id, self.local_user_id),
+            ).fetchone()
+            if row is None or row["status"] != "pending":
+                return None
+            updated = conn.execute(
                 """
                 UPDATE agent_action_proposals
                 SET status = 'executing', reviewed_by = 'local_user',
@@ -549,14 +561,38 @@ class ActionProposalService:
                 """,
                 (executing_at, executing_at, proposal_id, self.local_user_id),
             ).rowcount
+            if updated != 1:
+                return None
+            claimed = dict(row)
+            claimed.update(
+                status="executing",
+                reviewed_by="local_user",
+                reviewed_at=executing_at,
+                executing_at=executing_at,
+            )
+            proposal = self._from_row(claimed)
+            if self._claim_failpoint is not None:
+                self._claim_failpoint(proposal)
+            return proposal
 
     def _claim_stale_execution(
         self, proposal_id: int, previous_executing_at: str | None
-    ) -> int:
+    ) -> dict[str, Any] | None:
         executing_at = self._iso(self._now())
         with connect(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM agent_action_proposals WHERE id = ? AND user_id = ?",
+                (proposal_id, self.local_user_id),
+            ).fetchone()
+            if (
+                row is None
+                or row["status"] != "executing"
+                or row["executing_at"] != previous_executing_at
+            ):
+                return None
             if previous_executing_at is None:
-                return conn.execute(
+                updated = conn.execute(
                     """
                     UPDATE agent_action_proposals
                     SET executing_at = ?, updated_at = CURRENT_TIMESTAMP
@@ -565,20 +601,29 @@ class ActionProposalService:
                     """,
                     (executing_at, proposal_id, self.local_user_id),
                 ).rowcount
-            return conn.execute(
-                """
-                UPDATE agent_action_proposals
-                SET executing_at = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND user_id = ? AND status = 'executing'
-                  AND executing_at = ?
-                """,
-                (
-                    executing_at,
-                    proposal_id,
-                    self.local_user_id,
-                    previous_executing_at,
-                ),
-            ).rowcount
+            else:
+                updated = conn.execute(
+                    """
+                    UPDATE agent_action_proposals
+                    SET executing_at = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND user_id = ? AND status = 'executing'
+                      AND executing_at = ?
+                    """,
+                    (
+                        executing_at,
+                        proposal_id,
+                        self.local_user_id,
+                        previous_executing_at,
+                    ),
+                ).rowcount
+            if updated != 1:
+                return None
+            claimed = dict(row)
+            claimed["executing_at"] = executing_at
+            proposal = self._from_row(claimed)
+            if self._claim_failpoint is not None:
+                self._claim_failpoint(proposal)
+            return proposal
 
     def _resolve_competing_confirm(
         self, user_id: int, proposal_id: int
@@ -588,7 +633,7 @@ class ActionProposalService:
             return proposal
         receipt = self._receipt_result(proposal)
         if receipt is not None:
-            self._finalize_completed(proposal_id, receipt)
+            self._finalize_or_uncertain(proposal_id, receipt)
             return self.get(user_id, proposal_id)
         raise self._state_error(proposal["status"])
 
@@ -669,6 +714,18 @@ class ActionProposalService:
                 """,
                 (self._json(result), proposal_id, self.local_user_id),
             )
+
+    def _finalize_or_uncertain(
+        self, proposal_id: int, result: dict[str, Any]
+    ) -> None:
+        try:
+            self._finalize_completed(proposal_id, result)
+        except Exception as exc:
+            raise ActionProposalError(
+                "execution_uncertain",
+                "action execution status is uncertain; retry confirmation",
+                500,
+            ) from exc
 
     def _mark_failed(self, proposal_id: int) -> None:
         with connect(self.db_path) as conn:
@@ -948,10 +1005,11 @@ class ActionProposalService:
     def _integer(value: Any, name: str) -> int:
         if isinstance(value, bool):
             raise ValueError(f"{name} must be an integer")
-        try:
-            return int(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{name} must be an integer") from exc
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())
+        raise ValueError(f"{name} must be an integer")
 
     def _normalize(self, value: Any) -> Any:
         if isinstance(value, dict):
@@ -977,6 +1035,75 @@ class ActionProposalService:
         result["arguments"] = json.loads(arguments_json)
         result["result"] = json.loads(result.pop("result_json")) if result.get("result_json") else None
         return result
+
+    def public(self, proposal: dict[str, Any]) -> dict[str, Any]:
+        arguments = proposal.get("arguments") or {}
+        editable = self._public_editable_values(proposal["action_type"], arguments)
+        target_ids: dict[str, int] = {}
+
+        def collect_targets(value: Any) -> None:
+            if not isinstance(value, dict):
+                return
+            for key, item in value.items():
+                if (
+                    key.endswith("_id")
+                    and isinstance(item, int)
+                    and not isinstance(item, bool)
+                ):
+                    target_ids[key] = item
+                elif isinstance(item, dict):
+                    collect_targets(item)
+
+        collect_targets(arguments)
+        fields = (
+            "id", "action_type", "preview", "status", "risk_level", "created_at",
+            "updated_at", "expires_at", "reviewed_at", "executing_at", "executed_at",
+            "completed_at", "cancelled_at", "expired_at", "failed_at", "error_code",
+        )
+        public = {field: proposal.get(field) for field in fields}
+        public["target_ids"] = target_ids
+        public["editable"] = editable
+        public["result"] = proposal.get("result")
+        return public
+
+    @staticmethod
+    def _public_editable_values(
+        action_type: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        safe_fields = {
+            "set_career_goal": {
+                "career_direction", "target_role", "cities", "salary", "experience"
+            },
+            "create_opportunity": {
+                "company", "job_title", "status", "city", "salary_min", "salary_max",
+                "priority", "channel", "source_url", "next_action_at", "interview_at",
+                "deadline_at",
+            },
+            "create_resume_version": {"metadata"},
+            "link_opportunity_resume": set(),
+            "create_interview_plan": {"title", "due_at"},
+            "create_action_item": {
+                "title", "type", "status", "priority", "due_date", "due_at"
+            },
+            "complete_action_item": set(),
+            "update_opportunity": set(),
+            "save_career_report": {
+                "report_type", "title", "period_start", "period_end", "status"
+            },
+        }[action_type]
+        if action_type == "update_opportunity":
+            return ActionProposalService._public_editable_values(
+                "create_opportunity", arguments.get("changes", {})
+            )
+        if action_type == "create_resume_version":
+            metadata = arguments.get("metadata") or {}
+            permitted = {
+                "version_label", "target_job_title", "status", "source_type", "title"
+            }
+            return {
+                "metadata": {key: metadata[key] for key in permitted if key in metadata}
+            }
+        return {key: arguments[key] for key in safe_fields if key in arguments}
 
     @staticmethod
     def _state_error(status: str) -> ActionProposalError:

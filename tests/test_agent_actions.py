@@ -72,6 +72,26 @@ class AgentActionServiceTests(unittest.TestCase):
                 {"opportunity_id": foreign_id, "changes": {"notes": "no"}},
             )
 
+    def test_integer_fields_never_truncate_or_coerce_non_integers(self):
+        invalid = [
+            ("create_action_item", {"title": "x", "priority": True}),
+            ("create_action_item", {"title": "x", "priority": 1.25}),
+            ("create_action_item", {"title": "x", "priority": "1.0"}),
+            ("create_opportunity", {"company": "A", "job_title": "B", "salary_min": False}),
+            ("create_opportunity", {"company": "A", "job_title": "B", "salary_min": 2.9}),
+            ("create_resume_version", {"resume_id": 1.0, "content": "x", "metadata": {}}),
+        ]
+        for action_type, arguments in invalid:
+            with self.subTest(action_type=action_type, arguments=arguments):
+                with self.assertRaises(ValueError):
+                    self.propose(action_type, arguments)
+
+        accepted = self.propose(
+            "create_opportunity",
+            {"company": "A", "job_title": "B", "salary_min": "12"},
+        )
+        self.assertEqual(accepted["arguments"]["salary_min"], 12)
+
     def test_rejects_invalid_nested_values_before_persisting(self):
         invalid_cases = [
             ("create_action_item", {"title": "Task", "status": "invented"}),
@@ -742,8 +762,9 @@ class AgentActionServiceTests(unittest.TestCase):
             side_effect=sqlite3.OperationalError("simulated finalizer crash"),
             create=True,
         ):
-            with self.assertRaisesRegex(sqlite3.OperationalError, "finalizer crash"):
+            with self.assertRaises(self.error_type) as raised:
                 self.service.confirm(1, proposal["id"])
+        self.assertEqual(raised.exception.code, "execution_uncertain")
 
         with connect(self.db_path) as conn:
             state_after_crash = conn.execute(
@@ -775,6 +796,72 @@ class AgentActionServiceTests(unittest.TestCase):
         receipt = json.loads(receipts[0]["payload_json"])["_agent_receipt"]
         self.assertEqual(receipt.pop("action_type"), "create_action_item")
         self.assertEqual(receipt, recovered["result"])
+
+    def test_edit_and_confirm_use_one_atomic_argument_snapshot(self):
+        from utils.agent_runtime.actions import ActionProposalService
+
+        for claim_wins in (False, True):
+            with self.subTest(claim_wins=claim_wins):
+                proposal = self.propose("create_action_item", {"title": "before"})
+                claimed = threading.Event()
+                edit_started = threading.Event()
+                release = threading.Event()
+
+                def failpoint(_proposal):
+                    claimed.set()
+                    release.wait(timeout=5)
+
+                confirming = ActionProposalService(
+                    self.db_path,
+                    local_user_id=1,
+                    claim_failpoint=failpoint if claim_wins else None,
+                )
+                editing = ActionProposalService(self.db_path, local_user_id=1)
+                outcomes = {}
+
+                def confirm():
+                    outcomes["confirm"] = confirming.confirm(1, proposal["id"])
+
+                def edit():
+                    edit_started.set()
+                    try:
+                        outcomes["edit"] = editing.edit(
+                            1, proposal["id"], {"title": "after"}
+                        )
+                    except Exception as exc:
+                        outcomes["edit_error"] = exc
+
+                if claim_wins:
+                    confirm_thread = threading.Thread(target=confirm)
+                    confirm_thread.start()
+                    self.assertTrue(claimed.wait(timeout=5))
+                    edit_thread = threading.Thread(target=edit)
+                    edit_thread.start()
+                    self.assertTrue(edit_started.wait(timeout=5))
+                    release.set()
+                else:
+                    edit_thread = threading.Thread(target=edit)
+                    edit_thread.start()
+                    edit_thread.join(timeout=5)
+                    confirm_thread = threading.Thread(target=confirm)
+                    confirm_thread.start()
+
+                confirm_thread.join(timeout=5)
+                edit_thread.join(timeout=5)
+                self.assertFalse(confirm_thread.is_alive())
+                self.assertFalse(edit_thread.is_alive())
+                stored = self.service.get(1, proposal["id"])
+                with connect(self.db_path) as conn:
+                    item = conn.execute(
+                        "SELECT title FROM action_items WHERE id = ?",
+                        (stored["result"]["id"],),
+                    ).fetchone()
+                if claim_wins:
+                    self.assertIsInstance(outcomes.get("edit_error"), self.error_type)
+                    self.assertEqual(item["title"], "before")
+                else:
+                    self.assertEqual(outcomes["edit"]["arguments"]["title"], "after")
+                    self.assertEqual(item["title"], "after")
 
     def test_fresh_executing_without_receipt_conflicts_and_stale_retries(self):
         proposal = self.propose(
@@ -977,7 +1064,7 @@ class AgentActionAPITests(unittest.TestCase):
         self.assertEqual(pending.status_code, 200)
         self.assertEqual(pending.get_json()["actions"][0]["id"], editable["id"])
         self.assertEqual(fetched.get_json()["action"]["id"], editable["id"])
-        self.assertEqual(edited.get_json()["action"]["arguments"]["title"], "Final")
+        self.assertEqual(edited.get_json()["action"]["editable"]["title"], "Final")
         self.assertEqual(confirmed.get_json()["action"]["status"], "completed")
         self.assertEqual(cancelled.get_json()["action"]["status"], "cancelled")
 
@@ -999,12 +1086,156 @@ class AgentActionAPITests(unittest.TestCase):
 
         self.assertEqual(non_object.status_code, 400)
         self.assertEqual(non_object.get_json()["error"]["code"], "invalid_request")
-        self.assertEqual(wrong_user.status_code, 403)
-        self.assertEqual(wrong_user.get_json()["error"]["code"], "forbidden")
+        self.assertEqual(wrong_user.status_code, 400)
+        self.assertEqual(wrong_user.get_json()["error"]["code"], "user_id_not_allowed")
         self.assertEqual(missing.status_code, 404)
         self.assertEqual(missing.get_json()["error"]["code"], "not_found")
         self.assertEqual(conflict.status_code, 409)
         self.assertEqual(conflict.get_json()["error"]["code"], "proposal_cancelled")
+
+    def test_action_api_uses_server_identity_and_cannot_read_foreign_proposal(self):
+        own = self.service.propose(1, "create_action_item", {"title": "Own"})
+        with connect(app_module.DB_PATH) as conn:
+            foreign_id = conn.execute(
+                """
+                INSERT INTO agent_action_proposals
+                    (user_id, action_type, payload_json, arguments_json, preview,
+                     status, risk_level, expires_at, idempotency_key)
+                VALUES (2, 'create_action_item', '{}', '{}', 'foreign',
+                        'pending', 'low', '2999-01-01T00:00:00+00:00', 'foreign-key')
+                """
+            ).lastrowid
+
+        query_spoof = self.client.get(
+            f"/api/agent/actions/{own['id']}?user_id=2"
+        )
+        body_spoof = self.client.post(
+            f"/api/agent/actions/{own['id']}/cancel", json={"user_id": 2}
+        )
+        for response in (query_spoof, body_spoof):
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(
+                response.get_json()["error"]["code"], "user_id_not_allowed"
+            )
+        foreign = self.client.get(f"/api/agent/actions/{foreign_id}")
+        self.assertEqual(foreign.status_code, 403)
+        self.assertEqual(foreign.get_json()["error"]["code"], "forbidden")
+
+    def test_public_action_dto_redacts_sensitive_arguments(self):
+        secret = "secret@example.test resume and JD evidence"
+        proposal = self.service.propose(
+            1,
+            "create_opportunity",
+            {
+                "company": "Acme",
+                "job_title": "Engineer",
+                "jd_text": secret,
+                "contact_info": secret,
+                "notes": secret,
+                "salary_min": 10,
+            },
+        )
+        payloads = [
+            self.client.get("/api/agent/actions").get_json(),
+            self.client.get(f"/api/agent/actions/{proposal['id']}").get_json(),
+            self.client.post(
+                f"/api/agent/actions/{proposal['id']}/edit",
+                json={"company": "Better"},
+            ).get_json(),
+        ]
+        cancellable = self.service.propose(
+            1, "create_action_item", {"title": "Cancel", "description": secret}
+        )
+        confirmable = self.service.propose(
+            1, "create_action_item", {"title": "Confirm", "description": secret}
+        )
+        payloads.extend(
+            [
+                self.client.post(
+                    f"/api/agent/actions/{cancellable['id']}/cancel", json={}
+                ).get_json(),
+                self.client.post(
+                    f"/api/agent/actions/{confirmable['id']}/confirm", json={}
+                ).get_json(),
+            ]
+        )
+        serialized = json.dumps(payloads)
+        self.assertNotIn(secret, serialized)
+        self.assertNotIn('"arguments"', serialized)
+        action = payloads[2]["action"]
+        self.assertEqual(action["editable"]["company"], "Better")
+        self.assertEqual(action["action_type"], "create_opportunity")
+        self.assertIn("created_at", action)
+
+    def test_state_changes_require_json_and_reject_foreign_origins(self):
+        for endpoint in ("edit", "confirm", "cancel"):
+            proposal = self.service.propose(
+                1, "create_action_item", {"title": endpoint}
+            )
+            url = f"/api/agent/actions/{proposal['id']}/{endpoint}"
+            body = {"title": "edited"} if endpoint == "edit" else {}
+            foreign = self.client.post(
+                url, json=body, headers={"Origin": "https://evil.example"}
+            )
+            form = self.client.post(url, data=body)
+            allowed = self.client.post(
+                url, json=body, headers={"Origin": "http://localhost:5000"}
+            )
+            self.assertEqual(foreign.status_code, 403)
+            self.assertEqual(form.status_code, 400)
+            self.assertEqual(allowed.status_code, 200)
+            self.assertNotEqual(
+                allowed.headers.get("Access-Control-Allow-Origin"), "*"
+            )
+            self.assertEqual(
+                allowed.headers.get("Access-Control-Allow-Origin"),
+                "http://localhost:5000",
+            )
+
+    def test_unexpected_exception_is_logged_and_returned_without_secret(self):
+        secret = "database password top-secret"
+        proposal = self.service.propose(1, "create_action_item", {"title": "x"})
+        with patch.object(
+            self.service, "confirm", side_effect=RuntimeError(secret)
+        ), patch.object(app_module.app.logger, "exception") as logged:
+            response = self.client.post(
+                f"/api/agent/actions/{proposal['id']}/confirm", json={}
+            )
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.get_json()["error"]["code"], "internal_error")
+        self.assertNotIn(secret, response.get_data(as_text=True))
+        logged.assert_called_once()
+
+    def test_finalizer_failure_is_uncertain_and_next_confirm_recovers_once(self):
+        secret = "proposal finalizer secret"
+        proposal = self.service.propose(1, "create_action_item", {"title": "once"})
+        original = self.service._finalize_completed
+        with patch.object(
+            self.service, "_finalize_completed", side_effect=RuntimeError(secret)
+        ), patch.object(app_module.app.logger, "exception") as logged:
+            response = self.client.post(
+                f"/api/agent/actions/{proposal['id']}/confirm", json={}
+            )
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(
+            response.get_json()["error"]["code"], "execution_uncertain"
+        )
+        self.assertNotIn(secret, response.get_data(as_text=True))
+        logged.assert_called_once()
+        public = self.client.get(
+            f"/api/agent/actions/{proposal['id']}"
+        ).get_data(as_text=True)
+        self.assertNotIn(secret, public)
+        self.service._finalize_completed = original
+        recovered = self.client.post(
+            f"/api/agent/actions/{proposal['id']}/confirm", json={}
+        )
+        self.assertEqual(recovered.status_code, 200)
+        with connect(app_module.DB_PATH) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM action_items WHERE title = 'once'"
+            ).fetchone()[0]
+        self.assertEqual(count, 1)
 
 
 if __name__ == "__main__":
