@@ -77,6 +77,33 @@ test("preserves safe uploaded extensions when MIME is empty", () => {
   });
 });
 
+test("known MIME types replace conflicting filename extensions", () => {
+  assert.deepEqual(Capabilities.audioFileDescriptor({ name: "answer.wav", type: "audio/mpeg" }), {
+    filename: "answer.mp3",
+    extension: "mp3",
+    mimeType: "audio/mpeg",
+    mayNotPlay: false,
+  });
+  assert.deepEqual(Capabilities.audioFileDescriptor({ name: "answer.mp3", type: "audio/wav" }), {
+    filename: "answer.wav",
+    extension: "wav",
+    mimeType: "audio/wav",
+    mayNotPlay: false,
+  });
+  assert.deepEqual(Capabilities.audioFileDescriptor({ name: "answer.mp4", type: "audio/mp4" }), {
+    filename: "answer.m4a",
+    extension: "m4a",
+    mimeType: "audio/mp4",
+    mayNotPlay: false,
+  });
+  assert.deepEqual(Capabilities.audioFileDescriptor({ name: "answer.m4a", type: "audio/mp4" }), {
+    filename: "answer.m4a",
+    extension: "m4a",
+    mimeType: "audio/mp4",
+    mayNotPlay: false,
+  });
+});
+
 test("uses a safe non-WebM fallback for unknown uploads without extensions", () => {
   assert.deepEqual(Capabilities.audioFileDescriptor({ name: "voice<>clip", type: "application/octet-stream" }), {
     filename: "voice__clip.audio",

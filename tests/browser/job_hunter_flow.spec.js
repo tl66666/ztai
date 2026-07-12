@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const { startIsolatedServer: startManagedServer } = require("./isolated_server.js");
 
 let playwright;
 try {
@@ -65,10 +66,10 @@ function removeIsolatedTempDirectory(directory) {
   fs.rmdirSync(resolved);
 }
 
-async function startIsolatedServer(label) {
+async function createIsolatedServer(label) {
   fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
-  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `jobhunter-e2e-${label}-`));
   const port = await freePort();
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `jobhunter-e2e-${label}-`));
   const baseURL = `http://127.0.0.1:${port}`;
   const python = process.env.PYTHON || "python";
   const program = [
@@ -76,45 +77,37 @@ async function startIsolatedServer(label) {
     "module.init_db()",
     `module.app.run(host='127.0.0.1', port=${port}, debug=False, use_reloader=False, threaded=True)`,
   ].join("; ");
-  const server = spawn(python, ["-c", program], {
-    cwd: ROOT,
-    env: {
-      ...process.env,
-      JOBHUNTER_DB_PATH: path.join(tempDirectory, "jobhunter-e2e.db"),
-      JOBHUNTER_PORT: String(port),
-      JOBHUNTER_HOST: "127.0.0.1",
-      GLM_API_KEY: "",
-      DEEPSEEK_API_KEY: "",
-      KIMI_API_KEY: "",
-      MOONSHOT_API_KEY: "",
-      PYTHONUNBUFFERED: "1",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
-  const log = fs.createWriteStream(path.join(ARTIFACT_DIR, `${label}-server.log`), { flags: "w" });
-  server.stdout.pipe(log);
-  server.stderr.pipe(log);
-  await waitForServer(baseURL, server);
-  return {
+  return startManagedServer({
+    label,
     baseURL,
-    async close() {
-      if (server.exitCode === null) {
-        const exited = new Promise((resolve) => server.once("exit", () => resolve(true)));
-        server.kill();
-        const stopped = await Promise.race([
-          exited,
-          new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
-        ]);
-        if (!stopped && server.exitCode === null) {
-          throw new Error(`Isolated Flask service did not stop: ${tempDirectory}`);
-        }
-      }
-      if (!log.writableEnded) await new Promise((resolve) => log.end(resolve));
-      removeIsolatedTempDirectory(tempDirectory);
-      assert.equal(fs.existsSync(tempDirectory), false, `Temporary database was not removed: ${tempDirectory}`);
+    tempDirectory,
+    dbPath: path.join(tempDirectory, "jobhunter-e2e.db"),
+    program,
+    spawnProcess: () => spawn(python, ["-c", program], {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        JOBHUNTER_DB_PATH: path.join(tempDirectory, "jobhunter-e2e.db"),
+        JOBHUNTER_PORT: String(port),
+        JOBHUNTER_HOST: "127.0.0.1",
+        GLM_API_KEY: "",
+        DEEPSEEK_API_KEY: "",
+        KIMI_API_KEY: "",
+        MOONSHOT_API_KEY: "",
+        PYTHONUNBUFFERED: "1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    }),
+    waitUntilReady: waitForServer,
+    createLogStream: () => fs.createWriteStream(
+      path.join(ARTIFACT_DIR, `${label}-server.log`), { flags: "w" }
+    ),
+    removeTempDirectory: (directory) => {
+      removeIsolatedTempDirectory(directory);
+      assert.equal(fs.existsSync(directory), false, `Temporary database was not removed: ${directory}`);
     },
-  };
+  });
 }
 
 function browserMatrix() {
@@ -481,7 +474,7 @@ for (const browserConfig of browserMatrix()) {
       ]) {
         fs.rmSync(path.join(ARTIFACT_DIR, filename), { force: true });
       }
-      const service = await startIsolatedServer(artifactBase);
+      const service = await createIsolatedServer(artifactBase);
       let browser;
       try {
         browser = await browserConfig.type.launch({ headless: true, ...browserConfig.launch });

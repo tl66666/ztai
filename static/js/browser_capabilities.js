@@ -55,13 +55,13 @@
     const originalMatch = sanitized.match(/\.([a-z0-9]{1,10})$/i);
     const originalExtension = originalMatch?.[1].toLowerCase() || "";
     const mimeExtension = extensionForMime(mimeType);
-    const extension = SAFE_AUDIO_EXTENSIONS.has(originalExtension)
-      ? originalExtension
-      : (mimeExtension || "audio");
+    const extension = mimeExtension || (
+      SAFE_AUDIO_EXTENSIONS.has(originalExtension) ? originalExtension : "audio"
+    );
     const base = originalMatch ? sanitized.slice(0, -originalMatch[0].length) : sanitized;
-    const filename = SAFE_AUDIO_EXTENSIONS.has(originalExtension)
+    const filename = (!mimeExtension && SAFE_AUDIO_EXTENSIONS.has(originalExtension))
       ? sanitized
-      : `${base || "interview-answer"}.${extension}`;
+      : (originalExtension === extension ? sanitized : `${base || "interview-answer"}.${extension}`);
     return {
       filename,
       extension,
