@@ -113,6 +113,42 @@ class AgentBusinessMemoryTests(unittest.TestCase):
             self.assertEqual(len([row for row in semantic if row["memory_key"] == "target_role"]), 1)
             self.assertEqual([row["id"] for row in episodic], [best_episode])
 
+    def test_search_preserves_identical_memories_for_distinct_entities(self):
+        semantic_ids = [
+            self.store.upsert_memory(
+                1, "semantic", "fit", "assessment", "Strong backend fit", 0.9,
+                "confirmed", related_entity_type="opportunity", related_entity_id=entity_id,
+            )
+            for entity_id in (41, 42)
+        ]
+        episodic_ids = [
+            self.store.upsert_memory(
+                1, "episodic", "match", "run", {"result": "Strong backend fit"}, 0.8,
+                "confirmed", related_entity_type="opportunity", related_entity_id=entity_id,
+            )
+            for entity_id in (41, 42)
+        ]
+        for force_fallback in (False, True):
+            manager = (
+                patch.object(
+                    self.store, "_fts_matches", side_effect=sqlite3.OperationalError("fallback")
+                )
+                if force_fallback else patch.object(
+                    self.store, "_fts_matches", wraps=self.store._fts_matches
+                )
+            )
+            with manager:
+                semantic = self.store.search_memories(
+                    1, "opportunity 41 backend", kind="semantic"
+                )
+                episodic = self.store.search_memories(
+                    1, "opportunity 42 backend", kind="episodic"
+                )
+            self.assertEqual(semantic[0]["id"], semantic_ids[0])
+            self.assertEqual({row["id"] for row in semantic}, set(semantic_ids))
+            self.assertEqual(episodic[0]["id"], episodic_ids[1])
+            self.assertEqual({row["id"] for row in episodic}, set(episodic_ids))
+
     def test_fts_backfill_supersede_and_delete_stay_consistent(self):
         memory_id = self.store.upsert_memory(
             1, "semantic", "preference", "target_city", "Shanghai", 0.9, "confirmed"
@@ -261,6 +297,39 @@ class AgentBusinessMemoryTests(unittest.TestCase):
         self.assertEqual(rows[generic["id"]]["status"], "pending")
         self.assertIn("resume.version_created", rows[exact["id"]]["completion_evidence"])
         self.assertEqual(rows[exact["id"]]["source"], "domain_event")
+
+    def test_event_mapper_rejects_wrong_aggregate_types_for_every_mapping(self):
+        career = CareerService(self.db_path)
+        opportunity = career.create_opportunity(1, {"company": "Acme", "job_title": "Engineer"})
+        resume_action = career.create_action_item(
+            1, {"opportunity_id": opportunity["id"], "title": "Resume", "type": "resume_version"}
+        )
+        interview_action = career.create_action_item(
+            1, {"opportunity_id": opportunity["id"], "title": "Interview", "type": "interview_plan"}
+        )
+        report_action = career.create_action_item(
+            1, {"title": "Report", "type": "career_report"}
+        )
+        with connect(self.db_path) as conn:
+            session_id = conn.execute(
+                "INSERT INTO interview_sessions (user_id,application_id,job_title) VALUES (1,?,'Engineer')",
+                (opportunity["id"],),
+            ).lastrowid
+            apply_event_to_actions(
+                conn, 1, "resume.version_created", "interview_session", opportunity["id"],
+                {"resume_id": 7},
+            )
+            apply_event_to_actions(
+                conn, 1, "interview.completed", "opportunity", session_id, {"score": 80}
+            )
+            apply_event_to_actions(
+                conn, 1, "career_report.saved", "opportunity", 9,
+                {"action_id": report_action["id"]},
+            )
+        statuses = {row["id"]: row["status"] for row in career.list_action_items(1)}
+        self.assertEqual(statuses[resume_action["id"]], "pending")
+        self.assertEqual(statuses[interview_action["id"]], "pending")
+        self.assertEqual(statuses[report_action["id"]], "pending")
 
     def test_event_and_auto_completion_share_transaction_and_context_sees_result(self):
         career = CareerService(self.db_path)

@@ -412,14 +412,21 @@ class MemoryStore:
         related_entity_id: str | int | None = None,
     ) -> int:
         timestamp = _now()
+        normalized_entity_id = (
+            str(related_entity_id) if related_entity_id is not None else None
+        )
         with self._connect() as connection:
             if status == "confirmed" and memory_key:
                 connection.execute(
                     """
                     UPDATE agent_memories SET status = 'superseded', updated_at = ?
                     WHERE user_id = ? AND kind = ? AND memory_key = ? AND status = 'confirmed'
+                      AND related_entity_type IS ? AND related_entity_id IS ?
                     """,
-                    (timestamp, user_id, kind, memory_key),
+                    (
+                        timestamp, user_id, kind, memory_key,
+                        related_entity_type, normalized_entity_id,
+                    ),
                 )
             cursor = connection.execute(
                 """
@@ -433,7 +440,7 @@ class MemoryStore:
                     user_id, kind, category, memory_key,
                     json.dumps(value, ensure_ascii=False), confidence, status,
                     source_message_id, related_entity_type,
-                    str(related_entity_id) if related_entity_id is not None else None,
+                    normalized_entity_id,
                     timestamp, timestamp,
                 ),
             )
@@ -574,7 +581,8 @@ class MemoryStore:
             parsed = self._memory_from_row(row)
             identity = (
                 row["kind"], row["category"], row["memory_key"],
-                _normalized_value(parsed["value"]),
+                _normalized_value(parsed["value"]), row["related_entity_type"] or "",
+                row["related_entity_id"] or "",
             ) if row["kind"] == "semantic" else (
                 row["kind"], _normalized_value(parsed["value"]),
                 row["related_entity_type"] or "", row["related_entity_id"] or "",

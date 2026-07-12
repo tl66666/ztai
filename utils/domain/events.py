@@ -34,7 +34,7 @@ def apply_event_to_actions(
             (aggregate_id, user_id),
         ).fetchone()
         application_id = row[0] if row else None
-    elif event_type == "career_report.saved":
+    elif event_type == "career_report.saved" and aggregate_type == "career_report":
         action_id = _integer_id((payload or {}).get("action_id"))
         if action_id is None:
             return 0
