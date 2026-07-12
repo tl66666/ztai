@@ -253,6 +253,38 @@ class ContextBuilder:
             except sqlite3.Error:
                 opportunity_rows = []
 
+            selected_opportunity = None
+            selected_opportunity_id = entity_context.get("opportunity_id")
+            if isinstance(selected_opportunity_id, int) and selected_opportunity_id > 0:
+                try:
+                    selected_row = connection.execute(
+                        """
+                        SELECT id,company,job_title,status,city,salary_min,salary_max,
+                               priority,resume_id,source_url,channel,next_action_at,
+                               interview_at,deadline_at,applied_at,created_at,updated_at
+                        FROM job_applications
+                        WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+                        """,
+                        (selected_opportunity_id, user_id),
+                    ).fetchone()
+                    if selected_row is not None:
+                        selected_opportunity = {
+                            key: (
+                                selected_row[key]
+                                if isinstance(selected_row[key], (int, float))
+                                else safe_text(selected_row[key], 2000 if key == "source_url" else 300)
+                            )
+                            for key in (
+                                "id", "company", "job_title", "status", "city",
+                                "salary_min", "salary_max", "priority", "resume_id",
+                                "source_url", "channel", "next_action_at", "interview_at",
+                                "deadline_at", "applied_at", "created_at", "updated_at",
+                            )
+                        }
+                except (sqlite3.Error, TypeError, ValueError):
+                    selected_opportunity = None
+            sections.append(("selected_opportunity", selected_opportunity))
+
             def opportunity_relevance(candidate: sqlite3.Row) -> tuple:
                 company = safe_text(candidate["company"], 300).casefold()
                 job_title = safe_text(candidate["job_title"], 300).casefold()

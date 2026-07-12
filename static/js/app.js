@@ -39,12 +39,16 @@ const state = {
   agentConversationId: localStorage.getItem(JOBHUNTER_AGENT_CONVERSATION) || "",
   agentDrawerOpener: null,
   agentProposals: new Map(),
+  agentConversationProposalIds: new Set(),
+  agentCommandProposalIds: new Set(),
   currentPage: "home",
   currentModule: "",
 };
 
 const $ = (id) => document.getElementById(id);
 const agentContext = ContextualAgent.createContextStore();
+const agentConversationRestoreGate = ContextualAgent.createLatestRequestGate();
+const agentCommandCenterGate = ContextualAgent.createLatestRequestGate();
 const {
   applicationPayloadForJob,
   buildApplicationHandoff,
@@ -2250,13 +2254,19 @@ function handleAgentDrawerKeydown(event) {
 }
 
 async function loadAgentCommandCenter() {
+  const request = agentCommandCenterGate.begin("command-center");
   let data;
   try {
     data = await api("/agent/actions");
   } catch (_error) {
     data = { success: false, actions: [] };
   }
+  if (!agentCommandCenterGate.isCurrent(request, "command-center")) return;
   const actions = data.success ? data.actions || [] : [];
+  state.agentCommandProposalIds.forEach((proposalId) => {
+    if (!state.agentConversationProposalIds.has(proposalId)) state.agentProposals.delete(proposalId);
+  });
+  state.agentCommandProposalIds = new Set(actions.map((proposal) => Number(proposal.id)));
   actions.forEach((proposal) => state.agentProposals.set(Number(proposal.id), proposal));
   renderAgentCommandActions(actions, data.success ? "" : "待确认操作暂时无法加载");
   renderAgentCommandOpportunities();
@@ -2374,6 +2384,7 @@ async function createAgentConversation() {
     body: { user_id: USER_ID, title: "新对话" },
   });
   if (!data.success) return toast(data.message || "新建会话失败");
+  agentConversationRestoreGate.invalidate();
   state.agentConversationId = data.conversation.id;
   localStorage.setItem(JOBHUNTER_AGENT_CONVERSATION, state.agentConversationId);
   await loadAgentConversations(state.agentConversationId, false);
@@ -2389,21 +2400,45 @@ async function clearAgentConversation() {
     body: { user_id: USER_ID },
   });
   if (!data.success) return toast(data.message || "清空失败");
+  agentConversationRestoreGate.invalidate();
   renderAgentWelcome();
   toast("当前会话已清空");
 }
 
 async function restoreAgentMessages() {
-  if (!state.agentConversationId) return renderAgentWelcome();
-  const data = await api(
-    `/agent/conversations/${state.agentConversationId}/messages?user_id=${USER_ID}`
-  );
+  const conversationId = state.agentConversationId;
+  if (!conversationId) {
+    agentConversationRestoreGate.invalidate();
+    return renderAgentWelcome();
+  }
+  const request = agentConversationRestoreGate.begin(conversationId);
+  let data;
+  try {
+    data = await api(
+      `/agent/conversations/${conversationId}/messages?user_id=${USER_ID}`
+    );
+  } catch (_error) {
+    data = { success: false, messages: [] };
+  }
+  if (!agentConversationRestoreGate.isCurrent(request, state.agentConversationId)) return;
   if (!data.success || !data.messages?.length) return renderAgentWelcome();
-  $("chatLog").innerHTML = "";
+  const preparedMessages = [];
   for (const message of data.messages) {
     const proposals = message.role === "assistant"
       ? await hydrateAgentProposals(ContextualAgent.proposalsFromMetadata(message.metadata))
       : [];
+    if (!agentConversationRestoreGate.isCurrent(request, state.agentConversationId)) return;
+    preparedMessages.push({ message, proposals });
+  }
+  if (!agentConversationRestoreGate.isCurrent(request, state.agentConversationId)) return;
+  state.agentConversationProposalIds.forEach((proposalId) => {
+    if (!state.agentCommandProposalIds.has(proposalId)) state.agentProposals.delete(proposalId);
+  });
+  state.agentConversationProposalIds = new Set(
+    preparedMessages.flatMap(({ proposals }) => proposals.map((proposal) => Number(proposal.id)))
+  );
+  $("chatLog").innerHTML = "";
+  for (const { message, proposals } of preparedMessages) {
     appendMessage(message.content, message.role === "user" ? "user" : "bot", { proposals });
     if (message.role === "assistant") {
       renderAgentEvents(message.metadata?.events || [], message.metadata?.status || "completed");
@@ -2429,13 +2464,13 @@ async function hydrateAgentProposal(proposal) {
       proposal, ContextualAgent.hydrationFailureKind(latest)
     );
   }
-  state.agentProposals.set(Number(latest.action.id), latest.action);
   return latest.action;
 }
 
 function renderAgentProposals(proposals, messageNode) {
   if (!messageNode || !proposals.length) return;
   proposals.forEach((proposal) => {
+    state.agentConversationProposalIds.add(Number(proposal.id));
     state.agentProposals.set(Number(proposal.id), proposal);
     messageNode.insertAdjacentHTML("beforeend", ContextualAgent.proposalHtml(proposal));
   });
@@ -2502,6 +2537,7 @@ async function handleProposalClick(event) {
     }
     next = ContextualAgent.transitionProposal(next, `${actionName}_success`, { action: data.action });
     if (freshCard) replaceProposalCard(freshCard, next);
+    const commandRefresh = loadAgentCommandCenter();
     if (actionName === "confirm") {
       await refreshAfterAgentAction(next.result);
       toast("操作已确认并完成");
@@ -2510,7 +2546,7 @@ async function handleProposalClick(event) {
     } else {
       toast("预览已更新，请确认后执行");
     }
-    await loadAgentCommandCenter();
+    await commandRefresh;
   } catch (_error) {
     const freshCard = $("chatLog").querySelector(`[data-proposal-id="${proposalId}"]`);
     next = ContextualAgent.transitionProposal(next, `${actionName}_error`, { error: "网络连接失败，请重试" });
@@ -2601,6 +2637,10 @@ async function refreshAfterAgentAction(result) {
 }
 
 function renderAgentWelcome() {
+  state.agentConversationProposalIds.forEach((proposalId) => {
+    if (!state.agentCommandProposalIds.has(proposalId)) state.agentProposals.delete(proposalId);
+  });
+  state.agentConversationProposalIds = new Set();
   $("chatLog").innerHTML = "";
   appendMessage(
     "你好，我是你的 AI 求职教练。把目标岗位、简历问题或面试难点发给我，我会结合已保存数据继续推进。",

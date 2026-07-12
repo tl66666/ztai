@@ -391,6 +391,80 @@ class AgentBusinessMemoryTests(unittest.TestCase):
         opportunities = snapshot.split("opportunities:", 1)[1].splitlines()[0]
         self.assertLess(opportunities.index("Selected Co"), opportunities.index("Recent Co"))
 
+    def test_explicit_terminal_opportunity_has_separate_compact_snapshot(self):
+        career = CareerService(self.db_path)
+        with connect(self.db_path) as conn:
+            resume_id = conn.execute(
+                "INSERT INTO resumes (user_id,title,content,status) VALUES (1,'Terminal Resume','private','active')"
+            ).lastrowid
+        selected = career.create_opportunity(
+            1,
+            {
+                "company": "Terminal Co",
+                "job_title": "Platform Engineer",
+                "status": "已结束",
+                "city": "Hangzhou",
+                "resume_id": resume_id,
+                "source_url": "https://jobs.example/terminal",
+                "interview_at": "2026-07-01T10:00:00+08:00",
+                "deadline_at": "2026-07-05",
+            },
+        )
+        career.create_opportunity(1, {"company": "Active Co", "job_title": "Engineer"})
+        conversation = self.store.create_conversation(1, "Terminal selected")
+
+        snapshot = ContextBuilder(self.store, self.db_path).build(
+            1,
+            conversation.id,
+            "review selected opportunity",
+            entity_context={"opportunity_id": selected["id"]},
+        ).career_snapshot
+        self.assertIn("selected_opportunity: ", snapshot)
+        selected_line = snapshot.split("selected_opportunity: ", 1)[1].splitlines()[0]
+        selected_snapshot = json.loads(selected_line)
+        active_snapshot = json.loads(snapshot.split("opportunities: ", 1)[1].splitlines()[0])
+
+        self.assertEqual(
+            {
+                key: selected_snapshot[key]
+                for key in (
+                    "id", "company", "job_title", "status", "city", "resume_id",
+                    "source_url", "interview_at", "deadline_at",
+                )
+            },
+            {
+                "id": selected["id"],
+                "company": "Terminal Co",
+                "job_title": "Platform Engineer",
+                "status": "已结束",
+                "city": "Hangzhou",
+                "resume_id": resume_id,
+                "source_url": "https://jobs.example/terminal",
+                "interview_at": "2026-07-01T10:00:00+08:00",
+                "deadline_at": "2026-07-05",
+            },
+        )
+        self.assertNotIn(selected["id"], [item["id"] for item in active_snapshot])
+
+    def test_foreign_explicit_opportunity_is_never_selected_or_leaked(self):
+        with connect(self.db_path) as conn:
+            foreign_id = conn.execute(
+                "INSERT INTO job_applications (user_id,company,job_title,status) "
+                "VALUES (2,'FOREIGN-SECRET','Private Role','已结束')"
+            ).lastrowid
+        conversation = self.store.create_conversation(1, "Foreign selected")
+
+        snapshot = ContextBuilder(self.store, self.db_path).build(
+            1,
+            conversation.id,
+            "general advice",
+            entity_context={"opportunity_id": foreign_id},
+        ).career_snapshot
+
+        self.assertIn("selected_opportunity: ", snapshot)
+        self.assertEqual(snapshot.split("selected_opportunity: ", 1)[1].splitlines()[0], "null")
+        self.assertNotIn("FOREIGN-SECRET", snapshot)
+
     def test_missing_explicit_entity_ids_never_fall_back_or_remain_in_snapshot(self):
         with connect(self.db_path) as conn:
             conn.execute(
@@ -410,8 +484,10 @@ class AgentBusinessMemoryTests(unittest.TestCase):
 
         ui_context = snapshot.split("ui_context:", 1)[1].splitlines()[0]
         selected_resume = snapshot.split("selected_resume:", 1)[1].splitlines()[0].strip()
+        selected_opportunity = snapshot.split("selected_opportunity:", 1)[1].splitlines()[0].strip()
         self.assertNotIn("999999", ui_context)
         self.assertEqual(selected_resume, "null")
+        self.assertEqual(selected_opportunity, "null")
 
     def test_snapshot_survives_blob_fields_and_keeps_healthy_rows(self):
         career = CareerService(self.db_path)

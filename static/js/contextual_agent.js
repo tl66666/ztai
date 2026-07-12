@@ -64,6 +64,26 @@
     };
   }
 
+  function createLatestRequestGate() {
+    let generation = 0;
+    return {
+      begin(identity = "") {
+        generation += 1;
+        return { generation, identity: String(identity) };
+      },
+      isCurrent(request, identity = "") {
+        return Boolean(
+          request
+          && request.generation === generation
+          && request.identity === String(identity)
+        );
+      },
+      invalidate() {
+        generation += 1;
+      },
+    };
+  }
+
   function chatPayload(message, conversationId, context = {}) {
     const payload = {
       conversation_id: String(conversationId || ""),
@@ -245,6 +265,7 @@
   return {
     chatPayload,
     createContextStore,
+    createLatestRequestGate,
     escapeHtml,
     flattenEditable,
     normalizedContext,

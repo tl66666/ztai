@@ -63,6 +63,41 @@ class ContextualAgentFrontendTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
+    def test_agent_request_race_harness(self):
+        completed = subprocess.run(
+            ["node", str(ROOT / "tests" / "agent_request_races.test.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
+    def test_agent_async_loaders_use_independent_latest_request_gates(self):
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        restore_flow = script[
+            script.index("async function restoreAgentMessages"):
+            script.index("function renderAgentProposals")
+        ]
+        command_flow = script[
+            script.index("async function loadAgentCommandCenter"):
+            script.index("function renderAgentCommandActions")
+        ]
+        proposal_flow = script[
+            script.index("async function handleProposalClick"):
+            script.index("async function focusAgentResultFromQuery")
+        ]
+
+        self.assertIn("agentConversationRestoreGate.begin(conversationId)", restore_flow)
+        self.assertIn("agentConversationRestoreGate.isCurrent", restore_flow)
+        self.assertNotIn("state.agentProposals.set", restore_flow)
+        self.assertIn("agentCommandCenterGate.begin", command_flow)
+        self.assertIn("agentCommandCenterGate.isCurrent", command_flow)
+        self.assertIn("const commandRefresh = loadAgentCommandCenter()", proposal_flow)
+        self.assertIn("await commandRefresh", proposal_flow)
+
 
 if __name__ == "__main__":
     unittest.main()
