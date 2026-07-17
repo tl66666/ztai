@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import re
 
 from utils.agent_runtime.models import AgentDecision
@@ -24,6 +25,12 @@ class LocalPolicy:
 
     def decide(self, state, tool_schemas) -> AgentDecision:
         message = state.user_message.strip()
+        if self._is_time_question(message):
+            now = datetime.now().astimezone()
+            return AgentDecision(
+                "final",
+                message=f"现在是 {now:%Y年%m月%d日 %H:%M}（{now.tzname() or '本地时间'}）。",
+            )
         intent = self._read_intent(message)
         if state.active_task and state.active_task.get("task_type") == "resume_workflow":
             return self._continue_resume_workflow(state)
@@ -117,6 +124,26 @@ class LocalPolicy:
             "final",
             message=self._fallback_message(),
         )
+
+    @classmethod
+    def prefers_local_routing(cls, message: str) -> bool:
+        text = str(message or "").strip()
+        if not text:
+            return True
+        if cls._is_time_question(text) or cls._read_intent(text):
+            return True
+        return any(
+            phrase in text
+            for phrase in (
+                "简历", "投递", "求职报告", "作战报告", "岗位匹配", "匹配岗位",
+                "面试题", "练习面试", "薪资", "工资", "待遇",
+            )
+        )
+
+    @staticmethod
+    def _is_time_question(message: str) -> bool:
+        text = str(message or "").replace("？", "?").strip()
+        return any(phrase in text for phrase in ("现在几点", "现在几时", "几点了", "当前时间", "现在时间"))
 
     @staticmethod
     def _read_intent(message: str) -> str:

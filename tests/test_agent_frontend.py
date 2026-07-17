@@ -65,6 +65,13 @@ class AgentFrontendContractTests(unittest.TestCase):
         self.assertIn("openResumeUploadFromAgent", javascript)
         self.assertIn("cancelResumeEdit();", javascript)
 
+    def test_agent_drawer_exposes_the_current_model_mode(self):
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="agentModeLabel"', html)
+        self.assertIn("agentModeLabel", javascript)
+
 
 if __name__ == "__main__":
     unittest.main()

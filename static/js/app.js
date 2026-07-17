@@ -532,6 +532,11 @@ async function loadProviders() {
   renderProviderLinks(data.provider);
   $("providerName").textContent = data.ai_enabled ? data.provider_name : "本地兜底";
   $("providerModel").textContent = data.ai_enabled ? data.model : "规则引擎可用";
+  if ($("agentModeLabel")) {
+    $("agentModeLabel").textContent = data.ai_enabled
+      ? `${data.provider_name} 已连接`
+      : "本地智能求职助手";
+  }
   $("providerDot").style.background = data.ai_enabled ? "var(--mint)" : "var(--yellow)";
 }
 
@@ -627,7 +632,7 @@ async function saveProvider() {
   const data = await api("/config/ai-key", { method: "POST", body: { provider, model, api_key: key } });
   if (data.success) {
     $("apiKeyInput").value = "";
-    toast(key ? `已切换到 ${data.provider} / ${data.model}` : "已切换模型；未填 Key 时使用本地兜底");
+    toast(key ? `已保存并启用 ${data.provider} / ${data.model}` : "已切换模型；未填 Key 时使用本地兜底");
     loadProviders();
   }
 }

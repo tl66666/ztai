@@ -230,9 +230,10 @@ class AgentOrchestrator:
                 )
 
             if len(tools_used) >= self.max_iterations:
+                completed_result = state.observations[-1]["display_text"] if state.observations else ""
                 return self._finish(
                     user_id, conversation_id,
-                    "已达到工具调用预算，请缩小任务范围后重试。",
+                    completed_result or "已完成当前可用步骤，请补充更具体的目标后继续。",
                     "degraded", iteration, tools_used, events, task_id, started,
                     "tool_limit", action_proposals,
                 )

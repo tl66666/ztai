@@ -209,6 +209,21 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertIn("时间预算", result.reply)
         self.assertEqual(self.registry.calls, [])
 
+    def test_tool_budget_returns_the_latest_completed_result(self):
+        policy = QueuePolicy([
+            AgentDecision("tool_call", "get_dashboard", {}),
+            AgentDecision("tool_call", "get_career_profile", {}),
+            AgentDecision("tool_call", "list_action_items", {}),
+            AgentDecision("tool_call", "get_training_insights", {}),
+            AgentDecision("tool_call", "list_applications", {}),
+        ])
+
+        result = self.make_orchestrator(policy).run(1, self.conversation.id, "生成求职报告")
+
+        self.assertEqual(result.status, "degraded")
+        self.assertIn("最近完成训练", result.reply)
+        self.assertNotIn("工具调用预算", result.reply)
+
     def test_local_policy_persists_missing_slot_and_continues_next_turn(self):
         orchestrator = self.make_orchestrator(LocalPolicy())
 
@@ -220,6 +235,15 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(second.status, "degraded")
         self.assertIn("82", second.reply)
         self.assertEqual(self.registry.calls[-1][0], "match_job")
+
+    def test_local_policy_answers_current_time_without_a_tool(self):
+        result = self.make_orchestrator(LocalPolicy()).run(
+            1, self.conversation.id, "现在几点"
+        )
+
+        self.assertEqual(result.tools_used, [])
+        self.assertIn("现在是", result.reply)
+        self.assertRegex(result.reply, r"\d{2}:\d{2}")
 
     def test_explicit_facts_and_run_audit_are_persisted(self):
         policy = QueuePolicy([AgentDecision("final", message="已记住。")])

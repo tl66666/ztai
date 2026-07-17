@@ -49,7 +49,11 @@ class AgentService:
         self.store.name_conversation_from_message(conversation_id, user_id, message)
 
         client = get_ai_client()
-        policy = RemoteModelPolicy(client) if client.api_key else LocalPolicy()
+        policy = (
+            LocalPolicy()
+            if LocalPolicy.prefers_local_routing(message) or not client.api_key
+            else RemoteModelPolicy(client)
+        )
         orchestrator = AgentOrchestrator(
             policy=policy,
             tools=self.tools,

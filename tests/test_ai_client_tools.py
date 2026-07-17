@@ -1,8 +1,10 @@
+import tempfile
 import unittest
 from unittest.mock import patch
 
 import requests
 
+from utils import ai_client as ai_client_module
 from utils.ai_client import MultiModelAIClient
 
 
@@ -94,6 +96,20 @@ class AIClientToolTests(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "timeout")
+
+    def test_local_ai_configuration_survives_a_new_client_instance(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = f"{temp_dir}/ai-config.json"
+            with patch.object(ai_client_module, "LOCAL_AI_CONFIG_PATH", config_path):
+                ai_client_module.save_local_ai_config("persisted-key", "deepseek", "deepseek-chat")
+                client = ai_client_module.build_client_from_local_config()
+
+                self.assertEqual(client.provider.id, "deepseek")
+                self.assertEqual(client.model, "deepseek-chat")
+                self.assertEqual(client.api_key, "persisted-key")
+
+                ai_client_module.save_local_ai_config("", "deepseek", "deepseek-chat")
+                self.assertFalse(ai_client_module.os.path.exists(config_path))
 
 
 if __name__ == "__main__":
