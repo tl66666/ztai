@@ -16,6 +16,7 @@ import requests
 
 from utils.agent_runtime.memory import ClosingConnection
 from utils.agent_runtime.models import ToolResult
+from utils.agent_runtime.resume_draft import local_resume_diagnosis, local_resume_draft, model_resume_draft
 from utils.agent_runtime.actions import (
     PROPOSAL_STATUSES,
     ActionProposalService,
@@ -381,6 +382,70 @@ def _analyze_resume(arguments: dict, context: ToolContext) -> ToolResult:
     return ToolResult(bool(content), data={"resume_id": resume.data["id"], "analysis": content}, display_text=content)
 
 
+def _prepare_resume_revision(arguments: dict, context: ToolContext) -> ToolResult:
+    resume = _owned_resume(arguments, context)
+    if not resume.ok:
+        return resume
+    profile = CareerService(context.db_path, local_user_id=context.user_id).get_profile(context.user_id) or {}
+    target_role = str(arguments.get("target_job_title") or profile.get("target_role") or "").strip()
+    client = get_ai_client()
+    draft = (
+        model_resume_draft(client, resume.data["content"], target_role, timeout=context.request_timeout(45))
+        if getattr(client, "api_key", "")
+        else local_resume_draft(resume.data["content"], target_role)
+    )
+    label = "Agent 优化版" if not target_role else f"{target_role} 优化版"
+    metadata = {
+        "version_label": label,
+        "target_job_title": target_role,
+        "status": "active",
+        "source_type": "agent",
+        "title": f"{resume.data['title']} · {label}",
+    }
+    data = {
+        "resume_id": resume.data["id"],
+        "content": draft.content,
+        "metadata": metadata,
+        "mode": draft.mode,
+        "changes": list(draft.changes),
+    }
+    mode_label = "模型定向改写" if draft.mode == "model" else "本地事实保真草稿"
+    return ToolResult(
+        True,
+        data=data,
+        display_text=(
+            f"已生成{mode_label}。" + "；".join(draft.changes)
+            + "。请在预览中检查并编辑，再确认保存为新版本。"
+        ),
+    )
+
+
+def _diagnose_resume(arguments: dict, context: ToolContext) -> ToolResult:
+    resume = _owned_resume(arguments, context)
+    if not resume.ok:
+        return resume
+    profile = CareerService(context.db_path, local_user_id=context.user_id).get_profile(context.user_id) or {}
+    target_role = str(arguments.get("job_title") or profile.get("target_role") or "").strip()
+    client = get_ai_client()
+    if getattr(client, "api_key", ""):
+        result = client.analyze_resume(
+            resume.data["content"], target_role, timeout=context.request_timeout(45)
+        )
+        analysis = str(result.get("content") or "").strip()
+        if analysis:
+            return ToolResult(
+                True,
+                data={"resume_id": resume.data["id"], "analysis": analysis, "mode": "model"},
+                display_text=analysis,
+            )
+    analysis = local_resume_diagnosis(resume.data["content"], target_role)
+    return ToolResult(
+        True,
+        data={"resume_id": resume.data["id"], "analysis": analysis, "mode": "local"},
+        display_text=analysis,
+    )
+
+
 def _match_job(arguments: dict, context: ToolContext) -> ToolResult:
     resume = _owned_resume(arguments, context)
     if not resume.ok:
@@ -630,6 +695,8 @@ def build_tool_registry(db_path: str) -> ToolRegistry:
         ToolDefinition("list_resumes", "列出当前用户保存的简历元数据。", _object(), _list_resumes),
         ToolDefinition("get_resume", "读取当前用户指定或最近一份简历的完整正文。", _object({"resume_id": {"type": "integer"}}), _get_resume),
         ToolDefinition("analyze_resume", "分析已保存简历的质量与改进方向。", _object({"resume_id": {"type": "integer"}, "job_title": {"type": "string", "maxLength": 80}}), _analyze_resume),
+        ToolDefinition("diagnose_resume", "对指定简历执行本地优先诊断；无模型密钥也会检查结构、证据和岗位对齐。", _object({"resume_id": {"type": "integer", "minimum": 1}, "job_title": {"type": "string", "maxLength": 80}}, ["resume_id"]), _diagnose_resume),
+        ToolDefinition("prepare_resume_revision", "读取指定简历并生成可编辑的新版本草稿；只生成待确认内容，不保存。", _object({"resume_id": {"type": "integer", "minimum": 1}, "target_job_title": {"type": "string", "maxLength": 80}}, ["resume_id"]), _prepare_resume_revision),
         ToolDefinition("match_job", "将已保存简历与目标岗位和 JD 匹配。", _object({"resume_id": {"type": "integer"}, "job_title": {"type": "string", "minLength": 2, "maxLength": 80}, "jd": {"type": "string", "maxLength": 8000}}, ["job_title"]), _match_job),
         ToolDefinition("analyze_jd", "解析岗位 JD 的职责、技能和面试重点。", _object({"jd_text": {"type": "string", "minLength": 10, "maxLength": 10000}}, ["jd_text"]), _analyze_jd),
         ToolDefinition("get_interview_question", "获取指定方向的一道面试题。", _object({"category": {"type": "string", "maxLength": 30}}), _interview_question),

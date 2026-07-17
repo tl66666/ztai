@@ -1608,6 +1608,15 @@ h3 { font-size: 19px; margin-bottom: 0; }
 .agent-drawer .chat-input textarea { min-height: 52px; max-height: 140px; resize: vertical; }
 .agent-drawer .icon-command { width: 48px; height: 48px; padding: 0; display: grid; place-items: center; }
 
+.agent-input-request { margin-top: 12px; padding: 12px; border: 1px solid rgba(37,99,235,0.24); border-radius: 8px; background: rgba(37,99,235,0.05); }
+.agent-input-request > p { margin: 0 0 8px; font-weight: 800; color: var(--dark); }
+.agent-resume-choice-list { display: grid; gap: 8px; }
+.agent-resume-choice { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; width: 100%; padding: 10px; text-align: left; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--dark); }
+.agent-resume-choice:hover { border-color: var(--blue); background: rgba(37,99,235,0.04); }
+.agent-resume-choice b, .agent-resume-choice small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-resume-choice small { color: var(--muted); grid-column: 1 / -1; }
+.agent-resume-choice span { grid-column: 2; grid-row: 1; align-self: center; color: var(--blue); font-size: 12px; font-weight: 800; }
+
 .agent-proposal { width: 100%; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-left: 3px solid var(--blue); border-radius: 8px; background: rgba(247,248,251,0.94); }
 .agent-proposal header { display: flex; justify-content: space-between; gap: 8px; }
 .proposal-status, .proposal-risk { font-size: 12px; font-weight: 800; }
@@ -1620,6 +1629,10 @@ h3 { font-size: 19px; margin-bottom: 0; }
 .agent-edit-field .input { width: 100%; min-width: 0; min-height: 42px; }
 .proposal-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .proposal-controls button { min-height: 44px; }
+.agent-draft-editor { display: grid; gap: 8px; margin-top: 12px; padding: 12px; border-radius: 8px; background: rgba(37,99,235,0.05); border: 1px solid rgba(37,99,235,0.24); }
+.agent-draft-editor header { display: grid; gap: 2px; }
+.agent-draft-editor header small { color: var(--muted); line-height: 1.5; }
+.agent-draft-content { width: 100%; min-height: 260px; resize: vertical; font-family: "Noto Sans SC", sans-serif; line-height: 1.65; }
 .proposal-error { margin-top: 8px; padding: 8px; border-radius: 6px; background: rgba(180,35,24,0.08); color: #b42318; overflow-wrap: anywhere; }
 .proposal-result-link { min-height: 44px; display: inline-flex; align-items: center; margin-top: 6px; color: var(--blue); font-weight: 800; }
 .agent-proposal[data-status="completed"] { border-left-color: var(--mint); }

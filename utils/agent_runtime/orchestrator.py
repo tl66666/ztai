@@ -22,6 +22,7 @@ class RunState:
     conversation_id: str
     user_message: str
     context_prompt: str
+    entity_context: dict[str, Any] = field(default_factory=dict)
     active_task: dict | None = None
     model_messages: list[dict] = field(default_factory=list)
     observations: list[dict] = field(default_factory=list)
@@ -151,6 +152,7 @@ class AgentOrchestrator:
             conversation_id=conversation_id,
             user_message=message,
             context_prompt=runtime_context.as_prompt(),
+            entity_context=dict(entity_context or {}),
             active_task=active_task,
             deadline=started + self.max_runtime_seconds,
         )
@@ -171,6 +173,9 @@ class AgentOrchestrator:
             decision = self.policy.decide(state, self.tools.schemas())
             if decision.type == "needs_input":
                 decision_arguments = decision.arguments if isinstance(decision.arguments, dict) else {}
+                input_request = decision_arguments.get("input_request")
+                if not isinstance(input_request, dict):
+                    input_request = {}
                 task_type = decision_arguments.get("task_type") or (
                     active_task["task_type"] if active_task else "clarification"
                 )
@@ -187,6 +192,7 @@ class AgentOrchestrator:
                     user_id, conversation_id, decision.message, "needs_input", iteration,
                     tools_used, events, task_id, started,
                     action_proposals=action_proposals,
+                    input_request=input_request,
                 )
             if decision.type == "final":
                 status = "completed" if getattr(self.policy, "ai_used", False) else "degraded"
@@ -288,6 +294,7 @@ class AgentOrchestrator:
         started: float,
         error_code: str = "",
         action_proposals: list[dict] | None = None,
+        input_request: dict[str, Any] | None = None,
     ) -> AgentRunResult:
         reply = reply or "暂时没有可用回答。"
         action_proposals = list(action_proposals or [])
@@ -298,6 +305,7 @@ class AgentOrchestrator:
                 "events": events,
                 "tools_used": tools_used,
                 "action_proposals": action_proposals,
+                "input_request": input_request or {},
             },
         )
         if status in {"completed", "degraded"}:
@@ -340,5 +348,6 @@ class AgentOrchestrator:
             events=events,
             tools_used=tools_used,
             action_proposals=action_proposals,
+            input_request=input_request or {},
             ai_used=bool(getattr(self.policy, "ai_used", False)),
         )

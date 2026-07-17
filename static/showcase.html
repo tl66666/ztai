@@ -772,7 +772,7 @@
           <a class="button dark" href="#screens">查看真实界面</a>
         </div>
         <div class="hero-badges">
-          <span class="pill">19 个结构化工具</span>
+          <span class="pill">21 个结构化工具</span>
           <span class="pill">分层持久记忆</span>
           <span class="pill">无需 API Key 可用</span>
           <span class="pill">写操作由用户确认</span>
@@ -848,7 +848,7 @@
         <article class="card liquid agent-job fade-up"><span class="job-index">04</span><h3>机会跟进与行动推进</h3><p>盘点停留阶段、风险和最近事件，提出跟进或行动建议；新增、更新业务数据前必须由用户确认。</p></article>
       </div>
       <div class="grid four agent-facts">
-        <article class="card liquid agent-fact fade-up"><b>19</b><h3>结构化工具</h3><p>覆盖简历、JD、面试、训练、机会、行动项、报告和受限网页读取。</p></article>
+        <article class="card liquid agent-fact fade-up"><b>21</b><h3>结构化工具</h3><p>覆盖简历选择、诊断与草稿、JD、面试、训练、机会、行动项、报告和受限网页读取。</p></article>
         <article class="card liquid agent-fact fade-up"><b>6</b><h3>分层记忆</h3><p>工作、摘要、语义、情景、任务和实时业务记忆分开管理，不把所有历史无脑塞进 Prompt。</p></article>
         <article class="card liquid agent-fact fade-up"><b>2</b><h3>策略模式</h3><p>有 Key 时使用 provider-native tool_calls；无 Key 时由 LocalPolicy 执行确定性多工具规划。</p></article>
         <article class="card liquid agent-fact fade-up"><b>1</b><h3>确认边界</h3><p>所有 Agent 写入统一经过“提议 → 预览 → 单次确认 → 领域服务执行”，并展示 <code>risk_level</code>。</p></article>
@@ -868,7 +868,7 @@
         <div class="runtime-node"><b>ContextBuilder</b><span>重新读取领域数据，构建权威上下文</span></div>
         <div class="runtime-node"><b>MemoryStore</b><span>检索相关画像、历史结果和待续任务</span></div>
         <div class="runtime-node"><b>Orchestrator</b><span>选择策略并控制轮数、时间和重复调用</span></div>
-        <div class="runtime-node"><b>ToolRegistry</b><span>校验 Schema 后调用 19 个业务工具</span></div>
+        <div class="runtime-node"><b>ToolRegistry</b><span>校验 Schema 后调用 21 个业务工具</span></div>
         <div class="runtime-node"><b>结果综合</b><span>组合证据、缺口、风险和行动优先级</span></div>
         <div class="runtime-node"><b>领域服务</b><span>只读返回；写入则先生成提议并等待确认</span></div>
       </div>
@@ -885,11 +885,11 @@
         </article>
         <article class="card liquid fade-up">
           <p class="eyebrow">Tool Registry</p>
-          <h3>19 个工具如何解决求职问题</h3>
+          <h3>21 个工具如何解决求职问题</h3>
           <table class="api-table">
             <thead><tr><th>工具组</th><th>代表能力</th><th>产出</th></tr></thead>
             <tbody>
-              <tr><td>简历与 JD</td><td>简历读取/诊断、JD 解析、岗位匹配</td><td>关键词、证据、缺口和改写建议</td></tr>
+              <tr><td>简历与 JD</td><td>简历选择、诊断、事实保真草稿、JD 解析、岗位匹配</td><td>关键词、证据、缺口和可编辑新版本</td></tr>
               <tr><td>面试与训练</td><td>问题生成、回答评估、训练质量汇总</td><td>准备重点、薄弱问题和表达建议</td></tr>
               <tr><td>机会与行动</td><td>机会盘点、详情读取、行动项、操作提议</td><td>阶段风险、跟进建议和下一步</td></tr>
               <tr><td>职业决策</td><td>职业档案、准备度、薪资估算、阶段报告</td><td>目标差距和行动优先级</td></tr>
@@ -1101,7 +1101,7 @@
           <li><b>业务层：</b>领域服务统一处理职业档案、简历版本、机会、面试、行动项、状态迁移和领域事件。</li>
           <li><b>数据层：</b>SQLite 保存业务事实、Agent 会话、分层记忆、运行审计、提案和幂等回执。</li>
           <li><b>智能层：</b>自研 Agent Runtime 负责上下文重建、策略切换、工具编排、任务预算与结果综合。</li>
-          <li><b>质量层：</b>Python 294/294、Node 40/40；浏览器矩阵覆盖 Chromium 与 Microsoft Edge。</li>
+          <li><b>质量层：</b>Python 299/299、Node 静态交互测试；浏览器矩阵覆盖 Chromium 与 Microsoft Edge。</li>
         </ul>
       </article>
     </section>
@@ -1122,7 +1122,7 @@
         <p class="eyebrow">Verification & Boundary</p>
         <h2>能运行，也说明边界</h2>
         <ul>
-          <li><b>测试：</b>Python 294/294、Node 40/40。</li>
+          <li><b>测试：</b>Python 299/299、Node 静态交互测试。</li>
           <li><b>浏览器：</b>Microsoft Edge 与 Google Chrome 核心流程通过；本机缺少 Firefox 可执行文件，因此 Mozilla Firefox 记为 SKIP，不冒充 PASS。</li>
           <li><b>无 Key：</b>本地规则模式可完成确定性多工具任务，但不伪装成大模型生成。</li>
           <li><b>隐私：</b>当前是本地单用户应用，SQLite、上传文件、导出、日志和 API Key 不提交到 Git。</li>

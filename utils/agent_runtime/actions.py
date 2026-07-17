@@ -368,6 +368,25 @@ class ActionProposalService:
                 raise LookupError("proposal not found")
         return self._from_row(row)
 
+    def draft(self, user_id: int, proposal_id: int) -> dict[str, Any]:
+        """Return an owned, pending resume draft for explicit user review only."""
+        proposal = self.get(user_id, proposal_id)
+        if proposal["action_type"] != "create_resume_version":
+            raise ActionProposalError(
+                "draft_not_available", "this proposal does not contain a resume draft", 400
+            )
+        if proposal["status"] != "pending":
+            raise self._state_error(proposal["status"])
+        arguments = proposal.get("arguments") or {}
+        metadata = arguments.get("metadata") if isinstance(arguments.get("metadata"), dict) else {}
+        return {
+            "proposal_id": proposal["id"],
+            "resume_id": arguments.get("resume_id"),
+            "content": arguments.get("content", ""),
+            "metadata": metadata,
+            "status": proposal["status"],
+        }
+
     def edit(
         self, user_id: int, proposal_id: int, allowed_changes: dict[str, Any]
     ) -> dict[str, Any]:

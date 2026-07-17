@@ -35,6 +35,16 @@ class AgentFrontendContractTests(unittest.TestCase):
         self.assertIn('get_career_profile: "读取职业目标"', javascript)
         self.assertIn('list_action_items: "读取行动项"', javascript)
         self.assertIn('get_training_insights: "汇总训练记录"', javascript)
+        self.assertIn('prepare_resume_revision: "生成可编辑草稿"', javascript)
+
+    def test_agent_drawer_exposes_resume_workflow_controls(self):
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-prompt="选择一份简历进行诊断"', html)
+        self.assertIn('data-prompt="选择一份简历生成优化草稿"', html)
+        self.assertIn("renderAgentInputRequest", javascript)
+        self.assertIn("/draft", javascript)
 
 
 if __name__ == "__main__":

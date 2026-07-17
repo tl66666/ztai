@@ -273,7 +273,7 @@ class AgentOrchestratorTests(unittest.TestCase):
         cases = (
             ("帮我看看现在有哪些机会", ["list_applications"], "星河科技"),
             ("面试准备得怎么样", ["get_dashboard", "get_training_insights"], "面试训练"),
-            ("帮我优化一下简历", ["analyze_resume"], "量化结果"),
+            ("帮我优化一下简历", ["list_resumes"], "还没有可用简历"),
         )
 
         for index, (message, expected_tools, expected_text) in enumerate(cases):

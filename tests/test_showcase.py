@@ -80,7 +80,7 @@ class ShowcaseContractTests(unittest.TestCase):
         for phrase in (
             "领域服务",
             "Agent Runtime",
-            "19 个结构化工具",
+            "21 个结构化工具",
             "确定性多工具规划",
             "没有引入 LangChain",
             "工具",
@@ -203,7 +203,7 @@ class ShowcaseContractTests(unittest.TestCase):
             "GitHub Pages",
             "静态项目展示",
             "不能在此直接使用 Agent",
-            "Python 294/294",
+            "Python 299/299",
             "本机缺少 Firefox",
             "PASS",
             "SKIP",

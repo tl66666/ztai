@@ -64,6 +64,7 @@ class AgentService:
     def _suggested_actions(tools_used: list[str]) -> list[dict]:
         mapping = {
             "analyze_resume": {"label": "打开简历实验室", "page": "resume", "module": "analysis"},
+            "diagnose_resume": {"label": "打开简历实验室", "page": "resume", "module": "analysis"},
             "match_job": {"label": "继续 JD 优化", "page": "resume", "module": "jd"},
             "get_interview_question": {"label": "进入面试训练", "page": "interview", "module": "mock"},
             "list_applications": {"label": "打开投递看板", "page": "tracker", "module": "board"},

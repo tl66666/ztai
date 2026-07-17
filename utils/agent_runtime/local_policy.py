@@ -25,6 +25,8 @@ class LocalPolicy:
     def decide(self, state, tool_schemas) -> AgentDecision:
         message = state.user_message.strip()
         intent = self._read_intent(message)
+        if state.active_task and state.active_task.get("task_type") == "resume_workflow":
+            return self._continue_resume_workflow(state)
         if state.observations:
             return self._continue_read_intent(intent, state.observations)
 
@@ -50,6 +52,23 @@ class LocalPolicy:
         if action_type:
             return self._start_career_action(action_type, message)
 
+        if "简历" in message and any(
+            word in message for word in ("刚才", "这个岗位", "目标岗位", "岗位看看")
+        ):
+            remembered_role = re.search(
+                r"目标岗位(?:是|为|设为)?\s*(.+?)(?:\s*->|[，,。；;\n]|$)",
+                state.context_prompt,
+            ) or re.search(
+                r'"?target_role"?\s*[:：]\s*"?([^"\n,}]+)',
+                state.context_prompt,
+            )
+            if remembered_role:
+                return AgentDecision(
+                    "tool_call",
+                    "match_job",
+                    {"job_title": remembered_role.group(1).strip()},
+                )
+
         if intent == "career_diagnosis":
             return AgentDecision("tool_call", "get_dashboard", {})
         if intent == "capabilities":
@@ -58,19 +77,9 @@ class LocalPolicy:
             return AgentDecision("tool_call", "list_applications", {})
         if intent == "interview_readiness":
             return AgentDecision("tool_call", "get_dashboard", {})
-        if intent == "resume_improvement":
-            return AgentDecision("tool_call", "analyze_resume", {})
+        if intent in {"resume_analysis", "resume_revision"}:
+            return AgentDecision("tool_call", "list_resumes", {})
 
-        if "简历" in message and any(
-            word in message for word in ("刚才", "这个岗位", "目标岗位", "岗位看看")
-        ):
-            remembered_role = re.search(r"target_role：([^\n]+)", state.context_prompt)
-            if remembered_role:
-                return AgentDecision(
-                    "tool_call",
-                    "match_job",
-                    {"job_title": remembered_role.group(1).strip()},
-                )
         if any(word in message for word in ("匹配岗位", "岗位匹配", "匹配度", "适合这个岗位")):
             return AgentDecision(
                 "needs_input",
@@ -140,14 +149,11 @@ class LocalPolicy:
             )
         ):
             return "interview_readiness"
-        if (
-            "简历" in message
-            and any(
-                word in message
-                for word in ("优化", "改进", "修改", "完善", "提升", "问题", "诊断", "分析")
-            )
-        ):
-            return "resume_improvement"
+        if "简历" in message:
+            if any(word in message for word in ("优化", "修改", "完善", "改写", "生成版本", "新版本")):
+                return "resume_revision"
+            if any(word in message for word in ("问题", "诊断", "分析", "评估")):
+                return "resume_analysis"
         return ""
 
     def _continue_read_intent(
@@ -163,7 +169,8 @@ class LocalPolicy:
             ),
             "interview_readiness": ("get_dashboard", "get_training_insights"),
             "opportunities": ("list_applications",),
-            "resume_improvement": ("analyze_resume",),
+            "resume_analysis": ("list_resumes",),
+            "resume_revision": ("list_resumes",),
         }
         plan = plans.get(intent, ())
         next_tool = next((tool for tool in plan if tool not in observed), "")
@@ -181,14 +188,109 @@ class LocalPolicy:
             return AgentDecision(
                 "final", message=self._synthesize_opportunities(observations)
             )
-        if intent == "resume_improvement":
-            return AgentDecision(
-                "final", message=self._synthesize_resume_advice(observations)
-            )
+        if intent in {"resume_analysis", "resume_revision"}:
+            resumes = self._observation_data(observations, "list_resumes", [])
+            return self._resume_picker_decision(intent, resumes)
         latest = observations[-1]
         return AgentDecision(
             "final", message=f"本地规则模式：{latest.get('display_text') or '任务已处理。'}"
         )
+
+    @staticmethod
+    def _resume_picker_decision(workflow: str, resumes: list[dict]) -> AgentDecision:
+        options = []
+        for item in resumes if isinstance(resumes, list) else []:
+            resume_id = item.get("id") if isinstance(item, dict) else None
+            if not isinstance(resume_id, int) or resume_id <= 0:
+                continue
+            options.append({
+                "id": resume_id,
+                "label": str(item.get("title") or f"简历 #{resume_id}")[:100],
+                "preview": str(item.get("preview") or "")[:180],
+            })
+        if not options:
+            return AgentDecision(
+                "final",
+                message="还没有可用简历。请先在简历实验室保存一份简历，再让 Agent 做诊断或生成优化版本。",
+            )
+        workflow_label = "优化草稿" if workflow == "resume_revision" else "诊断"
+        return AgentDecision(
+            "needs_input",
+            arguments={
+                "task_type": "resume_workflow",
+                "slots": {"workflow": workflow, "stage": "select_resume"},
+                "input_request": {
+                    "kind": "resume_select",
+                    "workflow": "revision" if workflow == "resume_revision" else "analysis",
+                    "prompt": f"选择要进行{workflow_label}的简历",
+                    "options": options,
+                },
+            },
+            message=f"我找到了 {len(options)} 份简历。请选择一份，我会先读取正文，再完成{workflow_label}。",
+        )
+
+    def _continue_resume_workflow(self, state) -> AgentDecision:
+        slots = state.active_task.get("slots") or {}
+        workflow = slots.get("workflow")
+        if workflow not in {"resume_analysis", "resume_revision"}:
+            return AgentDecision("final", message="简历任务状态无效，请重新发起诊断或优化请求。")
+        resume_id = self._selected_resume_id(state.user_message) or slots.get("resume_id")
+        if not isinstance(resume_id, int) or resume_id <= 0:
+            return AgentDecision(
+                "needs_input",
+                arguments={
+                    "task_type": "resume_workflow",
+                    "slots": slots,
+                    "input_request": {
+                        "kind": "resume_select",
+                        "workflow": "revision" if workflow == "resume_revision" else "analysis",
+                        "prompt": "请选择一份已保存的简历",
+                        "options": [],
+                    },
+                },
+                message="请从上面的简历列表中选择一份，或发送“选择简历 #编号”。",
+            )
+        observed = {item.get("tool") for item in state.observations}
+        if workflow == "resume_analysis":
+            if "diagnose_resume" not in observed:
+                return AgentDecision("tool_call", "diagnose_resume", {"resume_id": resume_id})
+            return AgentDecision("final", message=self._synthesize_resume_advice(state.observations))
+        if "prepare_resume_revision" not in observed:
+            return AgentDecision("tool_call", "prepare_resume_revision", {"resume_id": resume_id})
+        prepared = self._observation_data(state.observations, "prepare_resume_revision", {})
+        if not isinstance(prepared, dict) or not prepared.get("content"):
+            return AgentDecision("final", message="无法生成可靠的简历草稿，原始简历没有被修改。请检查简历内容后重试。")
+        if "propose_career_action" not in observed:
+            return AgentDecision(
+                "tool_call",
+                "propose_career_action",
+                {
+                    "action_type": "create_resume_version",
+                    "arguments": {
+                        "resume_id": prepared["resume_id"],
+                        "content": prepared["content"],
+                        "metadata": prepared["metadata"],
+                    },
+                    "rationale": "根据用户选择的简历生成可编辑的新版本草稿",
+                },
+            )
+        mode = "模型定向改写" if prepared.get("mode") == "model" else "本地事实保真草稿"
+        changes = "；".join(str(item) for item in prepared.get("changes", [])[:3])
+        return AgentDecision(
+            "final",
+            message=(
+                f"已生成{mode}并创建待确认版本。{changes}。"
+                "请打开草稿预览，按需编辑正文；确认后才会保存为一份新简历，原简历不会被覆盖。"
+            ),
+        )
+
+    @staticmethod
+    def _selected_resume_id(message: str) -> int | None:
+        match = re.search(r"(?:选择\s*)?(?:简历\s*)?[#＃]?(\d+)", str(message or ""))
+        if not match:
+            return None
+        value = int(match.group(1))
+        return value if value > 0 else None
 
     @staticmethod
     def _observation_data(observations: list[dict], tool: str, default):
@@ -279,7 +381,7 @@ class LocalPolicy:
     @staticmethod
     def _synthesize_resume_advice(observations: list[dict]) -> str:
         item = next(
-            (row for row in observations if row.get("tool") == "analyze_resume"), {}
+            (row for row in observations if row.get("tool") in {"diagnose_resume", "analyze_resume"}), {}
         )
         if item.get("ok") and item.get("display_text"):
             return (

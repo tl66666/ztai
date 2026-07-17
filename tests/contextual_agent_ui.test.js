@@ -24,6 +24,22 @@ assert.deepEqual(
 );
 assert.ok(!("user_id" in AgentUI.chatPayload("hello", "conversation-1", {})));
 
+const resumeRequest = {
+  kind: "resume_select",
+  workflow: "revision",
+  prompt: "选择要进行优化草稿的简历",
+  options: [
+    { id: 7, label: '<script>resume</script>', preview: '<img src=x>' },
+  ],
+};
+const requestHtml = AgentUI.inputRequestHtml(resumeRequest);
+assert.ok(requestHtml.includes('data-agent-resume-choice="7"'));
+assert.ok(requestHtml.includes("&lt;script&gt;resume"));
+assert.ok(requestHtml.includes("&lt;img"));
+assert.ok(!requestHtml.includes("<script>resume"));
+assert.ok(!requestHtml.includes("<img src=x>"));
+assert.equal(AgentUI.selectionMessage(resumeRequest, 7), "选择简历 #7，生成优化草稿");
+
 const proposal = {
   id: 9,
   action_type: "create_opportunity",

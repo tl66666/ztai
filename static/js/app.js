@@ -286,7 +286,7 @@ function bindActions() {
     agentContext.remove(button.dataset.removeAgentContext);
     renderAgentContextChips();
   });
-  $("chatLog")?.addEventListener("click", handleProposalClick);
+  $("chatLog")?.addEventListener("click", handleAgentChatLogClick);
   $("sendAgentBtn").addEventListener("click", sendAgentMessage);
   $("careerReportBtn").addEventListener("click", generateCareerReport);
   $("newAgentConversation")?.addEventListener("click", createAgentConversation);
@@ -2401,16 +2401,16 @@ function openAgentProposal(proposalId, opener = null) {
   appendMessage("这项操作需要你的确认。", "bot", { proposals: [proposal] });
 }
 
-async function sendAgentMessage() {
+async function sendAgentMessage(forcedMessage = "") {
   const input = $("agentInput");
-  const message = input.value.trim();
+  const message = String(forcedMessage || input.value || "").trim();
   if (!message) return;
   if (!state.agentConversationId) await createAgentConversation();
   const conversationId = state.agentConversationId;
   if (!conversationId) return;
   agentConversationEpoch.invalidate();
   appendMessage(message, "user");
-  input.value = "";
+  if (!forcedMessage) input.value = "";
   const chatRequest = {
     ...ContextualAgent.chatPayload(message, conversationId, agentContext.payload()),
     conversation_id: conversationId,
@@ -2426,7 +2426,10 @@ async function sendAgentMessage() {
   if (!data.success) return toast(data.message || "AI 教练暂时不可用");
   localStorage.setItem(JOBHUNTER_AGENT_CONVERSATION, conversationId);
   const reply = data.reply || data.message || "我暂时没想好，换个问法试试。";
-  appendMessage(reply, "bot", { proposals: data.action_proposals || [] });
+  appendMessage(reply, "bot", {
+    proposals: data.action_proposals || [],
+    inputRequest: data.input_request || {},
+  });
   renderAgentEvents(data.events || [], data.status);
   renderAgentSuggestedActions(data.suggested_actions || []);
   await loadAgentConversations(conversationId, false);
@@ -2444,7 +2447,14 @@ function appendMessage(text, type, options = {}) {
   node.innerHTML = renderText(text);
   $("chatLog").appendChild(node);
   renderAgentProposals(options.proposals || [], node);
+  renderAgentInputRequest(options.inputRequest || {}, node);
   $("chatLog").scrollTop = $("chatLog").scrollHeight;
+}
+
+function renderAgentInputRequest(inputRequest, messageNode) {
+  if (!messageNode || !window.ContextualAgent) return;
+  const html = ContextualAgent.inputRequestHtml(inputRequest);
+  if (html) messageNode.insertAdjacentHTML("beforeend", html);
 }
 
 async function loadAgentConversations(preferredId = "", restore = true) {
@@ -2529,7 +2539,10 @@ async function restoreAgentMessages() {
   );
   $("chatLog").innerHTML = "";
   for (const { message, proposals } of preparedMessages) {
-    appendMessage(message.content, message.role === "user" ? "user" : "bot", { proposals });
+    appendMessage(message.content, message.role === "user" ? "user" : "bot", {
+      proposals,
+      inputRequest: message.metadata?.input_request || {},
+    });
     if (message.role === "assistant") {
       renderAgentEvents(message.metadata?.events || [], message.metadata?.status || "completed");
     }
@@ -2618,6 +2631,74 @@ function replaceProposalCard(card, proposal, incomingEpoch = state.agentProposal
   return merged;
 }
 
+async function handleAgentChatLogClick(event) {
+  const choice = event.target.closest("[data-agent-resume-choice]");
+  if (choice) {
+    const resumeId = Number(choice.dataset.agentResumeChoice);
+    const workflow = choice.dataset.agentWorkflow === "revision" ? "revision" : "analysis";
+    const message = ContextualAgent.selectionMessage({ workflow }, resumeId);
+    if (message) await sendAgentMessage(message);
+    return;
+  }
+  await handleProposalClick(event);
+}
+
+async function openAgentResumeDraft(card, proposal) {
+  const existing = card.querySelector(".agent-draft-editor");
+  if (existing) return existing.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  let data;
+  try {
+    data = await api(`/agent/actions/${Number(proposal.id)}/draft`);
+  } catch (_error) {
+    toast("草稿暂时无法加载，请重试");
+    return;
+  }
+  if (!data.success || !data.draft) {
+    toast(proposalError(data, "草稿暂时无法加载"));
+    return;
+  }
+  const draft = data.draft;
+  const editor = document.createElement("section");
+  editor.className = "agent-draft-editor";
+  editor.innerHTML = `<header><b>版本草稿</b><small>确认前可编辑；保存后会新建版本，不覆盖原简历。</small></header>`;
+  const textarea = document.createElement("textarea");
+  textarea.className = "input textarea agent-draft-content";
+  textarea.rows = 12;
+  textarea.value = String(draft.content || "");
+  textarea.setAttribute("aria-label", "可编辑的简历版本草稿");
+  const controls = document.createElement("div");
+  controls.className = "proposal-controls";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "ghost";
+  save.dataset.agentAction = "save-draft";
+  save.textContent = "保存草稿修改";
+  controls.appendChild(save);
+  editor.append(textarea, controls);
+  card.appendChild(editor);
+  textarea.focus({ preventScroll: true });
+}
+
+async function saveAgentResumeDraft(card, proposal) {
+  const textarea = card.querySelector(".agent-draft-content");
+  const content = String(textarea?.value || "").trim();
+  if (!content) return toast("草稿正文不能为空");
+  const save = card.querySelector('[data-agent-action="save-draft"]');
+  if (save) save.disabled = true;
+  try {
+    const data = await api(`/agent/actions/${Number(proposal.id)}/edit`, {
+      method: "POST", body: { content },
+    });
+    if (!data.success) return toast(proposalError(data, "草稿保存失败，请重试"));
+    mergeAgentProposal(data.action, advanceAgentProposalMutation());
+    toast("草稿已更新，确认后才会保存为新版本");
+  } catch (_error) {
+    toast("网络连接失败，草稿未保存");
+  } finally {
+    if (save) save.disabled = false;
+  }
+}
+
 async function handleProposalClick(event) {
   const button = event.target.closest("[data-agent-action]");
   if (!button) return;
@@ -2625,6 +2706,14 @@ async function handleProposalClick(event) {
   const proposalId = Number(card?.dataset.proposalId);
   const actionName = button.dataset.agentAction;
   const proposal = state.agentProposals.get(proposalId);
+  if (card && proposal && actionName === "open-draft") {
+    await openAgentResumeDraft(card, proposal);
+    return;
+  }
+  if (card && proposal && actionName === "save-draft") {
+    await saveAgentResumeDraft(card, proposal);
+    return;
+  }
   if (card && proposal && actionName === "retry-hydration") {
     const hydrationEpoch = advanceAgentProposalMutation();
     const source = proposal.hydrationSource || proposal;
@@ -2770,6 +2859,9 @@ function renderAgentEvents(events, status = "completed") {
     list_resumes: "读取简历列表",
     get_resume: "读取简历正文",
     analyze_resume: "分析简历",
+    diagnose_resume: "本地诊断简历",
+    prepare_resume_revision: "生成可编辑草稿",
+    propose_career_action: "创建待确认操作",
     match_job: "匹配目标岗位",
     analyze_jd: "解析岗位 JD",
     get_interview_question: "获取面试题",

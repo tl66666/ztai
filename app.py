@@ -1925,6 +1925,16 @@ def get_agent_action(proposal_id):
         return agent_action_error(exc)
 
 
+@app.route("/api/agent/actions/<int:proposal_id>/draft", methods=["GET"])
+def get_agent_action_draft(proposal_id):
+    try:
+        user_id = agent_action_user()
+        draft = get_agent_action_service().draft(user_id, proposal_id)
+        return jsonify({"success": True, "draft": draft})
+    except Exception as exc:
+        return agent_action_error(exc)
+
+
 def agent_action_json_body():
     if not request.is_json:
         raise ValueError("Content-Type must be application/json")
@@ -2112,6 +2122,7 @@ def agent_chat():
         "agent_trace": agent_result["events"],
         "tools_used": agent_result["tools_used"],
         "action_proposals": agent_result["action_proposals"],
+        "input_request": agent_result.get("input_request", {}),
         "iterations": max(1, len(agent_result["tools_used"])),
         "suggested_actions": agent_result["suggested_actions"],
         "provider": "structured-agent-runtime",

@@ -138,6 +138,30 @@
       .replace(/'/g, "&#39;");
   }
 
+  function inputRequestHtml(request) {
+    if (!request || request.kind !== "resume_select" || !Array.isArray(request.options)) return "";
+    const workflow = request.workflow === "revision" ? "revision" : "analysis";
+    const options = request.options.filter((option) => positiveId(option?.id)).map((option) => `
+      <button type="button" class="agent-resume-choice" data-agent-resume-choice="${positiveId(option.id)}" data-agent-workflow="${workflow}">
+        <b>${escapeHtml(option.label || `简历 #${option.id}`)}</b>
+        ${option.preview ? `<small>${escapeHtml(option.preview)}</small>` : ""}
+        <span>${workflow === "revision" ? "生成优化草稿" : "开始诊断"}</span>
+      </button>
+    `).join("");
+    if (!options) return "";
+    return `<section class="agent-input-request" data-agent-input-kind="resume_select">
+      <p>${escapeHtml(request.prompt || "选择一份简历")}</p>
+      <div class="agent-resume-choice-list">${options}</div>
+    </section>`;
+  }
+
+  function selectionMessage(request, resumeId) {
+    const id = positiveId(resumeId);
+    if (!id) return "";
+    const action = request?.workflow === "revision" ? "生成优化草稿" : "进行简历诊断";
+    return `选择简历 #${id}，${action}`;
+  }
+
   function proposalsFromMetadata(metadata) {
     if (!Array.isArray(metadata?.action_proposals)) return [];
     return metadata.action_proposals.filter((proposal) => (
@@ -165,8 +189,12 @@
       const serialized = Array.isArray(value) ? JSON.stringify(value) : (value ?? "");
       return `<label class="agent-edit-field"><span>${escapeHtml(path)}</span><input class="input" type="${type}" data-agent-edit-field="${escapeHtml(path)}" value="${escapeHtml(serialized)}" ${pending && !busy ? "" : "disabled"}></label>`;
     }).join("");
+    const draftControl = pending && proposal?.action_type === "create_resume_version"
+      ? `<button type="button" class="ghost" data-agent-action="open-draft" ${busy ? "disabled" : ""}>查看并编辑草稿</button>`
+      : "";
     const controls = pending ? `
       <div class="proposal-controls">
+        ${draftControl}
         ${fields ? `<button type="button" class="ghost" data-agent-action="edit" ${busy ? "disabled" : ""}>保存修改</button>` : ""}
         <button type="button" class="primary" data-agent-action="confirm" ${busy ? "disabled" : ""}>确认执行</button>
         <button type="button" class="ghost" data-agent-action="cancel" ${busy ? "disabled" : ""}>取消</button>
@@ -314,6 +342,8 @@
     createConversationEpoch,
     createLatestRequestGate,
     escapeHtml,
+    inputRequestHtml,
+    selectionMessage,
     flattenEditable,
     normalizedContext,
     proposalHtml,

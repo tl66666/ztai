@@ -1,0 +1,136 @@
+import os
+import sqlite3
+import tempfile
+import unittest
+from contextlib import closing
+from unittest.mock import patch
+
+import app as app_module
+
+
+class AgentResumeWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_db_path = app_module.DB_PATH
+        app_module.DB_PATH = os.path.join(self.temp_dir.name, "resume-agent.db")
+        app_module._agent_service = None
+        app_module._agent_action_service = None
+        app_module.init_db()
+        app_module.app.config["TESTING"] = True
+        self.client = app_module.app.test_client()
+        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+            self.resume_id = conn.execute(
+                "INSERT INTO resumes(user_id,title,content) VALUES (1,?,?)",
+                (
+                    "后端开发简历",
+                    "张三\n项目经历\n• 负责 Flask 接口开发\n技能：Python Flask SQLite",
+                ),
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO resumes(user_id,title,content) VALUES (1,?,?)",
+                ("测试开发简历", "李四\n项目经历\n负责接口测试\n技能：Python Playwright"),
+            )
+            conn.commit()
+        app_module.get_career_service().upsert_profile(
+            1, {"target_role": "Python 后端工程师"}
+        )
+
+    def tearDown(self):
+        app_module._agent_service = None
+        app_module._agent_action_service = None
+        app_module.DB_PATH = self.original_db_path
+        self.temp_dir.cleanup()
+
+    def local_client(self):
+        return type("LocalClient", (), {"api_key": ""})()
+
+    def test_local_agent_lists_resume_choices_for_revision(self):
+        with patch("utils.agent_runtime.service.get_ai_client", return_value=self.local_client()):
+            response = self.client.post(
+                "/api/agent/chat", json={"message": "帮我优化简历"}
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "needs_input")
+        self.assertEqual(payload["input_request"]["kind"], "resume_select")
+        self.assertEqual(payload["input_request"]["workflow"], "revision")
+        self.assertEqual(
+            [option["id"] for option in payload["input_request"]["options"]],
+            [self.resume_id, self.resume_id + 1],
+        )
+
+    def test_selected_resume_creates_editable_revision_proposal_and_confirms_new_version(self):
+        with patch("utils.agent_runtime.service.get_ai_client", return_value=self.local_client()):
+            selection = self.client.post(
+                "/api/agent/chat", json={"message": "帮我优化简历"}
+            ).get_json()
+            created = self.client.post(
+                "/api/agent/chat",
+                json={
+                    "conversation_id": selection["conversation_id"],
+                    "message": f"选择简历 #{self.resume_id}",
+                },
+            ).get_json()
+
+        self.assertEqual(created["status"], "degraded")
+        self.assertEqual(len(created["action_proposals"]), 1)
+        proposal_id = created["action_proposals"][0]["id"]
+        self.assertEqual(created["action_proposals"][0]["action_type"], "create_resume_version")
+
+        draft = self.client.get(f"/api/agent/actions/{proposal_id}/draft")
+        self.assertEqual(draft.status_code, 200)
+        draft_payload = draft.get_json()
+        self.assertIn("求职目标：Python 后端工程师", draft_payload["draft"]["content"])
+        self.assertIn("- 负责 Flask 接口开发", draft_payload["draft"]["content"])
+
+        edited = self.client.post(
+            f"/api/agent/actions/{proposal_id}/edit",
+            json={"content": "张三\n项目经历\n- 完成 Flask 接口开发并通过测试"},
+        )
+        self.assertEqual(edited.status_code, 200)
+        confirmed = self.client.post(
+            f"/api/agent/actions/{proposal_id}/confirm", json={}
+        )
+        self.assertEqual(confirmed.status_code, 200)
+
+        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+            source = conn.execute(
+                "SELECT content FROM resumes WHERE id = ?", (self.resume_id,)
+            ).fetchone()[0]
+            saved = conn.execute(
+                "SELECT content FROM resumes WHERE id = ?",
+                (confirmed.get_json()["result"]["id"],),
+            ).fetchone()[0]
+        self.assertIn("• 负责 Flask 接口开发", source)
+        self.assertIn("完成 Flask 接口开发并通过测试", saved)
+
+    def test_local_agent_diagnoses_the_selected_resume_without_a_model_key(self):
+        with patch("utils.agent_runtime.service.get_ai_client", return_value=self.local_client()):
+            selection = self.client.post(
+                "/api/agent/chat", json={"message": "选择一份简历进行诊断"}
+            ).get_json()
+            diagnosed = self.client.post(
+                "/api/agent/chat",
+                json={
+                    "conversation_id": selection["conversation_id"],
+                    "message": f"选择简历 #{self.resume_id}，进行简历诊断",
+                },
+            ).get_json()
+
+        self.assertEqual(diagnosed["status"], "degraded")
+        self.assertIn("diagnose_resume", diagnosed["tools_used"])
+        self.assertIn("本地简历诊断", diagnosed["reply"])
+
+    def test_draft_endpoint_rejects_non_resume_proposals(self):
+        action = app_module.get_agent_action_service().propose(
+            1, "create_action_item", {"title": "Prepare interview"}
+        )
+        response = self.client.get(f"/api/agent/actions/{action['id']}/draft")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"]["code"], "draft_not_available")
+
+
+if __name__ == "__main__":
+    unittest.main()
