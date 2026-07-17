@@ -31,6 +31,9 @@ class LocalPolicy:
                 "final",
                 message=f"现在是 {now:%Y年%m月%d日 %H:%M}（{now.tzname() or '本地时间'}）。",
             )
+        casual_reply = self._casual_reply(message)
+        if casual_reply:
+            return AgentDecision("final", message=casual_reply)
         intent = self._read_intent(message)
         if state.active_task and state.active_task.get("task_type") == "resume_workflow":
             return self._continue_resume_workflow(state)
@@ -130,7 +133,7 @@ class LocalPolicy:
         text = str(message or "").strip()
         if not text:
             return True
-        if cls._is_time_question(text) or cls._read_intent(text):
+        if cls._is_time_question(text) or cls._casual_reply(text) or cls._read_intent(text):
             return True
         return any(
             phrase in text
@@ -144,6 +147,19 @@ class LocalPolicy:
     def _is_time_question(message: str) -> bool:
         text = str(message or "").replace("？", "?").strip()
         return any(phrase in text for phrase in ("现在几点", "现在几时", "几点了", "当前时间", "现在时间"))
+
+    @staticmethod
+    def _casual_reply(message: str) -> str:
+        text = str(message or "").strip().lower()
+        if any(phrase in text for phrase in ("睡了吗", "睡着", "休息了吗", "累吗")):
+            return "我不需要睡觉，会一直在这里帮你处理求职相关的事。你现在想看简历、投递进展，还是准备一场面试？"
+        if any(phrase in text for phrase in ("你是谁", "你叫什么", "你是干什么的", "你在吗", "在不在")):
+            return "我是职途 AI 的求职 Agent，负责把简历、岗位匹配、面试训练和投递进度串成可执行的求职计划。没有 API Key 时也能读取你的本地数据并完成核心求职任务。"
+        if any(phrase in text for phrase in ("谢谢", "谢了", "感谢")):
+            return "不客气。需要时直接告诉我你的目标，例如“诊断我的简历”或“看看投递进展”。"
+        if text in {"你好", "您好", "嗨", "hello", "hi"}:
+            return "你好，我是你的求职 Agent。你可以直接问我简历、投递、面试准备，或让我根据当前数据安排下一步。"
+        return ""
 
     @staticmethod
     def _read_intent(message: str) -> str:

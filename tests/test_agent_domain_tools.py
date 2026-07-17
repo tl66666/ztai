@@ -145,6 +145,25 @@ class AgentDomainToolTests(unittest.TestCase):
         self.assertFalse(missing.ok)
         self.assertEqual(missing.error_code, "not_found")
 
+    def test_resume_diagnosis_stays_local_when_a_model_is_connected(self):
+        with connect(self.db_path) as conn:
+            resume_id = conn.execute(
+                "INSERT INTO resumes(user_id, title, content) VALUES (1, '诊断简历', '项目经历\\n- 使用 Python 完成接口测试')"
+            ).lastrowid
+
+        class ConnectedClient:
+            api_key = "test-key"
+
+            def analyze_resume(self, *args, **kwargs):
+                raise AssertionError("Agent diagnosis must not wait on a nested model request")
+
+        with patch("utils.agent_runtime.tools.get_ai_client", return_value=ConnectedClient()):
+            result = self.registry.execute("diagnose_resume", {"resume_id": resume_id}, user_id=1)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.data["mode"], "local")
+        self.assertIn("本地简历诊断", result.display_text)
+
     def test_remote_read_tool_messages_never_receive_opportunity_secrets(self):
         secret = "REMOTE-TOOL-SECRET"
         self.career.create_opportunity(

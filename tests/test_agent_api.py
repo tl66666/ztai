@@ -340,6 +340,27 @@ class AgentAPITests(unittest.TestCase):
         self.assertIn("generate_career_report", response["tools_used"])
         self.assertFalse(client.called)
 
+    def test_casual_question_stays_local_even_when_a_model_is_configured(self):
+        class RemoteClient:
+            api_key = "test-key"
+
+            def __init__(self):
+                self.called = False
+
+            def chat(self, *args, **kwargs):
+                self.called = True
+                raise AssertionError("casual local messages should not wait on the remote model")
+
+        client = RemoteClient()
+        with patch("utils.agent_runtime.service.get_ai_client", return_value=client):
+            response = self.client.post(
+                "/api/agent/chat", json={"message": "你睡了吗"}
+            ).get_json()
+
+        self.assertTrue(response["success"])
+        self.assertIn("不需要睡觉", response["reply"])
+        self.assertFalse(client.called)
+
     def test_profile_and_report_result_endpoints_validate_exact_owned_id(self):
         service = app_module.get_career_service()
         profile = service.upsert_profile(1, {"target_role": "Engineer"})

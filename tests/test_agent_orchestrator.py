@@ -245,6 +245,23 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertIn("现在是", result.reply)
         self.assertRegex(result.reply, r"\d{2}:\d{2}")
 
+    def test_local_policy_answers_casual_questions_without_a_model(self):
+        result = self.make_orchestrator(LocalPolicy()).run(
+            1, self.conversation.id, "你睡了吗"
+        )
+
+        self.assertEqual(result.tools_used, [])
+        self.assertIn("不需要睡觉", result.reply)
+
+    def test_remote_timeout_falls_back_to_a_casual_local_answer(self):
+        policy = RemoteModelPolicy(FakeAIClient({"success": False, "error_code": "timeout"}))
+
+        result = self.make_orchestrator(policy).run(1, self.conversation.id, "你睡了吗")
+
+        self.assertEqual(result.status, "degraded")
+        self.assertIn("不需要睡觉", result.reply)
+        self.assertEqual(result.tools_used, [])
+
     def test_explicit_facts_and_run_audit_are_persisted(self):
         policy = QueuePolicy([AgentDecision("final", message="已记住。")])
 
