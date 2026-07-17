@@ -253,7 +253,11 @@ class LocalPolicy:
         workflow = slots.get("workflow")
         if workflow not in {"resume_analysis", "resume_revision"}:
             return AgentDecision("final", message="简历任务状态无效，请重新发起诊断或优化请求。")
-        resume_id = self._selected_resume_id(state.user_message) or slots.get("resume_id")
+        resume_id = (
+            self._selected_resume_id(state.user_message)
+            or state.entity_context.get("resume_id")
+            or slots.get("resume_id")
+        )
         if not isinstance(resume_id, int) or resume_id <= 0:
             return AgentDecision(
                 "needs_input",
@@ -267,7 +271,7 @@ class LocalPolicy:
                         "options": [],
                     },
                 },
-                message="请从上面的简历列表中选择一份，或发送“选择简历 #编号”。",
+                message="请点击上方的简历卡片选择。",
             )
         observed = {item.get("tool") for item in state.observations}
         if workflow == "resume_analysis":

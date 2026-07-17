@@ -94,6 +94,25 @@ test("profile load network errors stay visible and preserve current fields", asy
   assert.equal(controls.retry.hidden, false);
 });
 
+test("an empty profile starts onboarding instead of displaying a load failure", async () => {
+  const controls = {
+    role: { value: "" }, cities: { value: "" }, salaryMin: { value: "" },
+    salaryMax: { value: "" }, skills: { value: "" },
+    direction: { value: "tech", options: [{ value: "tech" }] },
+    status: { textContent: "" }, retry: { hidden: false },
+  };
+  const result = await CareerForm.loadProfile({
+    request: async () => ({ success: true, data: null }), controls,
+    state: { careerProfile: "tech" },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.empty, true);
+  assert.equal(result.direction.matched, false);
+  assert.match(controls.status.textContent, /还没有目标档案/);
+  assert.equal(controls.retry.hidden, true);
+});
+
 test("profile save failure preserves inputs and success alone runs follow-up", async () => {
   const fields = { role: { value: "测试开发" }, cities: { value: "杭州" } };
   const status = { textContent: "" };

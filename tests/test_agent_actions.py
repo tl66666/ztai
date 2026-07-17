@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import app as app_module
+from utils.agent_runtime.actions import ActionProposalError
 
 from utils.domain.database import APPLICATION_STATUSES, connect, migrate_database
 
@@ -583,7 +584,8 @@ class AgentActionServiceTests(unittest.TestCase):
                     "resume_id": self.resume_id,
                     "jd_text": "SECRET-JD",
                 },
-                f"resume #{self.resume_id}",
+                "新增投递",
+                {"resume_id": self.resume_id},
             ),
             (
                 "create_resume_version",
@@ -592,7 +594,8 @@ class AgentActionServiceTests(unittest.TestCase):
                     "content": "SECRET-RESUME",
                     "metadata": {"application_id": opportunity_id},
                 },
-                f"application #{opportunity_id}",
+                "创建新简历版本",
+                {"resume_id": self.resume_id, "application_id": opportunity_id},
             ),
             (
                 "create_action_item",
@@ -601,7 +604,8 @@ class AgentActionServiceTests(unittest.TestCase):
                     "opportunity_id": opportunity_id,
                     "description": "SECRET-ACTION",
                 },
-                f"opportunity #{opportunity_id}",
+                "新增行动任务",
+                {"opportunity_id": opportunity_id},
             ),
             (
                 "update_opportunity",
@@ -612,14 +616,17 @@ class AgentActionServiceTests(unittest.TestCase):
                         "notes": "SECRET-NOTES",
                     },
                 },
-                f"resume #{self.resume_id}",
+                "更新当前投递信息",
+                {"opportunity_id": opportunity_id, "resume_id": self.resume_id},
             ),
         ]
-        for action_type, arguments, target in cases:
+        for action_type, arguments, label, targets in cases:
             with self.subTest(action_type=action_type):
-                preview = self.propose(action_type, arguments)["preview"]
-                self.assertIn(target, preview)
+                proposal = self.propose(action_type, arguments)
+                preview = proposal["preview"]
+                self.assertIn(label, preview)
                 self.assertNotIn("SECRET", preview)
+                self.assertEqual(self.service.public(proposal)["target_ids"], targets)
 
     def test_non_string_json_keys_are_rejected_recursively_before_persistence(self):
         invalid_payloads = [
@@ -1112,6 +1119,21 @@ class AgentActionAPITests(unittest.TestCase):
         app_module.app.config["TESTING"] = True
         self.client = app_module.app.test_client()
         self.service = app_module.get_agent_action_service()
+
+    def test_execution_failure_uses_a_clear_chinese_message(self):
+        action = self.service.propose(1, "create_action_item", {"title": "测试失败提示"})
+        with patch.object(
+            self.service, "confirm",
+            side_effect=ActionProposalError("execution_failed", "action execution failed", 500),
+        ):
+            response = self.client.post(
+                f"/api/agent/actions/{action['id']}/confirm", json={}
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(payload["error"]["code"], "execution_failed")
+        self.assertEqual(payload["error"]["message"], "暂时无法保存这项操作，请稍后重试。")
 
     def tearDown(self):
         app_module._agent_action_service = None

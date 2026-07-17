@@ -24,7 +24,7 @@ from utils.domain import (
     InterviewConflictError,
     InterviewService,
 )
-from utils.domain.database import ensure_column, migrate_database
+from utils.domain.database import ensure_column, ensure_local_user, migrate_database
 
 
 BASE_DIR = os.path.dirname(__file__)
@@ -233,6 +233,8 @@ def init_db() -> None:
         ensure_column(conn, "resumes", "tailored_result", "TEXT")
         ensure_column(conn, "job_applications", "deleted_at", "TEXT")
     migrate_database(DB_PATH)
+    with get_db() as conn:
+        ensure_local_user(conn, AGENT_USER_ID)
     create_agent_tables(DB_PATH)
 
 
@@ -1862,27 +1864,41 @@ def get_agent_action_service():
 def agent_action_error(exc: Exception):
     from utils.agent_runtime.actions import ActionProposalError
 
+    messages = {
+        "execution_failed": "暂时无法保存这项操作，请稍后重试。",
+        "invalid_state": "这项操作状态已变化，请刷新后再试。",
+        "proposal_cancelled": "这项操作已取消。",
+        "proposal_expired": "这项操作已过期，请重新生成。",
+        "proposal_executing": "操作正在处理中，请稍后查看结果。",
+        "proposal_failed": "这项操作未能完成，请重新生成后再试。",
+        "proposal_completed": "这项操作已经完成。",
+        "draft_not_available": "该操作没有可编辑的简历草稿。",
+        "foreign_origin": "请在本机项目页面中完成此操作。",
+        "user_id_not_allowed": "当前版本只能操作本机自己的数据。",
+        "forbidden": "无法访问这项操作。",
+        "not_found": "未找到这项操作，它可能已被清理。",
+        "invalid_request": "提交内容不符合要求，请检查后重试。",
+        "internal_error": "暂时无法完成这项操作，请稍后重试。",
+    }
     if isinstance(exc, ActionProposalError):
         status = exc.http_status
         code = exc.code
         if status >= 500:
             app.logger.exception("Agent action failed with code %s", code)
-            message = "The action could not be completed safely."
-        else:
-            message = str(exc)
+        message = messages.get(code, "暂时无法完成这项操作，请稍后重试。")
     elif isinstance(exc, PermissionError):
         status, code = 403, "forbidden"
-        message = "The proposal is not available to the local user."
+        message = messages[code]
     elif isinstance(exc, LookupError):
         status, code = 404, "not_found"
-        message = "The proposal was not found."
+        message = messages[code]
     elif isinstance(exc, ValueError):
         status, code = 400, "invalid_request"
-        message = str(exc)
+        message = messages[code]
     else:
         app.logger.exception("Unexpected agent action API failure", exc_info=exc)
         status, code = 500, "internal_error"
-        message = "The action could not be completed safely."
+        message = messages[code]
     return jsonify({"success": False, "error": {"code": code, "message": message}}), status
 
 

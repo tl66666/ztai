@@ -748,40 +748,23 @@ class ActionProposalService:
 
     def _preview(self, action_type: str, arguments: dict[str, Any]) -> str:
         if action_type == "set_career_goal":
-            return f"Update career goal fields: {', '.join(sorted(arguments))}"
+            return "更新求职目标信息"
         if action_type == "create_opportunity":
-            preview = f"Create opportunity {arguments['company']} / {arguments['job_title']}"
-            if arguments.get("resume_id") is not None:
-                preview += f" using resume #{arguments['resume_id']}"
-            return preview
+            return f"新增投递：{arguments['company']} / {arguments['job_title']}"
         if action_type == "create_resume_version":
-            label = arguments.get("metadata", {}).get("version_label") or "new version"
-            preview = f"Create resume version {label} from resume #{arguments['resume_id']}"
-            application_id = arguments.get("metadata", {}).get("application_id")
-            if application_id is not None:
-                preview += f" for application #{application_id}"
-            return preview + " (content redacted)"
+            label = arguments.get("metadata", {}).get("version_label") or "优化版"
+            return f"将创建新简历版本「{label}」"
         if action_type == "link_opportunity_resume":
-            return f"Link opportunity #{arguments['opportunity_id']} to resume #{arguments['resume_id']}"
+            return "将简历关联到当前投递机会"
         if action_type == "create_interview_plan":
-            return f"Create interview preparation action for opportunity #{arguments['opportunity_id']}"
+            return "为当前机会创建面试准备任务"
         if action_type == "create_action_item":
-            preview = f"Create action item: {arguments['title']}"
-            opportunity_id = arguments.get(
-                "opportunity_id", arguments.get("application_id")
-            )
-            if opportunity_id is not None:
-                preview += f" for opportunity #{opportunity_id}"
-            return preview
+            return f"新增行动任务：{arguments['title']}"
         if action_type == "complete_action_item":
-            return f"Complete action item #{arguments['action_id']}"
+            return "将行动任务标记为已完成"
         if action_type == "update_opportunity":
-            fields = ", ".join(sorted(arguments["changes"]))
-            preview = f"Update opportunity #{arguments['opportunity_id']} fields: {fields}"
-            if arguments["changes"].get("resume_id") is not None:
-                preview += f" using resume #{arguments['changes']['resume_id']}"
-            return preview + " (sensitive values redacted)"
-        return f"Save {arguments['report_type']} career report (content redacted)"
+            return "更新当前投递信息"
+        return "保存求职复盘报告"
 
     @staticmethod
     def _risk_level(action_type: str, arguments: dict[str, Any]) -> str:
@@ -1385,13 +1368,7 @@ class ActionProposalService:
                 "create_opportunity", arguments.get("changes", {})
             )
         if action_type == "create_resume_version":
-            metadata = arguments.get("metadata") or {}
-            permitted = {
-                "version_label", "target_job_title", "status", "source_type", "title"
-            }
-            return {
-                "metadata": {key: metadata[key] for key in permitted if key in metadata}
-            }
+            return {}
         return {key: arguments[key] for key in safe_fields if key in arguments}
 
     @staticmethod

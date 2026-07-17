@@ -35,7 +35,7 @@
   <main class="shell">
     <header class="topbar">
       <div>
-        <p class="eyebrow">AI Agent Career Studio</p>
+        <p class="eyebrow">AI 求职工作台</p>
         <h1 id="pageTitle" tabindex="-1">项目总览</h1>
       </div>
       <div class="top-actions">
@@ -104,8 +104,8 @@
 
       <section class="panel career-goal-panel" aria-labelledby="careerGoalTitle">
         <div class="panel-head">
-          <div><p class="eyebrow">Career Profile</p><h3 id="careerGoalTitle">求职目标档案</h3></div>
-          <span class="pill">Agent Memory</span>
+          <div><p class="eyebrow">求职档案</p><h3 id="careerGoalTitle">求职目标档案</h3></div>
+          <span class="pill">Agent 记忆</span>
         </div>
         <form id="careerGoalForm" class="career-goal-form">
           <label><span>目标岗位</span><input id="careerGoalRole" class="input" required placeholder="例如：AI 应用测试工程师" /></label>
@@ -143,7 +143,7 @@
             <h3>真实求职体验路线</h3>
             <p class="module-copy">当前方向：<b id="flowProfileLabel">计算机 / 软件 / AI</b>。建议按下面顺序体验，系统会把每一步结果继续带到后续分析里。</p>
           </div>
-          <span class="pill">Career Flow</span>
+          <span class="pill">求职路径</span>
         </div>
         <div class="journey-steps">
           <button class="journey-step" data-flow-jump="resume:input">
@@ -572,7 +572,7 @@
   <aside class="agent-drawer" id="agentDrawer" role="dialog" aria-modal="true" aria-labelledby="agentDrawerTitle" aria-hidden="true" tabindex="-1">
     <header class="agent-drawer-head">
       <div>
-        <p class="eyebrow">Contextual Career Agent</p>
+        <p class="eyebrow">本地智能求职助手</p>
         <h2 id="agentDrawerTitle">求职 Agent 工作台</h2>
       </div>
       <button class="icon-button" id="closeAgentDrawer" type="button" title="关闭 Agent 工作台" aria-label="关闭 Agent 工作台"><i data-lucide="x"></i></button>
@@ -594,6 +594,7 @@
       <button class="ghost small" data-prompt="我是新用户，带我开始使用这个求职系统">带我开始</button>
       <button class="ghost small" data-prompt="根据当前机会，给我下一步求职行动建议">下一步行动</button>
       <button class="ghost small" data-prompt="检查当前简历与目标岗位的关键差距">检查简历差距</button>
+      <button class="ghost small" id="agentResumeUpload" type="button">上传/录入简历</button>
       <button class="ghost small" data-prompt="选择一份简历进行诊断">选择简历诊断</button>
       <button class="ghost small" data-prompt="选择一份简历生成优化草稿">生成优化草稿</button>
       <button class="ghost small" id="careerReportBtn" type="button">生成求职报告</button>

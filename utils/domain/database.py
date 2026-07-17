@@ -107,6 +107,35 @@ def migrate_database(db_path: str | os.PathLike[str]) -> None:
             raise
 
 
+def ensure_local_user(conn: sqlite3.Connection, user_id: int = 1) -> None:
+    """Repair legacy local installs whose business rows predate a users record."""
+    if not _table_exists(conn, "users"):
+        return
+    columns = _table_columns(conn, "users")
+    required = {"id", "username", "password"}
+    if not required.issubset(columns):
+        return
+    local_id = int(user_id)
+    if local_id <= 0:
+        raise ValueError("local user id must be positive")
+    values = {"id": local_id, "username": f"local-user-{local_id}", "password": "local-only"}
+    if "email" in columns:
+        values["email"] = ""
+    names = ", ".join(values)
+    placeholders = ", ".join("?" for _ in values)
+    for suffix in range(100):
+        values["username"] = (
+            f"local-user-{local_id}" if suffix == 0 else f"local-user-{local_id}-{suffix}"
+        )
+        conn.execute(
+            f"INSERT OR IGNORE INTO users ({names}) VALUES ({placeholders})",
+            tuple(values.values()),
+        )
+        if conn.execute("SELECT 1 FROM users WHERE id = ?", (local_id,)).fetchone():
+            return
+    raise RuntimeError("unable to initialize the local user record")
+
+
 def _backup_pre_migration_database(db_path: str, current_version: int) -> None:
     if not os.path.isfile(db_path) or os.path.getsize(db_path) == 0:
         return

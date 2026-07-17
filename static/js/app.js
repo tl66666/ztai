@@ -287,6 +287,7 @@ function bindActions() {
     renderAgentContextChips();
   });
   $("chatLog")?.addEventListener("click", handleAgentChatLogClick);
+  $("agentResumeUpload")?.addEventListener("click", openResumeUploadFromAgent);
   $("sendAgentBtn").addEventListener("click", sendAgentMessage);
   $("careerReportBtn").addEventListener("click", generateCareerReport);
   $("newAgentConversation")?.addEventListener("click", createAgentConversation);
@@ -302,6 +303,7 @@ function bindActions() {
       sendAgentMessage();
     }
   });
+  $("resumeFile")?.addEventListener("change", fillResumeTitleFromFile);
   ["analysisResumeSelect", "exportResumeSelect", "tailorResumeSelect", "skillResumeSelect", "interviewResumeSelect"].forEach((id) => {
     $(id)?.addEventListener("change", syncAgentContext);
   });
@@ -708,6 +710,22 @@ async function fillResume(id) {
   $("resumeTitle").focus();
   $("resumeContent").scrollTop = 0;
   toast(`正在编辑：${data.data.title}`);
+}
+
+function openResumeUploadFromAgent() {
+  cancelResumeEdit();
+  closeAgentDrawer();
+  jumpToModule("resume", "input");
+  const fileInput = $("resumeFile");
+  fileInput?.focus({ preventScroll: true });
+  fileInput?.click();
+}
+
+function fillResumeTitleFromFile() {
+  const file = $("resumeFile")?.files?.[0];
+  const title = $("resumeTitle");
+  if (!file || !title || title.value.trim()) return;
+  title.value = file.name.replace(/\.[^.]+$/, "").slice(0, 300);
 }
 
 function setResumeEditNotice(title = "") {
@@ -2401,7 +2419,7 @@ function openAgentProposal(proposalId, opener = null) {
   appendMessage("这项操作需要你的确认。", "bot", { proposals: [proposal] });
 }
 
-async function sendAgentMessage(forcedMessage = "") {
+async function sendAgentMessage(forcedMessage = "", extraContext = {}) {
   const input = $("agentInput");
   const message = String(forcedMessage || input.value || "").trim();
   if (!message) return;
@@ -2412,7 +2430,10 @@ async function sendAgentMessage(forcedMessage = "") {
   appendMessage(message, "user");
   if (!forcedMessage) input.value = "";
   const chatRequest = {
-    ...ContextualAgent.chatPayload(message, conversationId, agentContext.payload()),
+    ...ContextualAgent.chatPayload(message, conversationId, {
+      ...agentContext.payload(),
+      ...extraContext,
+    }),
     conversation_id: conversationId,
   };
   const data = await withLoading(
@@ -2650,8 +2671,11 @@ async function handleAgentChatLogClick(event) {
   if (choice) {
     const resumeId = Number(choice.dataset.agentResumeChoice);
     const workflow = choice.dataset.agentWorkflow === "revision" ? "revision" : "analysis";
-    const message = ContextualAgent.selectionMessage({ workflow }, resumeId);
-    if (message) await sendAgentMessage(message);
+    const message = ContextualAgent.selectionMessage({ workflow }, {
+      id: resumeId,
+      label: choice.dataset.agentResumeLabel,
+    });
+    if (message) await sendAgentMessage(message, { resume_id: resumeId });
     return;
   }
   await handleProposalClick(event);

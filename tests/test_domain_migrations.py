@@ -157,6 +157,71 @@ class DomainMigrationTests(unittest.TestCase):
 
         self.assertEqual(enabled, 1)
 
+    def test_initialization_repairs_an_empty_legacy_user_table(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "legacy-users.db")
+            with connect(db_path) as conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT UNIQUE NOT NULL,
+                        password TEXT NOT NULL,
+                        email TEXT
+                    );
+                    CREATE TABLE resumes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        title TEXT NOT NULL,
+                        content TEXT NOT NULL
+                    );
+                    """
+                )
+
+            import app as app_module
+            original_path = app_module.DB_PATH
+            try:
+                app_module.DB_PATH = db_path
+                app_module.init_db()
+                with connect(db_path) as conn:
+                    local_user = conn.execute(
+                        "SELECT id FROM users WHERE id = 1"
+                    ).fetchone()
+                    conn.execute(
+                        "INSERT INTO resumes(user_id,title,content) VALUES (1,'简历','正文')"
+                    )
+                self.assertIsNotNone(local_user)
+            finally:
+                app_module.DB_PATH = original_path
+
+    def test_initialization_repairs_local_user_when_the_default_name_is_taken(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "legacy-user-name.db")
+            with connect(db_path) as conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT UNIQUE NOT NULL,
+                        password TEXT NOT NULL
+                    );
+                    INSERT INTO users(id, username, password)
+                    VALUES (2, 'local-user-1', 'legacy');
+                    """
+                )
+
+            import app as app_module
+            original_path = app_module.DB_PATH
+            try:
+                app_module.DB_PATH = db_path
+                app_module.init_db()
+                with connect(db_path) as conn:
+                    self.assertIsNotNone(
+                        conn.execute("SELECT id FROM users WHERE id = 1").fetchone()
+                    )
+            finally:
+                app_module.DB_PATH = original_path
+
     def test_migrates_legacy_schema_and_data_idempotently(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = os.path.join(temp_dir, "legacy-test.db")

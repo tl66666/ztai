@@ -105,6 +105,23 @@ class AgentResumeWorkflowTests(unittest.TestCase):
         self.assertIn("• 负责 Flask 接口开发", source)
         self.assertIn("完成 Flask 接口开发并通过测试", saved)
 
+    def test_resume_choice_context_continues_the_workflow_without_exposing_an_id(self):
+        with patch("utils.agent_runtime.service.get_ai_client", return_value=self.local_client()):
+            selection = self.client.post(
+                "/api/agent/chat", json={"message": "帮我优化简历"}
+            ).get_json()
+            created = self.client.post(
+                "/api/agent/chat",
+                json={
+                    "conversation_id": selection["conversation_id"],
+                    "message": "我选择了这份简历，请生成优化草稿",
+                    "context": {"resume_id": self.resume_id},
+                },
+            ).get_json()
+
+        self.assertEqual(created["status"], "degraded")
+        self.assertEqual(created["action_proposals"][0]["action_type"], "create_resume_version")
+
     def test_local_agent_diagnoses_the_selected_resume_without_a_model_key(self):
         with patch("utils.agent_runtime.service.get_ai_client", return_value=self.local_client()):
             selection = self.client.post(

@@ -19,6 +19,24 @@
     agent: new Set([""]),
   };
 
+  const PROPOSAL_FIELD_LABELS = {
+    career_direction: "求职方向", target_role: "目标岗位", cities: "目标城市",
+    "salary.min": "期望薪资下限", "salary.max": "期望薪资上限", experience: "经验要求",
+    confirmed_skills: "已确认技能", company: "公司", job_title: "岗位", status: "阶段",
+    city: "城市", salary_min: "薪资下限", salary_max: "薪资上限", priority: "优先级",
+    channel: "投递渠道", source_url: "岗位链接", next_action_at: "下次跟进时间",
+    interview_at: "面试时间", deadline_at: "截止时间", title: "标题", type: "任务类型",
+    description: "说明", due_date: "截止日期", due_at: "提醒时间", report_type: "报告类型",
+    period_start: "开始日期", period_end: "结束日期",
+  };
+
+  const PROPOSAL_VALUE_LABELS = {
+    career_direction: { tech: "技术 / 软件 / AI", ops: "运营 / 新媒体 / 内容", marketing: "市场 / 销售 / 商务", finance: "财务 / 会计 / 审计", education: "教育 / 师范 / 教培", hr: "行政 / 人事 / 通用职能" },
+    status: { active: "启用", draft: "草稿", archived: "已归档", pending: "待处理", in_progress: "进行中", completed: "已完成", cancelled: "已取消", ready: "已准备" },
+    type: { interview_plan: "面试准备", follow_up: "跟进", career_report: "求职报告" },
+    report_type: { weekly: "周度复盘", monthly: "月度复盘" },
+  };
+
   function positiveId(value) {
     const number = Number(value);
     return Number.isInteger(number) && number > 0 ? number : null;
@@ -150,7 +168,7 @@
     if (!request || request.kind !== "resume_select" || !Array.isArray(request.options)) return "";
     const workflow = request.workflow === "revision" ? "revision" : "analysis";
     const options = request.options.filter((option) => positiveId(option?.id)).map((option) => `
-      <button type="button" class="agent-resume-choice" data-agent-resume-choice="${positiveId(option.id)}" data-agent-workflow="${workflow}">
+      <button type="button" class="agent-resume-choice" data-agent-resume-choice="${positiveId(option.id)}" data-agent-resume-label="${escapeHtml(option.label || "简历")}" data-agent-workflow="${workflow}">
         <b>${escapeHtml(option.label || `简历 #${option.id}`)}</b>
         ${option.preview ? `<small>${escapeHtml(option.preview)}</small>` : ""}
         <span>${workflow === "revision" ? "生成优化草稿" : "开始诊断"}</span>
@@ -163,11 +181,12 @@
     </section>`;
   }
 
-  function selectionMessage(request, resumeId) {
-    const id = positiveId(resumeId);
+  function selectionMessage(request, option) {
+    const id = positiveId(option?.id ?? option);
     if (!id) return "";
     const action = request?.workflow === "revision" ? "生成优化草稿" : "进行简历诊断";
-    return `选择简历 #${id}，${action}`;
+    const label = typeof option?.label === "string" ? option.label.trim().slice(0, 80) : "";
+    return label ? `已选择「${label}」，请${action}` : `已选择这份简历，请${action}`;
   }
 
   function normalizedSuggestedActions(actions) {
@@ -212,14 +231,24 @@
     });
   }
 
+  function proposalEditableFields(proposal) {
+    if (proposal?.action_type === "create_resume_version") return [];
+    return flattenEditable(proposal?.editable).flatMap(({ path, value }) => {
+      const label = PROPOSAL_FIELD_LABELS[path];
+      if (!label) return [];
+      const mapped = PROPOSAL_VALUE_LABELS[path]?.[value];
+      const serialized = Array.isArray(value) ? value.join("、") : (mapped ?? value ?? "");
+      return [{ path, label, value, serialized }];
+    });
+  }
+
   function proposalHtml(proposal) {
     const status = String(proposal?.status || "unknown");
     const pending = status === "pending";
     const busy = Boolean(proposal?.busy);
-    const fields = flattenEditable(proposal?.editable).map(({ path, value }) => {
+    const fields = proposalEditableFields(proposal).map(({ path, label, value, serialized }) => {
       const type = typeof value === "number" ? "number" : "text";
-      const serialized = Array.isArray(value) ? JSON.stringify(value) : (value ?? "");
-      return `<label class="agent-edit-field"><span>${escapeHtml(path)}</span><input class="input" type="${type}" data-agent-edit-field="${escapeHtml(path)}" value="${escapeHtml(serialized)}" ${pending && !busy ? "" : "disabled"}></label>`;
+      return `<label class="agent-edit-field"><span>${escapeHtml(label)}</span><input class="input" type="${type}" data-agent-edit-field="${escapeHtml(path)}" value="${escapeHtml(serialized)}" ${pending && !busy ? "" : "disabled"}></label>`;
     }).join("");
     const draftControl = pending && proposal?.action_type === "create_resume_version"
       ? `<button type="button" class="ghost" data-agent-action="open-draft" ${busy ? "disabled" : ""}>查看并编辑草稿</button>`

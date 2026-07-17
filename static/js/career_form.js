@@ -56,11 +56,25 @@
     if (controls.retry) controls.retry.hidden = true;
     try {
       const response = await request();
-      if (!response?.success || !response.data) {
+      if (!response?.success) {
         const message = response?.message || "目标档案加载失败";
         controls.status.textContent = `${message}，请重试。当前填写内容已保留。`;
         if (controls.retry) controls.retry.hidden = false;
         return { ok: false, response };
+      }
+      if (!response.data) {
+        controls.status.textContent = "还没有目标档案，先填写目标岗位，Agent 才能给出更贴合的建议。";
+        if (controls.retry) controls.retry.hidden = true;
+        return {
+          ok: true,
+          empty: true,
+          response,
+          direction: {
+            value: controls.direction?.value || state.careerProfile || "",
+            matched: false,
+            requested: "",
+          },
+        };
       }
       return { ok: true, response, ...hydrateProfile(response.data, controls, state) };
     } catch (error) {

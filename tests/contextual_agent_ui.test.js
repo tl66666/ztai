@@ -38,7 +38,10 @@ assert.ok(requestHtml.includes("&lt;script&gt;resume"));
 assert.ok(requestHtml.includes("&lt;img"));
 assert.ok(!requestHtml.includes("<script>resume"));
 assert.ok(!requestHtml.includes("<img src=x>"));
-assert.equal(AgentUI.selectionMessage(resumeRequest, 7), "选择简历 #7，生成优化草稿");
+assert.equal(
+  AgentUI.selectionMessage(resumeRequest, { id: 7, label: "后端工程师简历" }),
+  "已选择「后端工程师简历」，请生成优化草稿",
+);
 
 const guidedActions = AgentUI.suggestedActionsHtml([
   { label: "录入第一份简历", page: "resume", module: "input" },
@@ -66,6 +69,37 @@ assert.ok(!rendered.includes("<script>"));
 assert.ok(rendered.includes('data-agent-action="confirm"'));
 assert.ok(rendered.includes('data-agent-action="cancel"'));
 assert.ok(rendered.includes('data-agent-edit-field="company"'));
+
+const resumeDraftProposal = {
+  id: 10,
+  action_type: "create_resume_version",
+  preview: "将创建简历版本「Agent 优化版」",
+  risk_level: "medium",
+  status: "pending",
+  editable: { metadata: { version_label: "Agent 优化版", source_type: "agent" } },
+};
+const resumeDraftHtml = AgentUI.proposalHtml(resumeDraftProposal);
+assert.ok(resumeDraftHtml.includes('data-agent-action="open-draft"'));
+assert.ok(!resumeDraftHtml.includes("metadata."));
+assert.ok(!resumeDraftHtml.includes("source_type"));
+
+const goalProposalHtml = AgentUI.proposalHtml({
+  id: 11,
+  action_type: "set_career_goal",
+  preview: "更新求职目标信息",
+  risk_level: "medium",
+  status: "pending",
+  editable: {
+    career_direction: "tech",
+    target_role: "测试工程师",
+    source_metadata: "internal-only",
+  },
+});
+assert.ok(goalProposalHtml.includes("求职方向"));
+assert.ok(goalProposalHtml.includes("技术 / 软件 / AI"));
+assert.ok(!goalProposalHtml.includes(">career_direction<"));
+assert.ok(!goalProposalHtml.includes("source_metadata"));
+assert.ok(!goalProposalHtml.includes("internal-only"));
 
 let actionState = AgentUI.transitionProposal(proposal, "confirm_start");
 assert.equal(actionState.busy, true);
