@@ -60,6 +60,18 @@ class AgentResumeWorkflowTests(unittest.TestCase):
             [self.resume_id, self.resume_id + 1],
         )
 
+    def test_colloquial_resume_question_prompts_a_resume_choice(self):
+        with patch("utils.agent_runtime.service.get_ai_client", return_value=self.local_client()):
+            response = self.client.post(
+                "/api/agent/chat", json={"message": "我的简历可以吗"}
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "needs_input")
+        self.assertEqual(payload["input_request"]["kind"], "resume_select")
+        self.assertEqual(payload["input_request"]["workflow"], "analysis")
+
     def test_selected_resume_creates_editable_revision_proposal_and_confirms_new_version(self):
         with patch("utils.agent_runtime.service.get_ai_client", return_value=self.local_client()):
             selection = self.client.post(

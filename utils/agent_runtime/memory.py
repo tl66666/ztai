@@ -12,6 +12,15 @@ from utils.agent_runtime.models import Conversation, Message
 MAX_SEARCH_CANDIDATES = 500
 MAX_EXACT_QUERY_TOKENS = 24
 MAX_SEARCH_TERMS = 24
+BROWSER_EVENT_ARTIFACTS = frozenset({
+    "[object Event]",
+    "[object MouseEvent]",
+    "[object PointerEvent]",
+})
+
+
+def is_browser_event_artifact(value: object) -> bool:
+    return isinstance(value, str) and value.strip() in BROWSER_EVENT_ARTIFACTS
 
 
 AGENT_SCHEMA = """
@@ -251,6 +260,9 @@ class MemoryStore:
     def create_conversation(self, user_id: int, title: str = "新对话") -> Conversation:
         conversation_id = uuid.uuid4().hex
         timestamp = _now()
+        safe_title = title.strip() if isinstance(title, str) else ""
+        if not safe_title or is_browser_event_artifact(safe_title):
+            safe_title = "新对话"
         with self._connect() as connection:
             connection.execute(
                 """
@@ -258,9 +270,9 @@ class MemoryStore:
                     (id, user_id, title, status, summary, created_at, updated_at)
                 VALUES (?, ?, ?, 'active', '', ?, ?)
                 """,
-                (conversation_id, user_id, title.strip() or "新对话", timestamp, timestamp),
+                (conversation_id, user_id, safe_title, timestamp, timestamp),
             )
-        return Conversation(conversation_id, user_id, title.strip() or "新对话")
+        return Conversation(conversation_id, user_id, safe_title)
 
     def get_conversation(self, conversation_id: str, user_id: int) -> Conversation | None:
         with self._connect() as connection:
@@ -295,7 +307,7 @@ class MemoryStore:
         self, conversation_id: str, user_id: int, message: str
     ) -> bool:
         title = " ".join(message.strip().split())[:24]
-        if not title:
+        if not title or is_browser_event_artifact(title):
             return False
         with self._connect() as connection:
             cursor = connection.execute(
@@ -306,6 +318,45 @@ class MemoryStore:
                 (title, _now(), conversation_id, user_id),
             )
         return cursor.rowcount > 0
+
+    def repair_browser_event_artifacts(self, user_id: int) -> None:
+        """Remove only exact browser-event artifacts and their generated replies."""
+        with self._connect() as connection:
+            conversations = connection.execute(
+                "SELECT id, title FROM agent_conversations WHERE user_id = ?",
+                (user_id,),
+            ).fetchall()
+            for conversation in conversations:
+                conversation_id = conversation["id"]
+                if is_browser_event_artifact(conversation["title"]):
+                    connection.execute(
+                        "UPDATE agent_conversations SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                        ("新对话", _now(), conversation_id, user_id),
+                    )
+                rows = connection.execute(
+                    "SELECT id, role, content FROM agent_messages WHERE conversation_id = ? AND user_id = ? ORDER BY id",
+                    (conversation_id, user_id),
+                ).fetchall()
+                delete_ids: list[int] = []
+                for index, row in enumerate(rows):
+                    if row["role"] != "user" or not is_browser_event_artifact(row["content"]):
+                        continue
+                    delete_ids.append(row["id"])
+                    next_index = index + 1
+                    while next_index < len(rows) and rows[next_index]["role"] != "user":
+                        delete_ids.append(rows[next_index]["id"])
+                        next_index += 1
+                if not delete_ids:
+                    continue
+                placeholders = ", ".join("?" for _ in delete_ids)
+                connection.execute(
+                    f"DELETE FROM agent_messages WHERE id IN ({placeholders}) AND user_id = ?",
+                    (*delete_ids, user_id),
+                )
+                connection.execute(
+                    "UPDATE agent_conversations SET summary = '', summary_until_message_id = NULL, updated_at = ? WHERE id = ? AND user_id = ?",
+                    (_now(), conversation_id, user_id),
+                )
 
     def add_message(
         self,

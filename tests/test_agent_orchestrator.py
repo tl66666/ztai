@@ -390,6 +390,20 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(decision.tool, "get_dashboard")
         self.assertEqual(decision.call_id, "call_1")
 
+    def test_remote_policy_falls_back_to_local_tools_when_the_model_is_unavailable(self):
+        policy = RemoteModelPolicy(FakeAIClient({"success": False, "error_code": "network_error"}))
+        state = type("State", (), {
+            "model_messages": [], "context_prompt": "", "observations": [],
+            "user_message": "我的简历可以吗", "entity_context": {}, "active_task": None,
+        })()
+
+        decision = policy.decide(state, [])
+
+        self.assertFalse(policy.ai_used)
+        self.assertEqual(policy.last_error_code, "network_error")
+        self.assertEqual(decision.type, "tool_call")
+        self.assertEqual(decision.tool, "list_resumes")
+
     def test_remote_tool_result_uses_assistant_and_tool_roles_on_next_decision(self):
         client = SequenceAIClient([
             {

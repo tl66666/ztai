@@ -22,6 +22,19 @@ class AgentFrontendContractTests(unittest.TestCase):
         self.assertIn("conversation_id: conversationId", javascript)
         self.assertIn("data.conversation_id !== conversationId", javascript)
 
+    def test_agent_click_handlers_do_not_pass_browser_events_as_messages(self):
+        javascript = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('$("sendAgentBtn").addEventListener("click", () => sendAgentMessage());', javascript)
+        self.assertIn('$("newAgentConversation")?.addEventListener("click", () => createAgentConversation());', javascript)
+        self.assertIn("ContextualAgent.outboundMessage", javascript)
+
+    def test_agent_message_renderer_formats_common_markdown_without_exposing_markers(self):
+        javascript = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('"<strong>$1</strong>"', javascript)
+        self.assertIn('"<hr>"', javascript)
+
     def test_agent_ui_does_not_label_events_as_private_reasoning(self):
         javascript = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
 

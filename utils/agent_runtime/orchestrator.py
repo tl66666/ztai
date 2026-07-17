@@ -6,6 +6,7 @@ import time
 import uuid
 
 from utils.agent_runtime.context import ContextBuilder, extract_explicit_facts
+from utils.agent_runtime.local_policy import LocalPolicy
 from utils.agent_runtime.memory import MemoryStore
 from utils.agent_runtime.models import AgentDecision, AgentRunResult
 
@@ -46,8 +47,12 @@ class RemoteModelPolicy:
         self.provider = getattr(getattr(client, "provider", None), "id", "remote")
         self.model = getattr(client, "model", "unknown")
         self.last_error_code = ""
+        self._local_fallback = LocalPolicy()
+        self._using_local_fallback = False
 
     def decide(self, state: RunState, tool_schemas: list[dict]) -> AgentDecision:
+        if self._using_local_fallback:
+            return self._local_fallback.decide(state, tool_schemas)
         if not hasattr(state, "pending_decisions"):
             state.pending_decisions = []
         if state.pending_decisions:
@@ -84,7 +89,8 @@ class RemoteModelPolicy:
         if not result.get("success"):
             self.ai_used = False
             self.last_error_code = result.get("error_code", "model_error")
-            return AgentDecision("final", message="模型暂时不可用，已保留本轮对话，请稍后重试。")
+            self._using_local_fallback = True
+            return self._local_fallback.decide(state, tool_schemas)
         message = result.get("message") or result.get("assistant_message") or {}
         tool_calls = message.get("tool_calls") or []
         if tool_calls:

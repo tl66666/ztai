@@ -17,7 +17,7 @@ from flask_cors import CORS
 from werkzeug.security import safe_join
 
 from utils.ai_client import extract_keywords, get_ai_client, set_api_key
-from utils.agent_runtime.memory import create_agent_tables
+from utils.agent_runtime.memory import create_agent_tables, is_browser_event_artifact
 from utils.domain import (
     APPLICATION_STATUSES,
     CareerService,
@@ -2088,6 +2088,8 @@ def agent_chat():
     message = raw_message.strip()
     if not message or len(message) > 12000:
         return jsonify({"success": False, "message": "消息必须是 1 到 12000 个字符"}), 400
+    if is_browser_event_artifact(message):
+        return jsonify({"success": False, "message": "点击已忽略，请在输入框中写下你的问题后再发送"}), 400
     conversation_id = data.get("conversation_id", "")
     if not isinstance(conversation_id, str) or len(conversation_id) > 200:
         return jsonify({"success": False, "message": "会话标识无效"}), 400

@@ -54,6 +54,13 @@
     return result;
   }
 
+  function outboundMessage(forcedMessage, inputValue = "") {
+    if (typeof forcedMessage === "string" && forcedMessage.trim()) {
+      return forcedMessage.trim();
+    }
+    return typeof inputValue === "string" ? inputValue.trim() : "";
+  }
+
   function createContextStore(initial = {}) {
     let current = normalizedContext(initial);
     const suppressed = new Map();
@@ -409,6 +416,7 @@
     suggestedActionsHtml,
     flattenEditable,
     normalizedContext,
+    outboundMessage,
     proposalHtml,
     proposalsFromMetadata,
     resultRoute,

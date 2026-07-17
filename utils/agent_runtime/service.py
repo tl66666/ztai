@@ -22,9 +22,11 @@ class AgentService:
         return asdict(self.store.create_conversation(user_id, title))
 
     def list_conversations(self, user_id: int) -> list[dict]:
+        self.store.repair_browser_event_artifacts(user_id)
         return [asdict(item) for item in self.store.list_conversations(user_id)]
 
     def list_messages(self, conversation_id: str, user_id: int) -> list[dict] | None:
+        self.store.repair_browser_event_artifacts(user_id)
         if not self.store.get_conversation(conversation_id, user_id):
             return None
         return [asdict(item) for item in self.store.list_messages(conversation_id, user_id)]

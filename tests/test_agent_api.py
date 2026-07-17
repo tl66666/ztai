@@ -76,6 +76,23 @@ class AgentAPITests(unittest.TestCase):
                 self.assertNotIn("x" * 100, response.get_data(as_text=True))
         self.assertEqual(counts(), before)
 
+    def test_chat_rejects_browser_event_artifacts_before_writes(self):
+        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+            before = conn.execute("SELECT COUNT(*) FROM agent_messages").fetchone()[0]
+
+        response = self.client.post(
+            "/api/agent/chat", json={"message": "[object PointerEvent]"}
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.get_json(),
+            {"success": False, "message": "点击已忽略，请在输入框中写下你的问题后再发送"},
+        )
+        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+            after = conn.execute("SELECT COUNT(*) FROM agent_messages").fetchone()[0]
+        self.assertEqual(after, before)
+
     def test_chat_accepts_only_identifier_context_and_passes_it_to_service(self):
         service = Mock()
         service.chat.return_value = {
@@ -217,6 +234,25 @@ class AgentAPITests(unittest.TestCase):
         response = self.client.get("/api/agent/conversations/1").get_json()
 
         self.assertEqual([item["title"] for item in response["conversations"]], ["我的会话"])
+
+    def test_listing_conversations_repairs_only_known_browser_event_artifacts(self):
+        conversation_id = self.create_conversation()
+        store = app_module.get_agent_service().store
+        store.name_conversation_from_message(conversation_id, 1, "[object PointerEvent]")
+        store.add_message(conversation_id, 1, "assistant", "正常欢迎语")
+        store.add_message(conversation_id, 1, "user", "[object PointerEvent]")
+        store.add_message(conversation_id, 1, "assistant", "错误点击产生的回复")
+        store.add_message(conversation_id, 1, "user", "帮我诊断简历")
+
+        conversations = self.client.get("/api/agent/conversations/1").get_json()["conversations"]
+        messages = self.messages(conversation_id).get_json()["messages"]
+
+        title = next(item["title"] for item in conversations if item["id"] == conversation_id)
+        self.assertEqual(title, "新对话")
+        self.assertEqual(
+            [item["content"] for item in messages],
+            ["正常欢迎语", "帮我诊断简历"],
+        )
 
     def test_single_user_api_rejects_client_user_impersonation(self):
         create_response = self.client.post(

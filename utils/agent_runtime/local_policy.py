@@ -78,6 +78,10 @@ class LocalPolicy:
         if intent == "interview_readiness":
             return AgentDecision("tool_call", "get_dashboard", {})
         if intent in {"resume_analysis", "resume_revision"}:
+            resume_id = getattr(state, "entity_context", {}).get("resume_id")
+            if isinstance(resume_id, int) and resume_id > 0:
+                tool = "diagnose_resume" if intent == "resume_analysis" else "prepare_resume_revision"
+                return AgentDecision("tool_call", tool, {"resume_id": resume_id})
             return AgentDecision("tool_call", "list_resumes", {})
 
         if any(word in message for word in ("匹配岗位", "岗位匹配", "匹配度", "适合这个岗位")):
@@ -160,7 +164,9 @@ class LocalPolicy:
         if "简历" in message:
             if any(word in message for word in ("优化", "修改", "完善", "改写", "生成版本", "新版本")):
                 return "resume_revision"
-            if any(word in message for word in ("问题", "诊断", "分析", "评估")):
+            if any(word in message for word in (
+                "问题", "诊断", "分析", "评估", "可以吗", "怎么样", "好不好", "行不行", "能用吗", "合格吗",
+            )):
                 return "resume_analysis"
         return ""
 

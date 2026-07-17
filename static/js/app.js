@@ -288,9 +288,9 @@ function bindActions() {
   });
   $("chatLog")?.addEventListener("click", handleAgentChatLogClick);
   $("agentResumeUpload")?.addEventListener("click", openResumeUploadFromAgent);
-  $("sendAgentBtn").addEventListener("click", sendAgentMessage);
+  $("sendAgentBtn").addEventListener("click", () => sendAgentMessage());
   $("careerReportBtn").addEventListener("click", generateCareerReport);
-  $("newAgentConversation")?.addEventListener("click", createAgentConversation);
+  $("newAgentConversation")?.addEventListener("click", () => createAgentConversation());
   $("clearAgentConversation")?.addEventListener("click", clearAgentConversation);
   $("agentConversationSelect")?.addEventListener("change", async () => {
     state.agentConversationId = $("agentConversationSelect").value;
@@ -512,7 +512,11 @@ function escapeHtml(text = "") {
 
 function renderText(text = "") {
   return escapeHtml(text)
+    .replace(/^### (.*)$/gm, "<h5>$1</h5>")
     .replace(/^## (.*)$/gm, "<h4>$1</h4>")
+    .replace(/^\s*---+\s*$/gm, "<hr>")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/^(\d+)\. (.*)$/gm, "<div>$1. $2</div>")
     .replace(/^- (.*)$/gm, "<div>• $1</div>")
     .replace(/\n/g, "<br>");
 }
@@ -2421,14 +2425,15 @@ function openAgentProposal(proposalId, opener = null) {
 
 async function sendAgentMessage(forcedMessage = "", extraContext = {}) {
   const input = $("agentInput");
-  const message = String(forcedMessage || input.value || "").trim();
+  const hasForcedMessage = typeof forcedMessage === "string" && forcedMessage.trim();
+  const message = ContextualAgent.outboundMessage(forcedMessage, input?.value || "");
   if (!message) return;
   if (!state.agentConversationId) await createAgentConversation();
   const conversationId = state.agentConversationId;
   if (!conversationId) return;
   agentConversationEpoch.invalidate();
   appendMessage(message, "user");
-  if (!forcedMessage) input.value = "";
+  if (!hasForcedMessage) input.value = "";
   const chatRequest = {
     ...ContextualAgent.chatPayload(message, conversationId, {
       ...agentContext.payload(),

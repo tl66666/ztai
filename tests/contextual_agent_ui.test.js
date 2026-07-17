@@ -24,6 +24,17 @@ assert.deepEqual(
 );
 assert.ok(!("user_id" in AgentUI.chatPayload("hello", "conversation-1", {})));
 
+assert.equal(
+  AgentUI.outboundMessage({ type: "click" }, "我的简历可以吗"),
+  "我的简历可以吗",
+  "browser events are ignored and the text from the chat box is preserved",
+);
+assert.equal(
+  AgentUI.outboundMessage("已选择这份简历，请进行简历诊断", "我的简历可以吗"),
+  "已选择这份简历，请进行简历诊断",
+  "explicit workflow messages still take precedence over the chat box",
+);
+
 const resumeRequest = {
   kind: "resume_select",
   workflow: "revision",
