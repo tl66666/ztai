@@ -61,8 +61,14 @@ function Find-Python {
         try {
             $versionText = (Invoke-Python $candidate @("-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))") 2>$null | Select-Object -Last 1).Trim()
             if ($LASTEXITCODE -eq 0 -and [version]$versionText -ge [version]"3.10.0") {
-                $candidate | Add-Member -NotePropertyName Version -NotePropertyValue $versionText
-                return $candidate
+                $encodedExecutable = (Invoke-Python $candidate @("-c", "import sys, base64; print(base64.b64encode(sys.executable.encode('utf-8')).decode('ascii'))") 2>$null | Select-Object -Last 1).Trim()
+                $executablePath = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($encodedExecutable))
+                if ($LASTEXITCODE -ne 0 -or -not $executablePath -or -not (Test-Path -LiteralPath $executablePath -PathType Leaf)) {
+                    throw "Python executable is unavailable: $executablePath"
+                }
+                return [pscustomobject]@{
+                    Command = $executablePath; Prefix = @(); Label = $candidate.Label; Version = $versionText
+                }
             }
         } catch {
             continue

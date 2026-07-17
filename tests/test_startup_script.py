@@ -82,6 +82,18 @@ class StartupScriptContractTests(unittest.TestCase):
         self.assertIn("use_reloader=False", self.launcher)
         self.assertIn("ValidateRange(1024, 65535)", self.launcher)
 
+    def test_launcher_resolves_the_real_python_executable_before_starting(self):
+        self.assertIn(
+            "import sys, base64; print(base64.b64encode(sys.executable.encode('utf-8')).decode('ascii'))",
+            self.launcher,
+        )
+        self.assertIn("FromBase64String", self.launcher)
+        self.assertIn("Python executable is unavailable", self.launcher)
+        self.assertRegex(
+            self.launcher,
+            r"Command\s*=\s*\$executablePath;\s*Prefix\s*=\s*@\(\)",
+        )
+
     def test_port_selection_wraps_safely_after_65535(self):
         self.assertIn("65535", self.launcher)
         self.assertRegex(self.launcher, r"(?i)wrap|回绕")
