@@ -2545,6 +2545,7 @@ async function restoreAgentMessages() {
     });
     if (message.role === "assistant") {
       renderAgentEvents(message.metadata?.events || [], message.metadata?.status || "completed");
+      renderAgentSuggestedActions(message.metadata?.suggested_actions || []);
     }
   }
 }
@@ -2632,6 +2633,19 @@ function replaceProposalCard(card, proposal, incomingEpoch = state.agentProposal
 }
 
 async function handleAgentChatLogClick(event) {
+  const navigation = event.target.closest("[data-agent-navigation]");
+  if (navigation) {
+    const actions = ContextualAgent.normalizedSuggestedActions([{
+      label: navigation.textContent || "下一步",
+      page: navigation.dataset.agentPage,
+      module: navigation.dataset.agentModule,
+    }]);
+    if (actions[0]) {
+      closeAgentDrawer();
+      jumpToModule(actions[0].page, actions[0].module);
+    }
+    return;
+  }
   const choice = event.target.closest("[data-agent-resume-choice]");
   if (choice) {
     const resumeId = Number(choice.dataset.agentResumeChoice);
@@ -2888,13 +2902,9 @@ function renderAgentEvents(events, status = "completed") {
 }
 
 function renderAgentSuggestedActions(actions) {
-  if (!actions.length) return;
+  const html = ContextualAgent.suggestedActionsHtml(actions);
+  if (!html) return;
   const node = $("chatLog").lastElementChild;
-  const buttons = actions.map((action) => `
-    <button type="button" onclick="closeAgentDrawer(); jumpToModule('${escapeAttr(action.page)}','${escapeAttr(action.module)}')">
-      ${escapeHtml(action.label)}<i data-lucide="arrow-right"></i>
-    </button>
-  `).join("");
-  node?.insertAdjacentHTML("beforeend", `<div class="agent-suggested-actions">${buttons}</div>`);
+  node?.insertAdjacentHTML("beforeend", html);
   renderIcons();
 }

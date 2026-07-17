@@ -247,6 +247,19 @@ class AgentAPITests(unittest.TestCase):
 
         self.assertEqual(response["suggested_actions"][0]["page"], "tracker")
 
+    def test_dashboard_suggestion_uses_the_existing_home_page(self):
+        conversation_id = self.create_conversation()
+
+        response = self.client.post(
+            "/api/agent/chat",
+            json={
+                "conversation_id": conversation_id,
+                "message": "帮我分析现在的求职情况，下一步做什么",
+            },
+        ).get_json()
+
+        self.assertEqual(response["suggested_actions"][0]["page"], "home")
+
     def test_chat_returns_proposals_and_message_history_restores_cards(self):
         conversation_id = self.create_conversation()
         local_client = type("LocalClient", (), {"api_key": ""})()

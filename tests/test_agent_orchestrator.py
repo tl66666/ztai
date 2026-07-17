@@ -95,6 +95,38 @@ class FakeRegistry:
         return ToolResult(False, display_text="未知工具", error_code="unknown_tool")
 
 
+class EmptyJobSearchRegistry(FakeRegistry):
+    def execute(self, name, arguments, user_id, timeout_seconds=None):
+        self.calls.append((name, arguments, user_id))
+        if name == "get_dashboard":
+            return ToolResult(
+                True,
+                {
+                    "resumes": 0,
+                    "matches": 0,
+                    "interviews": 0,
+                    "applications": 0,
+                    "readiness": {"score": 0, "label": "待启动"},
+                },
+                "简历 0；匹配 0；面试 0；投递 0；求职准备度=0（待启动）",
+            )
+        if name == "get_career_profile":
+            return ToolResult(True, {}, "{}")
+        if name == "list_action_items":
+            return ToolResult(True, [], "暂无行动项")
+        if name == "get_training_insights":
+            return ToolResult(
+                True,
+                {
+                    "interviews": {"completed_count": 0},
+                    "practice": {"completed_count": 0},
+                    "audio": {"completed_count": 0},
+                },
+                "暂无训练记录",
+            )
+        return ToolResult(False, display_text="未知工具", error_code="unknown_tool")
+
+
 class FakeAIClient:
     api_key = "key"
     provider = type("Provider", (), {"id": "fake"})()
@@ -255,6 +287,37 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertIn("杭州", result.reply)
         self.assertIn("优先级 1", result.reply)
         self.assertIn("面试训练", result.reply)
+
+    def test_local_agent_guides_first_time_user_to_setup_and_resume_input(self):
+        self.registry = EmptyJobSearchRegistry()
+
+        result = self.make_orchestrator(LocalPolicy()).run(
+            1, self.conversation.id, "我是新用户，带我开始使用这个求职系统"
+        )
+
+        self.assertEqual(
+            result.tools_used,
+            ["get_dashboard", "get_career_profile", "list_action_items", "get_training_insights"],
+        )
+        self.assertEqual(
+            result.suggested_actions,
+            [
+                {"label": "完善求职目标", "page": "home", "module": ""},
+                {"label": "录入第一份简历", "page": "resume", "module": "input"},
+            ],
+        )
+
+    def test_local_agent_guides_existing_user_to_interview_and_pipeline(self):
+        result = self.make_orchestrator(LocalPolicy()).run(
+            1, self.conversation.id, "带我开始下一步求职流程"
+        )
+
+        self.assertEqual(result.suggested_actions[0], {
+            "label": "开始模拟面试", "page": "interview", "module": "mock",
+        })
+        self.assertEqual(result.suggested_actions[1], {
+            "label": "查看投递看板", "page": "tracker", "module": "board",
+        })
         self.assertNotIn("当前未配置大模型 API", result.reply)
 
     def test_local_policy_explains_capabilities_without_api_key(self):
@@ -285,14 +348,18 @@ class AgentOrchestratorTests(unittest.TestCase):
                 self.assertEqual(result.tools_used, expected_tools)
                 self.assertIn(expected_text, result.reply)
 
-    def test_local_policy_unknown_request_returns_actionable_examples(self):
+    def test_local_policy_guides_a_user_who_does_not_know_where_to_start(self):
         result = self.make_orchestrator(LocalPolicy()).run(
             1, self.conversation.id, "我最近有点迷茫，不知道从哪里开始"
         )
 
-        self.assertEqual(result.tools_used, [])
-        self.assertIn("可以直接这样问", result.reply)
-        self.assertIn("下一步", result.reply)
+        self.assertEqual(
+            result.tools_used,
+            ["get_dashboard", "get_career_profile", "list_action_items", "get_training_insights"],
+        )
+        self.assertIn("最短可用路径", result.reply)
+        self.assertIn("优先级 1", result.reply)
+        self.assertTrue(result.suggested_actions)
         self.assertNotEqual(
             result.reply,
             "当前未配置大模型 API，正在使用本地模板和规则模式，不会进行模型生成。",

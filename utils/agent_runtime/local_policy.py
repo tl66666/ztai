@@ -69,7 +69,7 @@ class LocalPolicy:
                     {"job_title": remembered_role.group(1).strip()},
                 )
 
-        if intent == "career_diagnosis":
+        if intent in {"career_diagnosis", "guided_start"}:
             return AgentDecision("tool_call", "get_dashboard", {})
         if intent == "capabilities":
             return AgentDecision("final", message=self._capability_message())
@@ -116,6 +116,14 @@ class LocalPolicy:
 
     @staticmethod
     def _read_intent(message: str) -> str:
+        if any(
+            phrase in message
+            for phrase in (
+                "带我开始", "带我使用", "帮我上手", "从哪里开始", "新用户",
+                "刚开始找工作", "使用这个求职系统", "求职流程",
+            )
+        ):
+            return "guided_start"
         if any(
             phrase in message
             for phrase in (
@@ -167,6 +175,12 @@ class LocalPolicy:
                 "list_action_items",
                 "get_training_insights",
             ),
+            "guided_start": (
+                "get_dashboard",
+                "get_career_profile",
+                "list_action_items",
+                "get_training_insights",
+            ),
             "interview_readiness": ("get_dashboard", "get_training_insights"),
             "opportunities": ("list_applications",),
             "resume_analysis": ("list_resumes",),
@@ -176,9 +190,14 @@ class LocalPolicy:
         next_tool = next((tool for tool in plan if tool not in observed), "")
         if next_tool:
             return AgentDecision("tool_call", next_tool, {})
-        if intent == "career_diagnosis":
+        if intent in {"career_diagnosis", "guided_start"}:
+            reply = self._synthesize_career_diagnosis(observations)
+            if intent == "guided_start":
+                reply = "我会按当前数据带你走完最短可用路径。\n" + reply
             return AgentDecision(
-                "final", message=self._synthesize_career_diagnosis(observations)
+                "final",
+                arguments={"suggested_actions": self._career_guidance_actions(observations)},
+                message=reply,
             )
         if intent == "interview_readiness":
             return AgentDecision(
@@ -339,6 +358,29 @@ class LocalPolicy:
             f"目标：{target} / {city}。\n{priority_text}\n"
             "说明：这是基于本地数据和确定性规则生成的行动排序，不会冒充大模型推理。"
         )
+
+    def _career_guidance_actions(self, observations: list[dict]) -> list[dict[str, str]]:
+        dashboard = self._observation_data(observations, "get_dashboard", {})
+        profile = self._observation_data(observations, "get_career_profile", {})
+        training = self._observation_data(observations, "get_training_insights", {})
+        actions = []
+
+        if not profile.get("target_role"):
+            actions.append({"label": "完善求职目标", "page": "home", "module": ""})
+        if dashboard.get("resumes", 0) == 0:
+            actions.append({"label": "录入第一份简历", "page": "resume", "module": "input"})
+        elif dashboard.get("matches", 0) == 0:
+            actions.append({"label": "粘贴 JD 做匹配", "page": "resume", "module": "jd"})
+            actions.append({"label": "先诊断当前简历", "page": "resume", "module": "analysis"})
+        else:
+            interviews = (training.get("interviews") or {}).get("completed_count", 0)
+            if interviews == 0:
+                actions.append({"label": "开始模拟面试", "page": "interview", "module": "mock"})
+            if dashboard.get("applications", 0) == 0:
+                actions.append({"label": "记录第一条投递", "page": "tracker", "module": "add"})
+            else:
+                actions.append({"label": "查看投递看板", "page": "tracker", "module": "board"})
+        return actions[:3]
 
     def _synthesize_interview_readiness(self, observations: list[dict]) -> str:
         dashboard = self._observation_data(observations, "get_dashboard", {})

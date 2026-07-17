@@ -40,6 +40,14 @@ assert.ok(!requestHtml.includes("<script>resume"));
 assert.ok(!requestHtml.includes("<img src=x>"));
 assert.equal(AgentUI.selectionMessage(resumeRequest, 7), "选择简历 #7，生成优化草稿");
 
+const guidedActions = AgentUI.suggestedActionsHtml([
+  { label: "录入第一份简历", page: "resume", module: "input" },
+  { label: "注入", page: "https://evil.example", module: "x" },
+]);
+assert.ok(guidedActions.includes('data-agent-navigation'));
+assert.ok(guidedActions.includes('data-agent-page="resume"'));
+assert.ok(!guidedActions.includes("evil.example"));
+
 const proposal = {
   id: 9,
   action_type: "create_opportunity",

@@ -57,7 +57,7 @@ class AgentService:
         result = orchestrator.run(user_id, conversation_id, message, entity_context=context or {})
         return {
             **asdict(result),
-            "suggested_actions": self._suggested_actions(result.tools_used),
+            "suggested_actions": result.suggested_actions or self._suggested_actions(result.tools_used),
         }
 
     @staticmethod
@@ -65,9 +65,22 @@ class AgentService:
         mapping = {
             "analyze_resume": {"label": "打开简历实验室", "page": "resume", "module": "analysis"},
             "diagnose_resume": {"label": "打开简历实验室", "page": "resume", "module": "analysis"},
+            "prepare_resume_revision": {"label": "管理简历版本", "page": "resume", "module": "manage"},
             "match_job": {"label": "继续 JD 优化", "page": "resume", "module": "jd"},
             "get_interview_question": {"label": "进入面试训练", "page": "interview", "module": "mock"},
+            "get_training_insights": {"label": "查看训练记录", "page": "interview", "module": "records"},
+            "list_resumes": {"label": "管理我的简历", "page": "resume", "module": "manage"},
             "list_applications": {"label": "打开投递看板", "page": "tracker", "module": "board"},
-            "get_dashboard": {"label": "查看项目总览", "page": "dashboard", "module": "overview"},
+            "get_dashboard": {"label": "查看项目总览", "page": "home", "module": ""},
         }
-        return [mapping[name] for name in tools_used if name in mapping][:2]
+        actions = []
+        seen = set()
+        for name in tools_used:
+            action = mapping.get(name)
+            if not action:
+                continue
+            key = (action["page"], action["module"])
+            if key not in seen:
+                actions.append(action)
+                seen.add(key)
+        return actions[:3]

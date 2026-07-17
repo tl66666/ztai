@@ -11,6 +11,14 @@
     resume: "resume_id",
   };
 
+  const NAVIGATION_MODULES = {
+    home: new Set([""]),
+    resume: new Set(["input", "manage", "analysis", "export", "jd", "skills"]),
+    interview: new Set(["mock", "professional", "practice", "records"]),
+    tracker: new Set(["add", "board", "salary"]),
+    agent: new Set([""]),
+  };
+
   function positiveId(value) {
     const number = Number(value);
     return Number.isInteger(number) && number > 0 ? number : null;
@@ -160,6 +168,30 @@
     if (!id) return "";
     const action = request?.workflow === "revision" ? "生成优化草稿" : "进行简历诊断";
     return `选择简历 #${id}，${action}`;
+  }
+
+  function normalizedSuggestedActions(actions) {
+    if (!Array.isArray(actions)) return [];
+    const seen = new Set();
+    return actions.flatMap((action) => {
+      const label = typeof action?.label === "string" ? action.label.trim().slice(0, 80) : "";
+      const page = typeof action?.page === "string" ? action.page : "";
+      const module = typeof action?.module === "string" ? action.module : "";
+      if (!label || !NAVIGATION_MODULES[page]?.has(module)) return [];
+      const key = `${page}:${module}`;
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [{ label, page, module }];
+    }).slice(0, 3);
+  }
+
+  function suggestedActionsHtml(actions) {
+    const items = normalizedSuggestedActions(actions).map((action) => `
+      <button type="button" data-agent-navigation data-agent-page="${escapeHtml(action.page)}" data-agent-module="${escapeHtml(action.module)}">
+        ${escapeHtml(action.label)}<i data-lucide="arrow-right"></i>
+      </button>
+    `).join("");
+    return items ? `<div class="agent-suggested-actions">${items}</div>` : "";
   }
 
   function proposalsFromMetadata(metadata) {
@@ -344,6 +376,8 @@
     escapeHtml,
     inputRequestHtml,
     selectionMessage,
+    normalizedSuggestedActions,
+    suggestedActionsHtml,
     flattenEditable,
     normalizedContext,
     proposalHtml,

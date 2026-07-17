@@ -50,4 +50,5 @@ class AgentRunResult:
     tools_used: list[str] = field(default_factory=list)
     action_proposals: list[dict[str, Any]] = field(default_factory=list)
     input_request: dict[str, Any] = field(default_factory=dict)
+    suggested_actions: list[dict[str, str]] = field(default_factory=list)
     ai_used: bool = False

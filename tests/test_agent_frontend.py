@@ -43,7 +43,9 @@ class AgentFrontendContractTests(unittest.TestCase):
 
         self.assertIn('data-prompt="选择一份简历进行诊断"', html)
         self.assertIn('data-prompt="选择一份简历生成优化草稿"', html)
+        self.assertIn('data-prompt="我是新用户，带我开始使用这个求职系统"', html)
         self.assertIn("renderAgentInputRequest", javascript)
+        self.assertIn("message.metadata?.suggested_actions", javascript)
         self.assertIn("/draft", javascript)
 
 
