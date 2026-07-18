@@ -897,7 +897,7 @@
               <tr><td>面试与训练</td><td>问题生成、回答评估、训练质量汇总</td><td>准备重点、薄弱问题和表达建议</td></tr>
               <tr><td>机会与行动</td><td>机会盘点、详情读取、行动项、操作提议</td><td>阶段风险、跟进建议和下一步</td></tr>
               <tr><td>职业决策</td><td>职业档案、准备度、薪资估算、阶段报告</td><td>目标差距和行动优先级</td></tr>
-              <tr><td>公开信息</td><td>网络搜索、受限网页读取</td><td>需要时效性的公开资料</td></tr>
+              <tr><td>公开信息</td><td>DuckDuckGo Instant Answer API、受限公网文本网页读取</td><td>仅按用户请求获取时效公开资料；拒绝回环、内网和私有地址</td></tr>
             </tbody>
           </table>
         </article>
@@ -914,7 +914,7 @@
           </div>
           <div class="engineering-disclosure">
             <b>实现方式：自研有界 Tool-Calling Runtime</b>
-            <p>不是标准 ReAct：不展示或依赖隐藏思维链。模型可用时使用 provider-native tool_calls；无 Key 时由 LocalPolicy 完成确定性多工具规划。暂未引入 LangChain / LangGraph，因为当前重点是本地领域事务、确认边界和恢复语义；当出现多 Agent 并行、跨服务长流程或审批状态图时再评估 LangGraph。</p>
+            <p>不是标准 ReAct：不展示或依赖隐藏思维链。模型可用时使用 provider-native tool_calls；无 Key 时由 LocalPolicy 完成确定性多工具规划。暂未引入 LangChain / LangGraph，因为当前重点是本地领域事务、确认边界和恢复语义；当出现多 Agent 并行、跨服务长流程或审批状态图时再评估 LangGraph。外部工具只在用户请求公开资料时使用，核心简历、投递和训练数据均由本地领域工具与 SQLite 处理。</p>
           </div>
         </div>
       </article>

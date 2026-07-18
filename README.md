@@ -2,7 +2,7 @@
 
 一个把简历、岗位、面试、投递和复盘连接起来的本地优先求职工作台。它的 Agent 不是独立聊天页，而是贯穿整个产品的行动助手：能读取当前机会和简历上下文、找出阻塞点、调用求职工具，并把写入操作先整理成预览，只有用户确认后才执行。
 
-[在线项目展示](https://tl66666.github.io/ztai/static/showcase.html) · [用户指南](docs/USER_GUIDE.md) · [Agent 双模式](docs/AGENT_MODES.md) · [架构说明](docs/ARCHITECTURE.md) · [测试指南](docs/TESTING.md) · [简历项目素材](docs/RESUME_PROJECT_ENTRY.md) · [版本记录](CHANGELOG.md)
+[在线项目展示](https://tl66666.github.io/ztai/static/showcase.html) · [项目交接](docs/PROJECT_HANDOFF.md) · [用户指南](docs/USER_GUIDE.md) · [Agent 双模式](docs/AGENT_MODES.md) · [架构说明](docs/ARCHITECTURE.md) · [测试指南](docs/TESTING.md) · [简历项目素材](docs/RESUME_PROJECT_ENTRY.md) · [版本记录](CHANGELOG.md)
 
 > GitHub Pages 只展示真实产品截图和设计说明。完整系统需要在本机启动，数据默认保存在本机 SQLite 数据库中。
 
