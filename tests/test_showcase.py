@@ -80,7 +80,7 @@ class ShowcaseContractTests(unittest.TestCase):
         for phrase in (
             "领域服务",
             "Agent Runtime",
-            "21 个结构化工具",
+            "22 个结构化工具",
             "确定性多工具规划",
             "没有引入 LangChain",
             "工具",
@@ -141,6 +141,7 @@ class ShowcaseContractTests(unittest.TestCase):
         agent_section = self.html.split('id="agent"', 1)[1].split("</section>", 1)[0]
 
         self.assertIn("agent-local-desktop.webp", agent_section)
+        self.assertIn("agent-interview-questions-desktop.webp", self.html)
         self.assertIn('width="1440"', agent_section)
         self.assertIn('height="900"', agent_section)
         self.assertNotIn("agent-mobile.webp", agent_section)
@@ -203,7 +204,7 @@ class ShowcaseContractTests(unittest.TestCase):
             "GitHub Pages",
             "静态项目展示",
             "不能在此直接使用 Agent",
-            "Python 299/299",
+            "Python 332/332",
             "本机缺少 Firefox",
             "PASS",
             "SKIP",

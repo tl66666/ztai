@@ -537,6 +537,11 @@ async function loadProviders() {
       ? `${data.provider_name} 已连接`
       : "本地智能求职助手";
   }
+  if ($("agentModeDetail")) {
+    $("agentModeDetail").textContent = data.ai_enabled
+      ? "本地任务优先执行；开放问题由模型增强，写入仍需你确认。"
+      : "本地任务可直接执行；开放问题与完整简历深度改写需配置模型。";
+  }
   $("providerDot").style.background = data.ai_enabled ? "var(--mint)" : "var(--yellow)";
 }
 
@@ -2915,6 +2920,7 @@ function renderAgentEvents(events, status = "completed") {
     match_job: "匹配目标岗位",
     analyze_jd: "解析岗位 JD",
     get_interview_question: "获取面试题",
+    generate_resume_interview_questions: "生成定制面试题",
     evaluate_answer: "评估面试回答",
     list_applications: "读取投递记录",
     get_dashboard: "读取求职看板",
@@ -2931,7 +2937,7 @@ function renderAgentEvents(events, status = "completed") {
       ${escapeHtml(labels[event.name] || event.name)}
     </span>
   `).join("");
-  const statusText = status === "degraded" ? "本地模式" : status === "needs_input" ? "等待补充" : "任务记录";
+  const statusText = status === "degraded" ? "本地执行" : status === "needs_input" ? "选择简历后继续" : "任务记录";
   const node = $("chatLog").lastElementChild;
   node?.insertAdjacentHTML("beforeend", `<div class="agent-events"><small>${statusText}</small>${rows}</div>`);
   renderIcons();

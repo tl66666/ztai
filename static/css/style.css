@@ -1574,6 +1574,8 @@ h3 { font-size: 19px; margin-bottom: 0; }
 .agent-drawer-open { overflow: hidden; }
 .agent-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .agent-drawer-head h2 { margin: 4px 0 0; font-size: 1.2rem; letter-spacing: 0; }
+.agent-mode-detail { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.model-config-note { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .agent-drawer-head .icon-button { flex: 0 0 44px; width: 44px; height: 44px; }
 .agent-context-strip { display: grid; gap: 7px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .agent-context-strip > span { color: var(--muted); font-size: 12px; font-weight: 800; }

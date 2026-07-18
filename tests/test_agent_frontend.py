@@ -40,6 +40,8 @@ class AgentFrontendContractTests(unittest.TestCase):
 
         self.assertNotIn("Agent 自主决策过程", javascript)
         self.assertIn("renderAgentEvents", javascript)
+        self.assertIn('status === "needs_input" ? "选择简历后继续"', javascript)
+        self.assertNotIn('status === "needs_input" ? "等待补充"', javascript)
 
     def test_local_agent_welcome_and_business_tool_labels_are_user_facing(self):
         javascript = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
@@ -70,7 +72,10 @@ class AgentFrontendContractTests(unittest.TestCase):
         javascript = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
         self.assertIn('id="agentModeLabel"', html)
+        self.assertIn('id="agentModeDetail"', html)
         self.assertIn("agentModeLabel", javascript)
+        self.assertIn("本地任务优先执行", javascript)
+        self.assertIn("开放问题由模型增强", javascript)
 
 
 if __name__ == "__main__":

@@ -72,6 +72,7 @@
         <input id="apiKeyInput" class="input key-input" type="password" placeholder="输入对应厂商 API Key" />
         <button class="primary" id="saveProviderBtn"><i data-lucide="key-round"></i>应用配置</button>
       </div>
+      <p class="model-config-note">API Key 仅保存在本机运行目录，不写入数据库或 Git；留空保存会清除本机配置。确定性求职任务始终优先本地执行。</p>
       <div id="providerLinkList" class="provider-links"></div>
     </section>
 
@@ -574,6 +575,7 @@
       <div>
         <p class="eyebrow" id="agentModeLabel">本地智能求职助手</p>
         <h2 id="agentDrawerTitle">求职 Agent 工作台</h2>
+        <p class="agent-mode-detail" id="agentModeDetail">本地任务可执行；配置模型后可增强开放问题与完整简历改写。</p>
       </div>
       <button class="icon-button" id="closeAgentDrawer" type="button" title="关闭 Agent 工作台" aria-label="关闭 Agent 工作台"><i data-lucide="x"></i></button>
     </header>
