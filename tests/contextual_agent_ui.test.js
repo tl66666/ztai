@@ -54,6 +54,20 @@ assert.equal(
   "已选择「后端工程师简历」，请生成优化草稿",
 );
 
+const interviewQuestionRequest = {
+  kind: "resume_select",
+  workflow: "interview_questions",
+  prompt: "选择要生成面试题的简历",
+  options: [{ id: 8, label: "测试简历2", preview: "Python Flask" }],
+};
+const interviewRequestHtml = AgentUI.inputRequestHtml(interviewQuestionRequest);
+assert.ok(interviewRequestHtml.includes('data-agent-workflow="interview_questions"'));
+assert.ok(interviewRequestHtml.includes("生成定制面试题"));
+assert.equal(
+  AgentUI.selectionMessage(interviewQuestionRequest, { id: 8, label: "测试简历2" }),
+  "已选择「测试简历2」，请生成定制面试题",
+);
+
 const guidedActions = AgentUI.suggestedActionsHtml([
   { label: "录入第一份简历", page: "resume", module: "input" },
   { label: "注入", page: "https://evil.example", module: "x" },

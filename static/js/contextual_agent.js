@@ -173,12 +173,13 @@
 
   function inputRequestHtml(request) {
     if (!request || request.kind !== "resume_select" || !Array.isArray(request.options)) return "";
-    const workflow = request.workflow === "revision" ? "revision" : "analysis";
+    const workflow = ["revision", "analysis", "interview_questions"].includes(request.workflow)
+      ? request.workflow : "analysis";
     const options = request.options.filter((option) => positiveId(option?.id)).map((option) => `
       <button type="button" class="agent-resume-choice" data-agent-resume-choice="${positiveId(option.id)}" data-agent-resume-label="${escapeHtml(option.label || "简历")}" data-agent-workflow="${workflow}">
         <b>${escapeHtml(option.label || `简历 #${option.id}`)}</b>
         ${option.preview ? `<small>${escapeHtml(option.preview)}</small>` : ""}
-        <span>${workflow === "revision" ? "生成优化草稿" : "开始诊断"}</span>
+        <span>${workflow === "revision" ? "生成优化草稿" : workflow === "interview_questions" ? "生成定制面试题" : "开始诊断"}</span>
       </button>
     `).join("");
     if (!options) return "";
@@ -191,7 +192,8 @@
   function selectionMessage(request, option) {
     const id = positiveId(option?.id ?? option);
     if (!id) return "";
-    const action = request?.workflow === "revision" ? "生成优化草稿" : "进行简历诊断";
+    const action = request?.workflow === "revision" ? "生成优化草稿"
+      : request?.workflow === "interview_questions" ? "生成定制面试题" : "进行简历诊断";
     const label = typeof option?.label === "string" ? option.label.trim().slice(0, 80) : "";
     return label ? `已选择「${label}」，请${action}` : `已选择这份简历，请${action}`;
   }

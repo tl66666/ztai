@@ -2681,7 +2681,8 @@ async function handleAgentChatLogClick(event) {
   const choice = event.target.closest("[data-agent-resume-choice]");
   if (choice) {
     const resumeId = Number(choice.dataset.agentResumeChoice);
-    const workflow = choice.dataset.agentWorkflow === "revision" ? "revision" : "analysis";
+    const workflow = ["revision", "analysis", "interview_questions"].includes(choice.dataset.agentWorkflow)
+      ? choice.dataset.agentWorkflow : "analysis";
     const message = ContextualAgent.selectionMessage({ workflow }, {
       id: resumeId,
       label: choice.dataset.agentResumeLabel,

@@ -74,6 +74,7 @@ class AgentService:
             "prepare_resume_revision": {"label": "管理简历版本", "page": "resume", "module": "manage"},
             "match_job": {"label": "继续 JD 优化", "page": "resume", "module": "jd"},
             "get_interview_question": {"label": "进入面试训练", "page": "interview", "module": "mock"},
+            "generate_resume_interview_questions": {"label": "进入面试训练", "page": "interview", "module": "mock"},
             "get_training_insights": {"label": "查看训练记录", "page": "interview", "module": "records"},
             "list_resumes": {"label": "管理我的简历", "page": "resume", "module": "manage"},
             "list_applications": {"label": "打开投递看板", "page": "tracker", "module": "board"},

@@ -134,6 +134,56 @@ class AgentResumeWorkflowTests(unittest.TestCase):
         self.assertEqual(created["status"], "degraded")
         self.assertEqual(created["action_proposals"][0]["action_type"], "create_resume_version")
 
+    def test_resume_choice_context_wins_over_digits_in_the_resume_title(self):
+        with patch("utils.agent_runtime.service.get_ai_client", return_value=self.local_client()):
+            selection = self.client.post(
+                "/api/agent/chat", json={"message": "帮我优化简历"}
+            ).get_json()
+            created = self.client.post(
+                "/api/agent/chat",
+                json={
+                    "conversation_id": selection["conversation_id"],
+                    "message": "已选择「测试简历2」，请生成优化草稿",
+                    "context": {"resume_id": self.resume_id},
+                },
+            ).get_json()
+
+        self.assertEqual(created["status"], "degraded")
+        proposal_id = created["action_proposals"][0]["id"]
+        draft = self.client.get(f"/api/agent/actions/{proposal_id}/draft").get_json()["draft"]
+        self.assertIn("Flask 接口开发", draft["content"])
+        self.assertNotIn("Playwright", draft["content"])
+
+    def test_resume_interview_questions_are_generated_from_selected_resume_not_echoed(self):
+        with patch("utils.agent_runtime.service.get_ai_client", return_value=self.local_client()):
+            response = self.client.post(
+                "/api/agent/chat",
+                json={
+                    "message": "根据我的简历帮我出几道面试题",
+                    "context": {"resume_id": self.resume_id},
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["tools_used"], ["generate_resume_interview_questions"])
+        self.assertIn("1.", payload["reply"])
+        self.assertIn("5.", payload["reply"])
+        self.assertIn("Flask", payload["reply"])
+        self.assertNotIn("负责 Flask 接口开发", payload["reply"])
+
+    def test_resume_interview_questions_prompt_for_clickable_resume_choice_when_unselected(self):
+        with patch("utils.agent_runtime.service.get_ai_client", return_value=self.local_client()):
+            response = self.client.post(
+                "/api/agent/chat", json={"message": "根据我的简历帮我出几道面试题"}
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "needs_input")
+        self.assertEqual(payload["input_request"]["kind"], "resume_select")
+        self.assertEqual(payload["input_request"]["workflow"], "interview_questions")
+
     def test_local_agent_diagnoses_the_selected_resume_without_a_model_key(self):
         with patch("utils.agent_runtime.service.get_ai_client", return_value=self.local_client()):
             selection = self.client.post(

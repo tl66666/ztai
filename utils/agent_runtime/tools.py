@@ -496,6 +496,35 @@ def _interview_question(arguments: dict, context: ToolContext) -> ToolResult:
     return ToolResult(True, data=data, display_text=data.get("question", ""))
 
 
+def _resume_interview_questions(arguments: dict, context: ToolContext) -> ToolResult:
+    """Generate a useful local question set without exposing the resume body."""
+    resume = _owned_resume(arguments, context)
+    if not resume.ok:
+        return resume
+    keywords = list(dict.fromkeys(extract_keywords(resume.data["content"])))
+    primary = keywords[0] if keywords else "核心项目"
+    secondary = keywords[1] if len(keywords) > 1 else "相关技术和流程"
+    tertiary = keywords[2] if len(keywords) > 2 else "实现细节"
+    title = str(resume.data.get("title") or "所选简历")[:80]
+    questions = [
+        f"请选一个与 {primary} 相关的经历，按背景、任务、行动、结果的顺序完整说明。",
+        f"在涉及 {secondary} 的工作中，你具体负责什么？如何验证自己的方案有效？",
+        f"围绕 {tertiary}，请讲一个你遇到问题、定位原因并推动解决的案例。",
+        "如果面试官追问你的贡献与团队其他成员有什么不同，你会如何用事实和结果说明？",
+        "结合这份简历的目标方向，入职后三个月你会优先补齐哪些能力，为什么？",
+    ]
+    text = (
+        f"已根据《{title}》生成 5 道定制面试题（本地生成，无需 API Key）：\n"
+        + "\n".join(f"{index}. {question}" for index, question in enumerate(questions, 1))
+        + "\n\n建议逐题用 STAR 结构作答：先交代场景和任务，再说明你的行动与结果。"
+    )
+    return ToolResult(
+        True,
+        data={"resume_id": resume.data["id"], "questions": questions, "text": text, "mode": "local"},
+        display_text=text,
+    )
+
+
 def _evaluate_answer(arguments: dict, context: ToolContext) -> ToolResult:
     from utils.interview_engine import InterviewEngine
 
@@ -716,6 +745,7 @@ def build_tool_registry(db_path: str) -> ToolRegistry:
         ToolDefinition("match_job", "基于简历和 JD 关键词即时生成可解释的岗位匹配素材。", _object({"resume_id": {"type": "integer"}, "job_title": {"type": "string", "minLength": 2, "maxLength": 80}, "jd": {"type": "string", "maxLength": 8000}}, ["job_title"]), _match_job),
         ToolDefinition("analyze_jd", "即时提取岗位 JD 的关键词、职责摘录和准备方向。", _object({"jd_text": {"type": "string", "minLength": 10, "maxLength": 10000}}, ["jd_text"]), _analyze_jd),
         ToolDefinition("get_interview_question", "获取指定方向的一道面试题。", _object({"category": {"type": "string", "maxLength": 30}}), _interview_question),
+        ToolDefinition("generate_resume_interview_questions", "根据指定简历生成多道定制面试题，只返回题目和练习建议。", _object({"resume_id": {"type": "integer", "minimum": 1}}, ["resume_id"]), _resume_interview_questions),
         ToolDefinition("evaluate_answer", "评估用户的面试回答。", _object({"question": {"type": "string", "minLength": 2, "maxLength": 1000}, "answer": {"type": "string", "minLength": 1, "maxLength": 6000}}, ["question", "answer"]), _evaluate_answer),
         ToolDefinition("evaluate_salary", "按城市、经验和技能数量给出规则估算薪资区间。", _object({"city": {"type": "string", "maxLength": 20}, "experience": {"type": "string", "enum": ["应届生", "1-3年", "3-5年", "5年以上"]}, "skills_count": {"type": "integer"}}), _evaluate_salary),
         ToolDefinition("list_applications", "读取当前用户的投递记录。", _object(), _list_applications),
