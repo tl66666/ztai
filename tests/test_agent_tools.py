@@ -71,11 +71,41 @@ class AgentToolTests(unittest.TestCase):
             def analyze_resume(self, *args, **kwargs):
                 raise AssertionError("Agent tools must not make a nested model request")
 
-        with patch("utils.agent_runtime.tools.get_ai_client", return_value=ConnectedClient()):
+        with patch("utils.agent_runtime.tools.get_ai_client", return_value=ConnectedClient(), create=True):
             result = self.registry.execute("analyze_resume", {"resume_id": 1}, user_id=1)
 
         self.assertTrue(result.ok)
         self.assertIn("本地简历诊断", result.display_text)
+
+    def test_agent_job_match_does_not_wait_on_a_second_model_call(self):
+        class ConnectedClient:
+            api_key = "configured"
+
+            def match_job(self, *args, **kwargs):
+                raise AssertionError("Agent tools must not make a nested model request")
+
+        with patch("utils.agent_runtime.tools.get_ai_client", return_value=ConnectedClient(), create=True):
+            result = self.registry.execute(
+                "match_job", {"resume_id": 1, "job_title": "Python 测试工程师", "jd": "Python 接口自动化测试"}, user_id=1
+            )
+
+        self.assertTrue(result.ok)
+        self.assertIn("本地岗位匹配", result.display_text)
+
+    def test_agent_jd_analysis_does_not_wait_on_a_second_model_call(self):
+        class ConnectedClient:
+            api_key = "configured"
+
+            def chat(self, *args, **kwargs):
+                raise AssertionError("Agent tools must not make a nested model request")
+
+        with patch("utils.agent_runtime.tools.get_ai_client", return_value=ConnectedClient(), create=True):
+            result = self.registry.execute(
+                "analyze_jd", {"jd_text": "负责 Python 接口自动化测试和质量保障"}, user_id=1
+            )
+
+        self.assertTrue(result.ok)
+        self.assertIn("本地 JD 要点", result.display_text)
 
     def test_invalid_arguments_return_stable_error(self):
         result = self.registry.execute(

@@ -16,13 +16,13 @@ import requests
 
 from utils.agent_runtime.memory import ClosingConnection
 from utils.agent_runtime.models import ToolResult
-from utils.agent_runtime.resume_draft import local_resume_diagnosis, local_resume_draft, model_resume_draft
+from utils.agent_runtime.resume_draft import local_resume_diagnosis, local_resume_draft
 from utils.agent_runtime.actions import (
     PROPOSAL_STATUSES,
     ActionProposalService,
     career_action_tool_schema,
 )
-from utils.ai_client import get_ai_client
+from utils.ai_client import extract_keywords
 from utils.domain.career import ACTION_STATUSES, CareerService
 from utils.domain.interviews import InterviewService
 
@@ -389,12 +389,7 @@ def _prepare_resume_revision(arguments: dict, context: ToolContext) -> ToolResul
         return resume
     profile = CareerService(context.db_path, local_user_id=context.user_id).get_profile(context.user_id) or {}
     target_role = str(arguments.get("target_job_title") or profile.get("target_role") or "").strip()
-    client = get_ai_client()
-    draft = (
-        model_resume_draft(client, resume.data["content"], target_role, timeout=context.request_timeout(45))
-        if getattr(client, "api_key", "")
-        else local_resume_draft(resume.data["content"], target_role)
-    )
+    draft = local_resume_draft(resume.data["content"], target_role)
     label = "Agent 优化版" if not target_role else f"{target_role} 优化版"
     metadata = {
         "version_label": label,
@@ -439,22 +434,44 @@ def _match_job(arguments: dict, context: ToolContext) -> ToolResult:
     resume = _owned_resume(arguments, context)
     if not resume.ok:
         return resume
-    result = get_ai_client().match_job(
-        resume.data["content"], arguments["job_title"], arguments.get("jd", ""),
-        timeout=context.request_timeout(45),
+    job_title = str(arguments["job_title"] or "").strip()
+    job_text = f"{job_title}\n{str(arguments.get('jd') or '').strip()}"
+    resume_keywords = set(extract_keywords(resume.data["content"]))
+    job_keywords = list(dict.fromkeys(extract_keywords(job_text)))
+    matched = [item for item in job_keywords if item in resume_keywords]
+    missing = [item for item in job_keywords if item not in resume_keywords]
+    score = max(35, min(92, 55 + len(matched) * 8 - len(missing) * 3))
+    analysis = (
+        "本地岗位匹配（无需等待模型）\n"
+        f"目标岗位：{job_title}\n"
+        f"匹配度：{score} 分\n"
+        f"已命中：{'、'.join(matched[:8]) or '暂未识别到直接命中关键词'}\n"
+        f"待补强：{'、'.join(missing[:8]) or '当前关键词覆盖较完整'}\n"
+        "下一步：将待补强词放入真实项目职责或成果中，再结合具体 JD 完成针对性改写。"
     )
-    content = result.get("content", "")
-    return ToolResult(bool(content), data={"resume_id": resume.data["id"], "analysis": content}, display_text=content)
+    return ToolResult(
+        True,
+        data={
+            "resume_id": resume.data["id"], "score": score,
+            "matched_keywords": matched, "missing_keywords": missing,
+            "analysis": analysis, "mode": "local",
+        },
+        display_text=analysis,
+    )
 
 
 def _analyze_jd(arguments: dict, context: ToolContext) -> ToolResult:
-    jd = arguments["jd_text"]
-    result = get_ai_client().chat([
-        {"role": "system", "content": "你是岗位分析专家。提取核心职责、必备技能、加分项和面试重点。"},
-        {"role": "user", "content": jd[:5000]},
-    ], temperature=0.2, timeout=context.request_timeout(45))
-    content = result.get("content", "")
-    return ToolResult(bool(content), data={"analysis": content}, display_text=content)
+    jd = str(arguments["jd_text"] or "").strip()
+    keywords = list(dict.fromkeys(extract_keywords(jd)))
+    clauses = [item.strip() for item in jd.replace("\n", "。 ").split("。") if item.strip()]
+    focus = "；".join(clauses[:3])[:360] or "请补充岗位职责和任职要求。"
+    analysis = (
+        "本地 JD 要点（无需等待模型）\n"
+        f"核心关键词：{'、'.join(keywords[:10]) or '暂未识别，请补充更完整 JD'}\n"
+        f"职责摘录：{focus}\n"
+        "准备建议：优先用项目中的真实动作、工具和结果证明上述关键词，再准备一个对应的面试案例。"
+    )
+    return ToolResult(True, data={"keywords": keywords, "analysis": analysis, "mode": "local"}, display_text=analysis)
 
 
 def _interview_question(arguments: dict, context: ToolContext) -> ToolResult:
@@ -685,9 +702,9 @@ def build_tool_registry(db_path: str) -> ToolRegistry:
         ToolDefinition("get_resume", "读取当前用户指定或最近一份简历的完整正文。", _object({"resume_id": {"type": "integer"}}), _get_resume),
         ToolDefinition("analyze_resume", "基于简历正文执行即时、本地优先的质量诊断，不等待第二次模型调用。", _object({"resume_id": {"type": "integer"}, "job_title": {"type": "string", "maxLength": 80}}), _analyze_resume),
         ToolDefinition("diagnose_resume", "对指定简历执行本地优先诊断；无模型密钥也会检查结构、证据和岗位对齐。", _object({"resume_id": {"type": "integer", "minimum": 1}, "job_title": {"type": "string", "maxLength": 80}}, ["resume_id"]), _diagnose_resume),
-        ToolDefinition("prepare_resume_revision", "读取指定简历并生成可编辑的新版本草稿；只生成待确认内容，不保存。", _object({"resume_id": {"type": "integer", "minimum": 1}, "target_job_title": {"type": "string", "maxLength": 80}}, ["resume_id"]), _prepare_resume_revision),
-        ToolDefinition("match_job", "将已保存简历与目标岗位和 JD 匹配。", _object({"resume_id": {"type": "integer"}, "job_title": {"type": "string", "minLength": 2, "maxLength": 80}, "jd": {"type": "string", "maxLength": 8000}}, ["job_title"]), _match_job),
-        ToolDefinition("analyze_jd", "解析岗位 JD 的职责、技能和面试重点。", _object({"jd_text": {"type": "string", "minLength": 10, "maxLength": 10000}}, ["jd_text"]), _analyze_jd),
+        ToolDefinition("prepare_resume_revision", "基于原始事实即时生成可编辑的新版本草稿；只生成待确认内容，不保存。", _object({"resume_id": {"type": "integer", "minimum": 1}, "target_job_title": {"type": "string", "maxLength": 80}}, ["resume_id"]), _prepare_resume_revision),
+        ToolDefinition("match_job", "基于简历和 JD 关键词即时生成可解释的岗位匹配素材。", _object({"resume_id": {"type": "integer"}, "job_title": {"type": "string", "minLength": 2, "maxLength": 80}, "jd": {"type": "string", "maxLength": 8000}}, ["job_title"]), _match_job),
+        ToolDefinition("analyze_jd", "即时提取岗位 JD 的关键词、职责摘录和准备方向。", _object({"jd_text": {"type": "string", "minLength": 10, "maxLength": 10000}}, ["jd_text"]), _analyze_jd),
         ToolDefinition("get_interview_question", "获取指定方向的一道面试题。", _object({"category": {"type": "string", "maxLength": 30}}), _interview_question),
         ToolDefinition("evaluate_answer", "评估用户的面试回答。", _object({"question": {"type": "string", "minLength": 2, "maxLength": 1000}, "answer": {"type": "string", "minLength": 1, "maxLength": 6000}}, ["question", "answer"]), _evaluate_answer),
         ToolDefinition("evaluate_salary", "按城市、经验和技能数量给出规则估算薪资区间。", _object({"city": {"type": "string", "maxLength": 20}, "experience": {"type": "string", "enum": ["应届生", "1-3年", "3-5年", "5年以上"]}, "skills_count": {"type": "integer"}}), _evaluate_salary),
