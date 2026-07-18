@@ -16,13 +16,13 @@ import requests
 
 from utils.agent_runtime.memory import ClosingConnection
 from utils.agent_runtime.models import ToolResult
-from utils.agent_runtime.resume_draft import local_resume_diagnosis, local_resume_draft
+from utils.agent_runtime.resume_draft import local_resume_diagnosis, local_resume_draft, model_resume_draft
 from utils.agent_runtime.actions import (
     PROPOSAL_STATUSES,
     ActionProposalService,
     career_action_tool_schema,
 )
-from utils.ai_client import extract_keywords
+from utils.ai_client import extract_keywords, get_ai_client
 from utils.domain.career import ACTION_STATUSES, CareerService
 from utils.domain.interviews import InterviewService
 
@@ -389,7 +389,17 @@ def _prepare_resume_revision(arguments: dict, context: ToolContext) -> ToolResul
         return resume
     profile = CareerService(context.db_path, local_user_id=context.user_id).get_profile(context.user_id) or {}
     target_role = str(arguments.get("target_job_title") or profile.get("target_role") or "").strip()
-    draft = local_resume_draft(resume.data["content"], target_role)
+    client = get_ai_client()
+    draft = (
+        model_resume_draft(
+            client,
+            resume.data["content"],
+            target_role,
+            timeout=context.request_timeout(32),
+        )
+        if getattr(client, "api_key", "")
+        else local_resume_draft(resume.data["content"], target_role)
+    )
     label = "Agent 优化版" if not target_role else f"{target_role} 优化版"
     metadata = {
         "version_label": label,
@@ -702,7 +712,7 @@ def build_tool_registry(db_path: str) -> ToolRegistry:
         ToolDefinition("get_resume", "读取当前用户指定或最近一份简历的完整正文。", _object({"resume_id": {"type": "integer"}}), _get_resume),
         ToolDefinition("analyze_resume", "基于简历正文执行即时、本地优先的质量诊断，不等待第二次模型调用。", _object({"resume_id": {"type": "integer"}, "job_title": {"type": "string", "maxLength": 80}}), _analyze_resume),
         ToolDefinition("diagnose_resume", "对指定简历执行本地优先诊断；无模型密钥也会检查结构、证据和岗位对齐。", _object({"resume_id": {"type": "integer", "minimum": 1}, "job_title": {"type": "string", "maxLength": 80}}, ["resume_id"]), _diagnose_resume),
-        ToolDefinition("prepare_resume_revision", "基于原始事实即时生成可编辑的新版本草稿；只生成待确认内容，不保存。", _object({"resume_id": {"type": "integer", "minimum": 1}, "target_job_title": {"type": "string", "maxLength": 80}}, ["resume_id"]), _prepare_resume_revision),
+        ToolDefinition("prepare_resume_revision", "有模型配置时通读完整简历进行深度改写；无配置时生成事实保真草稿；只生成待确认内容，不保存。", _object({"resume_id": {"type": "integer", "minimum": 1}, "target_job_title": {"type": "string", "maxLength": 80}}, ["resume_id"]), _prepare_resume_revision, timeout_seconds=45),
         ToolDefinition("match_job", "基于简历和 JD 关键词即时生成可解释的岗位匹配素材。", _object({"resume_id": {"type": "integer"}, "job_title": {"type": "string", "minLength": 2, "maxLength": 80}, "jd": {"type": "string", "maxLength": 8000}}, ["job_title"]), _match_job),
         ToolDefinition("analyze_jd", "即时提取岗位 JD 的关键词、职责摘录和准备方向。", _object({"jd_text": {"type": "string", "minLength": 10, "maxLength": 10000}}, ["jd_text"]), _analyze_jd),
         ToolDefinition("get_interview_question", "获取指定方向的一道面试题。", _object({"category": {"type": "string", "maxLength": 30}}), _interview_question),

@@ -164,24 +164,64 @@ class AgentDomainToolTests(unittest.TestCase):
         self.assertEqual(result.data["mode"], "local")
         self.assertIn("本地简历诊断", result.display_text)
 
-    def test_resume_revision_stays_local_when_a_model_is_connected(self):
+    def test_resume_revision_uses_a_complete_model_rewrite_when_configured(self):
+        source = (
+            "项目经历\\n"
+            "- 使用 Python 完成接口测试，覆盖核心业务流程并输出测试报告。\\n"
+            "- 使用 Postman 验证接口返回和异常场景，整理缺陷并跟进修复。\\n"
+            "- 使用 SQL 核对测试数据，完成回归验证和测试总结。\\n"
+            "完整结尾事实"
+        )
+        rewritten = (
+            "项目经历\\n"
+            "- 负责核心业务接口测试，使用 Python 覆盖关键流程并输出测试报告。\\n"
+            "- 使用 Postman 设计正常与异常场景，整理缺陷并跟进修复验证。\\n"
+            "- 使用 SQL 核对测试数据，完成回归验证和测试总结。\\n"
+            "完整结尾事实"
+        )
         with connect(self.db_path) as conn:
             resume_id = conn.execute(
-                "INSERT INTO resumes(user_id, title, content) VALUES (1, '优化简历', '项目经历\\n- 使用 Python 完成接口测试')"
+                "INSERT INTO resumes(user_id, title, content) VALUES (1, '优化简历', ?)",
+                (source,),
             ).lastrowid
 
         class ConnectedClient:
             api_key = "test-key"
 
             def chat(self, *args, **kwargs):
-                raise AssertionError("Agent revision must not wait on a nested model request")
+                self.messages = args[0]
+                return {"success": True, "content": rewritten}
+
+        client = ConnectedClient()
+        with patch("utils.agent_runtime.tools.get_ai_client", return_value=client, create=True):
+            result = self.registry.execute("prepare_resume_revision", {"resume_id": resume_id}, user_id=1)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.data["mode"], "model")
+        self.assertIn("完整结尾事实", result.data["content"])
+        self.assertIn("已生成模型定向改写", result.display_text)
+        self.assertIn("完整结尾事实", client.messages[1]["content"])
+
+    def test_resume_revision_falls_back_when_model_output_is_incomplete(self):
+        source = "项目经历\\n- 使用 Python 完成接口测试并输出测试报告。\\n完整结尾事实"
+        with connect(self.db_path) as conn:
+            resume_id = conn.execute(
+                "INSERT INTO resumes(user_id, title, content) VALUES (1, '回退简历', ?)",
+                (source,),
+            ).lastrowid
+
+        class ConnectedClient:
+            api_key = "test-key"
+
+            def chat(self, *args, **kwargs):
+                return {"success": True, "content": "过短输出"}
 
         with patch("utils.agent_runtime.tools.get_ai_client", return_value=ConnectedClient(), create=True):
             result = self.registry.execute("prepare_resume_revision", {"resume_id": resume_id}, user_id=1)
 
         self.assertTrue(result.ok)
         self.assertEqual(result.data["mode"], "local")
-        self.assertIn("已生成本地事实保真草稿", result.display_text)
+        self.assertIn("完整结尾事实", result.data["content"])
 
     def test_remote_read_tool_messages_never_receive_opportunity_secrets(self):
         secret = "REMOTE-TOOL-SECRET"

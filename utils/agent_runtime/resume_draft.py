@@ -89,29 +89,60 @@ def local_resume_diagnosis(content: str, target_role: str = "") -> str:
     )
 
 
-def model_resume_draft(client, content: str, target_role: str = "", timeout: float = 45) -> ResumeDraft:
+def model_resume_draft(
+    client,
+    content: str,
+    target_role: str = "",
+    jd: str = "",
+    timeout: float = 32,
+) -> ResumeDraft:
     """Ask a configured model for a factual rewrite; fall back to local rules."""
     target = str(target_role or "").strip() or "未指定"
+    source = str(content or "").strip()
     result = client.chat(
         [
             {
                 "role": "system",
                 "content": (
-                    "你是简历优化助手。只重写用户提供的简历正文，不得编造公司、项目、技术、指标、学历或经历。"
-                    "保留可验证事实，改善结构、动词、量化表达占位提示和目标岗位关键词表达。"
-                    "只输出可直接保存的简历正文，不要解释、标题或 Markdown 代码块。"
+                    "你是资深中文简历优化专家。请通读用户提供的完整原始简历，并重写为一份可直接保存和投递的完整简历正文。"
+                    "必须覆盖原文中有效的教育、经历、项目、技能和证书信息，围绕目标岗位和 JD 优化语言、结构、动词、重点和可读性。"
+                    "不得编造公司、项目、技术、指标、学历、职责、时间、结果或证书；原文没有数字时不要虚构数字。"
+                    "只输出优化后的完整简历正文，不要解释、前言、Markdown 代码块或任何分析。"
                 ),
             },
             {
                 "role": "user",
-                "content": f"目标岗位：{target}\n\n原始简历：\n{str(content or '')[:12000]}",
+                "content": (
+                    f"目标岗位：{target}\n"
+                    f"岗位 JD：{str(jd or '').strip() or '未提供'}\n\n"
+                    "<完整原始简历>\n"
+                    f"{source}\n"
+                    "</完整原始简历>"
+                ),
             },
         ],
-        temperature=0.2,
-        max_tokens=2600,
+        temperature=0.25,
+        max_tokens=5000,
         timeout=timeout,
     )
     generated = str(result.get("content") or "").strip() if result.get("success") else ""
-    if generated:
-        return ResumeDraft(generated, "model", ("按目标岗位重组表达", "保留原始经历事实"))
+    if _is_complete_rewrite(source, generated):
+        return ResumeDraft(generated, "model", ("已通读完整简历并重组表达", "保留原始经历事实", "按目标岗位调整重点"))
     return local_resume_draft(content, target_role)
+
+
+def _is_complete_rewrite(source: str, generated: str) -> bool:
+    if not generated or len(generated) < max(100, int(len(source) * 0.4)):
+        return False
+    lowered = generated.lower()
+    if any(lowered.startswith(prefix) for prefix in ("当然", "下面是", "以下是", "优化后的", "简历优化")):
+        return False
+    critical_facts = re.findall(
+        r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|1\d{10}|20\d{2}|\d+(?:%|个|次|项|人|天|万|k|K)",
+        source,
+    )
+    compact_generated = re.sub(r"\s+", "", generated)
+    return all(
+        re.sub(r"\s+", "", fact) in compact_generated
+        for fact in dict.fromkeys(critical_facts)
+    )

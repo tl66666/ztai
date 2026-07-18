@@ -1013,6 +1013,7 @@ async function improveSelectedResume() {
   $("resumeAuditResult").classList.remove("hidden");
   $("resumeAuditResult").innerHTML = `
     <h4>已生成优化版：${escapeHtml(data.new_title || "新简历版本")}</h4>
+    <div><b>${data.ai_used ? "AI 深度改写：已通读完整简历并按目标岗位调整表达。" : "本地事实保真版：模型不可用时保留原始事实并完成结构整理。"}</b></div>
     <div><b>改写策略</b><br>${(data.strategy || []).map((item) => `• ${escapeHtml(item)}`).join("<br>")}</div>
     <h4>优化内容预览</h4>${renderText(data.improved_resume || "")}
     <div class="result-actions">

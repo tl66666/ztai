@@ -262,11 +262,35 @@ class MultiModelAIClient:
             {"role": "user", "content": f"目标岗位：{job_title or '未指定'}\n简历：\n{resume_content[:4200]}"},
         ], timeout=timeout)
 
-    def optimize_resume(self, resume_content: str, job_title: str = "", jd: str = "") -> dict:
+    def optimize_resume(
+        self,
+        resume_content: str,
+        job_title: str = "",
+        jd: str = "",
+        timeout: float = 55,
+    ) -> dict:
+        source = str(resume_content or "").strip()
         return self.chat([
-            {"role": "system", "content": "你是简历优化专家。请输出：1 匹配定位；2 JD关键词；3 原句问题；4 改写示例；5 面试讲述建议。回答要中文、具体、可直接复制修改。"},
-            {"role": "user", "content": f"目标岗位：{job_title}\nJD：{jd[:2600]}\n简历：\n{resume_content[:4200]}"},
-        ])
+            {
+                "role": "system",
+                "content": (
+                    "你是资深中文简历优化专家。请把用户提供的完整简历重写为一份可直接保存和投递的完整简历正文。"
+                    "必须通读并覆盖原文中的教育、经历、项目、技能、证书等有效信息；根据目标岗位和 JD 调整信息优先级、标题、动词、表达密度和项目描述。"
+                    "严格禁止编造公司、项目、技术、学历、职责、时间、数字、结果或证书；原文没有量化结果时不要虚构数字。"
+                    "只输出优化后的完整简历正文，不要解释、分析、前言、Markdown 代码块或“以下是优化版”等套话。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"目标岗位：{str(job_title or '未指定').strip() or '未指定'}\n"
+                    f"岗位 JD：{str(jd or '').strip() or '未提供'}\n\n"
+                    "<完整原始简历>\n"
+                    f"{source}\n"
+                    "</完整原始简历>"
+                ),
+            },
+        ], temperature=0.25, max_tokens=5000, timeout=timeout)
 
     def match_job(
         self,

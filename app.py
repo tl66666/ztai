@@ -18,6 +18,7 @@ from werkzeug.security import safe_join
 
 from utils.ai_client import extract_keywords, get_ai_client, set_api_key
 from utils.agent_runtime.memory import create_agent_tables, is_browser_event_artifact
+from utils.agent_runtime.resume_draft import model_resume_draft
 from utils.domain import (
     APPLICATION_STATUSES,
     CareerService,
@@ -1230,8 +1231,13 @@ def build_resume_audit(resume_text: str, job_title: str = "", jd: str = "") -> d
 def build_improved_resume(resume_text: str, job_title: str, jd: str = "") -> dict:
     audit = build_resume_audit(resume_text, job_title, jd)
     local = tailor_resume_locally(resume_text, job_title, jd)
-    ai_result = get_ai_client().optimize_resume(resume_text, job_title, jd) if get_ai_client().api_key else {"success": False, "content": ""}
-    improved_resume = ai_result["content"] if ai_result.get("success") else local["tailored_resume"]
+    client = get_ai_client()
+    draft = (
+        model_resume_draft(client, resume_text, job_title, jd, timeout=55)
+        if client.api_key
+        else None
+    )
+    improved_resume = draft.content if draft and draft.mode == "model" else local["tailored_resume"]
     strategy = [
         "保留真实经历，不编造公司和夸张结果。",
         "把“做过功能”改成“负责什么、如何验证、产出什么”。",
@@ -1242,7 +1248,7 @@ def build_improved_resume(resume_text: str, job_title: str, jd: str = "") -> dic
         "audit": audit,
         "strategy": strategy,
         "improved_resume": improved_resume,
-        "ai_used": bool(ai_result.get("success")),
+        "ai_used": bool(draft and draft.mode == "model"),
     }
 
 
@@ -1252,8 +1258,13 @@ def optimize_resume(resume_id):
     if not row:
         return jsonify({"success": False, "message": "简历不存在"}), 404
     data = request.get_json() or {}
-    result = get_ai_client().optimize_resume(row["content"], data.get("job_title", ""), data.get("jd", ""))
-    return jsonify({"success": True, "suggestions": result["content"], "ai_used": result["success"], "provider": result["provider"]})
+    improved = build_improved_resume(row["content"], data.get("job_title", ""), data.get("jd", ""))
+    return jsonify({
+        "success": True,
+        "suggestions": improved["improved_resume"],
+        "ai_used": improved["ai_used"],
+        "provider": get_ai_client().provider.id if improved["ai_used"] else "local",
+    })
 
 
 @app.route("/api/resumes/<int:resume_id>/tailor", methods=["POST"])
@@ -1265,12 +1276,13 @@ def tailor_resume(resume_id):
     job_title = (data.get("job_title") or "目标岗位").strip()
     jd = (data.get("jd") or data.get("job_requirements") or "").strip()
     tailored = tailor_resume_locally(row["content"], job_title, jd)
-    ai_result = get_ai_client().optimize_resume(row["content"], job_title, jd) if jd else {"success": False, "content": ""}
-    if ai_result.get("success"):
-        tailored["ai_rewrite"] = ai_result["content"]
+    client = get_ai_client()
+    draft = model_resume_draft(client, row["content"], job_title, jd, timeout=55) if (jd and client.api_key) else None
+    if draft and draft.mode == "model":
+        tailored["ai_rewrite"] = draft.content
     with get_db() as conn:
         conn.execute("UPDATE resumes SET tailored_result = ? WHERE id = ?", (json.dumps(tailored, ensure_ascii=False), resume_id))
-    return jsonify({"success": True, **tailored, "ai_used": bool(ai_result.get("success"))})
+    return jsonify({"success": True, **tailored, "ai_used": bool(draft and draft.mode == "model")})
 
 
 @app.route("/api/job-match", methods=["POST"])

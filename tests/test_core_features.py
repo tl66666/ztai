@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 if PROJECT_ROOT not in sys.path:
@@ -75,6 +76,41 @@ class BackendFeatureTests(unittest.TestCase):
         self.assertIn("tailored_resume", data)
         self.assertIn("keyword_gaps", data)
         self.assertIn("AI 应用测试工程师", data["positioning"])
+
+    def test_improve_resume_persists_a_validated_model_rewrite(self):
+        source = (
+            "教育经历\\n2023-2027 软件工程本科\\n"
+            "项目经历\\n- 使用 Python 和 Postman 完成接口测试，输出测试报告。\\n"
+            "专业技能\\nPython、Postman、SQL\\n"
+            "完整结尾事实"
+        )
+        with self.app_module.get_db() as conn:
+            conn.execute("UPDATE resumes SET content = ? WHERE id = ?", (source, self.resume_id))
+
+        rewritten = (
+            "教育经历\\n2023-2027 软件工程本科\\n"
+            "项目经历\\n- 负责接口测试，使用 Python 与 Postman 覆盖关键场景并输出测试报告。\\n"
+            "专业技能\\nPython、Postman、SQL\\n"
+            "完整结尾事实"
+        )
+
+        class ConnectedClient:
+            api_key = "test-key"
+
+            def chat(self, *args, **kwargs):
+                return {"success": True, "content": rewritten}
+
+        with patch.object(self.app_module, "get_ai_client", return_value=ConnectedClient()):
+            response = self.client.post(
+                f"/api/resumes/{self.resume_id}/improve",
+                json={"job_title": "测试工程师", "save": True},
+            )
+
+        data = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(data["ai_used"])
+        self.assertEqual(data["improved_resume"], rewritten)
+        self.assertIsNotNone(data["new_resume_id"])
 
     def test_interview_session_follows_real_process(self):
         start = self.client.post(

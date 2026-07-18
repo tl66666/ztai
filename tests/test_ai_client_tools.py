@@ -97,6 +97,24 @@ class AIClientToolTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "timeout")
 
+    def test_deep_resume_optimization_sends_the_complete_source_to_the_model(self):
+        captured = {}
+        source = "项目经历\\n" + ("负责接口自动化测试。" * 700) + "完整结尾事实"
+
+        def fake_post(*args, **kwargs):
+            captured.update(kwargs["json"])
+            return FakeResponse(200, {"choices": [{"message": {"role": "assistant", "content": "优化后的完整简历"}}]})
+
+        with patch("utils.ai_client.requests.post", side_effect=fake_post):
+            result = MultiModelAIClient(api_key="key").optimize_resume(
+                source, "AI 应用测试工程师", "要求 Python、接口测试和自动化测试"
+            )
+
+        self.assertTrue(result["success"])
+        self.assertIn("完整结尾事实", captured["messages"][1]["content"])
+        self.assertIn("完整简历正文", captured["messages"][0]["content"])
+        self.assertEqual(captured["max_tokens"], 5000)
+
     def test_local_ai_configuration_survives_a_new_client_instance(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = f"{temp_dir}/ai-config.json"
