@@ -1505,6 +1505,19 @@ h3 { font-size: 19px; margin-bottom: 0; }
 }
 .agent-command-head h2 { margin: 4px 0 8px; font-size: 1.65rem; letter-spacing: 0; }
 .agent-command-head .primary { min-height: 44px; flex: 0 0 auto; }
+.agent-command-helper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  margin: 18px 0;
+  padding: 20px 22px;
+  border-left: 4px solid var(--blue);
+  background: linear-gradient(110deg, rgba(37,99,235,0.08), rgba(255,255,255,0.74));
+}
+.agent-command-helper h3 { margin: 4px 0 6px; font-size: 1rem; letter-spacing: 0; }
+.agent-command-helper p:last-child { max-width: 780px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.agent-command-helper .ghost { min-height: 44px; flex: 0 0 auto; }
 .agent-command-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .command-panel { min-height: 360px; }
 .command-list { display: grid; gap: 8px; }
@@ -1783,6 +1796,8 @@ canvas { max-width: 100%; }
   .workspace-message { align-items: flex-start; flex-direction: column; }
   .agent-command-head { align-items: stretch; flex-direction: column; gap: 12px; }
   .agent-command-head .primary { width: 100%; }
+  .agent-command-helper { align-items: stretch; flex-direction: column; gap: 14px; }
+  .agent-command-helper .ghost { width: 100%; }
   .agent-command-grid { grid-template-columns: minmax(0, 1fr); }
   .agent-launcher { top: max(18px, env(safe-area-inset-top)); right: max(18px, env(safe-area-inset-right)); bottom: auto; }
   .agent-drawer {

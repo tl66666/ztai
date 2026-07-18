@@ -6,6 +6,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class AgentFrontendContractTests(unittest.TestCase):
+    def test_agent_has_one_product_identity_and_a_separate_command_dashboard(self):
+        html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('<span>求职指挥台</span>', html)
+        self.assertIn('Agent 运行看板', html)
+        self.assertIn('这里不重复聊天', html)
+        self.assertIn('打开求职 Agent', html)
+        self.assertNotIn('<span>AI 教练</span>', html)
+        self.assertIn('agent: "求职指挥台"', javascript)
+        self.assertNotIn('AI 教练正在读取上下文并处理任务', javascript)
+
     def test_agent_page_has_conversation_controls(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 

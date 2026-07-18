@@ -146,7 +146,7 @@ function renderPage(page) {
     resume: "简历实验室",
     interview: "面试训练场",
     tracker: "投递看板",
-    agent: "AI 教练",
+    agent: "求职指挥台",
   };
   $("pageTitle").textContent = titles[page] || "JobHunter AI";
   syncAgentContext();
@@ -277,7 +277,8 @@ function bindActions() {
   });
   $("salaryBtn").addEventListener("click", evaluateSalary);
   $("agentLauncher")?.addEventListener("click", openAgentDrawer);
-  $("openAgentWorkspace")?.addEventListener("click", openAgentDrawer);
+$("openAgentWorkspace")?.addEventListener("click", openAgentDrawer);
+$("openAgentWorkspaceFromHelper")?.addEventListener("click", openAgentDrawer);
   $("closeAgentDrawer")?.addEventListener("click", closeAgentDrawer);
   $("agentDrawerBackdrop")?.addEventListener("click", closeAgentDrawer);
   $("agentContextChips")?.addEventListener("click", (event) => {
@@ -2457,10 +2458,10 @@ async function sendAgentMessage(forcedMessage = "", extraContext = {}) {
       method: "POST",
       body: chatRequest,
     }),
-    "AI 教练正在读取上下文并处理任务..."
+    "求职 Agent 正在读取上下文并处理任务..."
   );
   if (state.agentConversationId !== conversationId || (data.success && data.conversation_id !== conversationId)) return;
-  if (!data.success) return toast(data.message || "AI 教练暂时不可用");
+  if (!data.success) return toast(data.message || "求职 Agent 暂时不可用");
   localStorage.setItem(JOBHUNTER_AGENT_CONVERSATION, conversationId);
   const reply = data.reply || data.message || "我暂时没想好，换个问法试试。";
   appendMessage(reply, "bot", {
@@ -2531,7 +2532,7 @@ async function createAgentConversation() {
 
 async function clearAgentConversation() {
   if (!state.agentConversationId) return;
-  if (!confirm("确定清空当前 AI 教练会话吗？其他会话和求职数据不会受影响。")) return;
+  if (!confirm("确定清空当前求职 Agent 会话吗？其他会话和求职数据不会受影响。")) return;
   const data = await api(`/agent/conversations/${state.agentConversationId}/clear`, {
     method: "POST",
     body: { user_id: USER_ID },

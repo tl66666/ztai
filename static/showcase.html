@@ -600,8 +600,12 @@
     }
     .runtime-node b { display: block; margin-bottom: 8px; color: #fff; }
     .runtime-node span { color: var(--muted); font-size: 13px; line-height: 1.55; }
-    .framework-note { border-top: 4px solid var(--pink); }
-    .framework-note:nth-child(2) { border-top-color: var(--mint); }
+    .engineering-note { border-top: 4px solid var(--mint); }
+    .engineering-note-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr); gap: 20px; align-items: start; }
+    .engineering-note h3 { margin: 7px 0 10px; }
+    .engineering-note p { margin: 0; color: var(--ink-soft); line-height: 1.75; }
+    .engineering-disclosure { padding: 16px; border-radius: 8px; background: rgba(44, 205, 167, 0.08); border: 1px solid rgba(44, 205, 167, 0.32); }
+    .engineering-disclosure b { display: block; margin-bottom: 7px; color: var(--ink); }
     .decision-label {
       display: inline-flex;
       margin-bottom: 16px;
@@ -710,7 +714,7 @@
     }
     @media (max-width: 980px) {
       .nav { align-items: flex-start; border-radius: 28px; flex-direction: column; }
-      .two, .three, .four, .stack-grid, .flow, .screen-card, .screen-card:nth-child(even), .agent-demo, .overview-grid, .runtime-map { grid-template-columns: 1fr; }
+      .two, .three, .four, .stack-grid, .flow, .screen-card, .screen-card:nth-child(even), .agent-demo, .overview-grid, .runtime-map, .engineering-note-grid { grid-template-columns: 1fr; }
       .runtime-node:not(:last-child)::after { content: "↓"; top: auto; right: 50%; bottom: -17px; transform: translateX(50%); }
       .screens-grid { display: grid; gap: 18px; padding-bottom: 0; perspective: none; }
       .screen-card,
@@ -900,18 +904,19 @@
       </div>
     </section>
 
-    <section id="framework" class="wrap section grid two">
-      <article class="card liquid framework-note fade-up">
-        <span class="decision-label">Framework Decision</span>
-        <h2>它是不是 ReAct？</h2>
-        <p><b>准确说法：这是基于 Flask + SQLite 的自研有界 Tool-Calling Runtime，不是标准 ReAct。</b></p>
-        <p>ReAct 强调“推理与行动”循环；本项目不展示或依赖模型的隐藏思维链，而是让模型输出结构化工具调用，由 Orchestrator 在明确预算内执行、校验和综合。模型可用时走 provider-native tool_calls；没有 Key 时由 LocalPolicy 按意图选择确定性多工具规划。</p>
-      </article>
-      <article class="card liquid framework-note fade-up">
-        <span class="decision-label">Why Not LangChain</span>
-        <h2>为什么暂不使用 LangChain / LangGraph</h2>
-        <p>当前复杂度主要在领域事务、分层记忆、提议确认、幂等和恢复语义，而不是缺少通用编排框架。自研 Runtime 依赖更少，也更适合下载即跑的本地 Flask 单体。</p>
-        <p>当系统需要多 Agent 并行、跨服务长流程、人工审批节点图或可视化状态机时，再评估 LangGraph；现有领域服务、工具协议和记忆表可以保留为稳定边界。</p>
+    <section id="engineering-note" class="wrap section">
+      <article class="card liquid engineering-note fade-up">
+        <div class="engineering-note-grid">
+          <div>
+            <span class="decision-label">工程说明</span>
+            <h2>为什么它是 Agent，而不是普通聊天框</h2>
+            <p>普通聊天框只生成文字；这里的 Agent 会重建当前页面、简历和机会的权威上下文，检索分层记忆，再由策略路由和 Orchestrator 在预算内调用工具，最后把结果写回具体的求职流程。需要写入时，它只创建可编辑提议，用户确认后才交给领域服务执行并返回回执。</p>
+          </div>
+          <div class="engineering-disclosure">
+            <b>实现方式：自研有界 Tool-Calling Runtime</b>
+            <p>不是标准 ReAct：不展示或依赖隐藏思维链。模型可用时使用 provider-native tool_calls；无 Key 时由 LocalPolicy 完成确定性多工具规划。暂未引入 LangChain / LangGraph，因为当前重点是本地领域事务、确认边界和恢复语义；当出现多 Agent 并行、跨服务长流程或审批状态图时再评估 LangGraph。</p>
+          </div>
+        </div>
       </article>
     </section>
 

@@ -137,6 +137,15 @@ class ShowcaseContractTests(unittest.TestCase):
         self.assertNotIn("ReAct Agent", self.html)
         self.assertNotIn("最近 20 条消息", self.html)
 
+    def test_framework_explanation_is_secondary_to_the_runtime_workflow(self):
+        self.assertIn('id="engineering-note"', self.html)
+        self.assertIn("为什么它是 Agent，而不是普通聊天框", self.html)
+        self.assertIn("实现方式：自研有界 Tool-Calling Runtime", self.html)
+        self.assertIn("不是标准 ReAct", self.html)
+        self.assertIn("暂未引入 LangChain / LangGraph", self.html)
+        self.assertNotIn("它是不是 ReAct？", self.html)
+        self.assertNotIn("为什么暂不使用 LangChain / LangGraph", self.html)
+
     def test_agent_feature_uses_desktop_web_evidence_as_its_primary_visual(self):
         agent_section = self.html.split('id="agent"', 1)[1].split("</section>", 1)[0]
 

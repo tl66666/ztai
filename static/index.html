@@ -21,7 +21,7 @@
       <button class="nav-item" data-page="resume"><i data-lucide="file-user"></i><span>简历实验室</span></button>
       <button class="nav-item" data-page="interview"><i data-lucide="messages-square"></i><span>面试训练场</span></button>
       <button class="nav-item" data-page="tracker"><i data-lucide="kanban-square"></i><span>投递看板</span></button>
-      <button class="nav-item" data-page="agent"><i data-lucide="bot"></i><span>AI 教练</span></button>
+      <button class="nav-item" data-page="agent"><i data-lucide="layout-dashboard"></i><span>求职指挥台</span></button>
     </nav>
     <div class="provider-mini">
       <span id="providerDot"></span>
@@ -82,7 +82,7 @@
         <div class="hero-copy">
           <p class="eyebrow">AI Agent × Resume × Interview</p>
           <h2>AI 智能体求职辅助 Web 系统</h2>
-          <p class="hero-sub">围绕真实求职流程设计：简历管理、JD 匹配、模拟面试、语音表达分析、投递追踪和 AI 教练。</p>
+          <p class="hero-sub">围绕真实求职流程设计：简历管理、JD 匹配、模拟面试、语音表达分析、投递追踪和求职 Agent。</p>
           <div class="hero-actions">
             <button class="primary" data-page="resume"><i data-lucide="wand-sparkles"></i>进入简历实验室</button>
             <button class="ghost" data-page="interview"><i data-lucide="gamepad-2"></i>开始面试训练</button>
@@ -547,11 +547,19 @@
     <section id="page-agent" class="page">
       <section class="agent-command-head">
         <div>
-          <p class="eyebrow">Agent Command Center</p>
-          <h2>求职行动指挥台</h2>
-          <p class="module-copy">集中查看待确认操作和进行中的机会。所有写入都会先预览，再由你确认。</p>
+          <p class="eyebrow">Agent 运行总览</p>
+          <h2>Agent 运行看板</h2>
+          <p class="module-copy">集中查看 Agent 已准备的操作、进行中的机会和确认结果。所有写入都会先预览，再由你确认。</p>
         </div>
-        <button class="primary" id="openAgentWorkspace" type="button"><i data-lucide="panel-right-open"></i>打开 Agent 工作台</button>
+        <button class="primary" id="openAgentWorkspace" type="button"><i data-lucide="panel-right-open"></i>打开求职 Agent</button>
+      </section>
+      <section class="panel agent-command-helper" aria-label="求职 Agent 与指挥台的分工">
+        <div>
+          <p class="eyebrow">一个 Agent，两种工作界面</p>
+          <h3>这里不重复聊天，只把下一步摆在眼前</h3>
+          <p>右侧的求职 Agent 负责理解上下文、选择工具和生成提议；本页负责汇总待确认操作与关键机会，便于回看、确认和继续推进。面试训练场中的教练式反馈，则只服务于具体回答和练习复盘。</p>
+        </div>
+        <button class="ghost" type="button" id="openAgentWorkspaceFromHelper"><i data-lucide="bot"></i>继续与 Agent 协作</button>
       </section>
       <div class="agent-command-grid">
         <section class="panel command-panel">
