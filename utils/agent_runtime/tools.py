@@ -6,20 +6,25 @@ import math
 import random
 import re
 import socket
-import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 from urllib.parse import urlparse
 
 import requests
 
+from backend.adapters.persistence.sqlalchemy.agent_session import (
+    AgentSessionProvider,
+    SessionFactory,
+)
+from backend.adapters.persistence.sqlalchemy.agent_tool_store import (
+    SqlAlchemyAgentToolStore,
+)
 from utils.agent_runtime.actions import (
     PROPOSAL_STATUSES,
     ActionProposalService,
     career_action_tool_schema,
 )
-from utils.agent_runtime.memory import ClosingConnection
 from utils.agent_runtime.models import ToolResult
 from utils.agent_runtime.resume_draft import (
     local_resume_diagnosis,
@@ -37,6 +42,10 @@ class ToolContext:
     db_path: str
     deadline: float
     ai_client_provider: Callable
+    persistence: SqlAlchemyAgentToolStore
+    session_factory: SessionFactory
+    career_service: CareerService
+    interview_service: InterviewService
 
     def remaining_seconds(self) -> float:
         return self.deadline - time.monotonic()
@@ -87,8 +96,13 @@ def _validate_schema_value(
     if "$ref" in schema:
         target = _resolve_local_ref(root_schema, schema["$ref"])
         return _validate_schema_value(
-            target, value, path, root_schema,
-            schema_depth + 1, data_depth, max_data_depth,
+            target,
+            value,
+            path,
+            root_schema,
+            schema_depth + 1,
+            data_depth,
+            max_data_depth,
         )
 
     errors: list[str] = []
@@ -97,8 +111,13 @@ def _validate_schema_value(
             branch
             for branch in schema["oneOf"]
             if not _validate_schema_value(
-                branch, value, path, root_schema,
-                schema_depth + 1, data_depth, max_data_depth,
+                branch,
+                value,
+                path,
+                root_schema,
+                schema_depth + 1,
+                data_depth,
+                max_data_depth,
             )
         ]
         if len(matches) != 1:
@@ -128,8 +147,13 @@ def _validate_schema_value(
             for key in value:
                 errors.extend(
                     _validate_schema_value(
-                        property_names, key, f"{path} 字段名", root_schema,
-                        schema_depth + 1, data_depth, max_data_depth,
+                        property_names,
+                        key,
+                        f"{path} 字段名",
+                        root_schema,
+                        schema_depth + 1,
+                        data_depth,
+                        max_data_depth,
                     )
                 )
         for key in schema.get("required", []):
@@ -141,8 +165,13 @@ def _validate_schema_value(
             if key in properties:
                 errors.extend(
                     _validate_schema_value(
-                        properties[key], item, child_path, root_schema,
-                        schema_depth + 1, data_depth + 1, max_data_depth,
+                        properties[key],
+                        item,
+                        child_path,
+                        root_schema,
+                        schema_depth + 1,
+                        data_depth + 1,
+                        max_data_depth,
                     )
                 )
             elif additional is False:
@@ -150,8 +179,13 @@ def _validate_schema_value(
             elif isinstance(additional, dict):
                 errors.extend(
                     _validate_schema_value(
-                        additional, item, child_path, root_schema,
-                        schema_depth + 1, data_depth + 1, max_data_depth,
+                        additional,
+                        item,
+                        child_path,
+                        root_schema,
+                        schema_depth + 1,
+                        data_depth + 1,
+                        max_data_depth,
                     )
                 )
     elif isinstance(value, list):
@@ -224,11 +258,28 @@ class ToolRegistry:
         db_path: str,
         local_user_id: int = 1,
         ai_client_provider: Callable | None = None,
+        session_factory: SessionFactory | None = None,
+        career_service: CareerService | None = None,
+        interview_service: InterviewService | None = None,
     ):
         self.db_path = db_path
         self.local_user_id = int(local_user_id)
-        self.ai_client_provider = ai_client_provider or (
-            lambda: get_ai_client()
+        self.ai_client_provider = ai_client_provider or (lambda: get_ai_client())
+        self._sessions = AgentSessionProvider(
+            db_path,
+            session_factory=session_factory,
+        )
+        self._persistence = SqlAlchemyAgentToolStore(self._sessions)
+        self._career_service = career_service or CareerService(
+            db_path,
+            local_user_id=self.local_user_id,
+        )
+        self._interview_service = interview_service or InterviewService(
+            db_path,
+            self.local_user_id,
+            session_factory=(
+                self._sessions.session_factory if session_factory is not None else None
+            ),
         )
         self._tools: dict[str, ToolDefinition] = {}
 
@@ -236,10 +287,7 @@ class ToolRegistry:
         self._tools[definition.name] = definition
 
     def schemas(self, names: list[str] | None = None) -> list[dict]:
-        selected = [
-            tool for tool in self._tools.values()
-            if names is None or tool.name in names
-        ]
+        selected = [tool for tool in self._tools.values() if names is None or tool.name in names]
         return [
             {
                 "type": "function",
@@ -296,6 +344,10 @@ class ToolRegistry:
                 db_path=self.db_path,
                 deadline=time.monotonic() + effective_timeout,
                 ai_client_provider=self.ai_client_provider,
+                persistence=self._persistence,
+                session_factory=self._sessions.session_factory,
+                career_service=self._career_service,
+                interview_service=self._interview_service,
             )
             result = definition.executor(safe_arguments, context)
             context.check_timeout()
@@ -312,9 +364,9 @@ class ToolRegistry:
         except PermissionError:
             return ToolResult(False, display_text="无权读取该数据", error_code="forbidden")
         except (ValueError, TypeError):
-            return ToolResult(False, display_text="工具参数无效", error_code="invalid_arguments", retryable=False)
-        except sqlite3.Error:
-            return ToolResult(False, display_text="数据读取失败", error_code="tool_error", retryable=False)
+            return ToolResult(
+                False, display_text="工具参数无效", error_code="invalid_arguments", retryable=False
+            )
         except requests.RequestException:
             return ToolResult(
                 False,
@@ -340,21 +392,8 @@ def _object(properties: dict | None = None, required: list[str] | None = None) -
     }
 
 
-def _connect(db_path: str) -> sqlite3.Connection:
-    connection = sqlite3.connect(db_path, factory=ClosingConnection)
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
 def _list_resumes(arguments: dict, context: ToolContext) -> ToolResult:
-    with _connect(context.db_path) as connection:
-        rows = connection.execute(
-            """
-            SELECT id, user_id, title, substr(content, 1, 180) AS preview, updated_at
-            FROM resumes WHERE user_id = ? ORDER BY updated_at DESC LIMIT 10
-            """,
-            (context.user_id,),
-        ).fetchall()
+    rows = context.persistence.list_resumes(context.user_id)
     data = [dict(row) for row in rows]
     text = "\n".join(f"#{row['id']} {row['title']}：{row['preview']}" for row in data)
     return ToolResult(True, data=data, display_text=text or "暂无已保存简历")
@@ -362,17 +401,7 @@ def _list_resumes(arguments: dict, context: ToolContext) -> ToolResult:
 
 def _get_resume(arguments: dict, context: ToolContext) -> ToolResult:
     resume_id = arguments.get("resume_id")
-    with _connect(context.db_path) as connection:
-        if resume_id is None:
-            row = connection.execute(
-                "SELECT id, user_id, title, content, updated_at FROM resumes WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
-                (context.user_id,),
-            ).fetchone()
-        else:
-            row = connection.execute(
-                "SELECT id, user_id, title, content, updated_at FROM resumes WHERE id = ? AND user_id = ?",
-                (resume_id, context.user_id),
-            ).fetchone()
+    row = context.persistence.get_resume(context.user_id, resume_id)
     if not row:
         return ToolResult(False, display_text="未找到可读取的简历", error_code="not_found")
     data = dict(row)
@@ -387,9 +416,7 @@ def _analyze_resume(arguments: dict, context: ToolContext) -> ToolResult:
     resume = _owned_resume(arguments, context)
     if not resume.ok:
         return resume
-    analysis = local_resume_diagnosis(
-        resume.data["content"], arguments.get("job_title", "")
-    )
+    analysis = local_resume_diagnosis(resume.data["content"], arguments.get("job_title", ""))
     return ToolResult(
         True,
         data={"resume_id": resume.data["id"], "analysis": analysis, "mode": "local"},
@@ -401,7 +428,7 @@ def _prepare_resume_revision(arguments: dict, context: ToolContext) -> ToolResul
     resume = _owned_resume(arguments, context)
     if not resume.ok:
         return resume
-    profile = CareerService(context.db_path, local_user_id=context.user_id).get_profile(context.user_id) or {}
+    profile = context.career_service.get_profile(context.user_id) or {}
     target_role = str(arguments.get("target_job_title") or profile.get("target_role") or "").strip()
     client = context.ai_client_provider()
     draft = (
@@ -434,7 +461,8 @@ def _prepare_resume_revision(arguments: dict, context: ToolContext) -> ToolResul
         True,
         data=data,
         display_text=(
-            f"已生成{mode_label}。" + "；".join(draft.changes)
+            f"已生成{mode_label}。"
+            + "；".join(draft.changes)
             + "。请在预览中检查并编辑，再确认保存为新版本。"
         ),
     )
@@ -444,7 +472,7 @@ def _diagnose_resume(arguments: dict, context: ToolContext) -> ToolResult:
     resume = _owned_resume(arguments, context)
     if not resume.ok:
         return resume
-    profile = CareerService(context.db_path, local_user_id=context.user_id).get_profile(context.user_id) or {}
+    profile = context.career_service.get_profile(context.user_id) or {}
     target_role = str(arguments.get("job_title") or profile.get("target_role") or "").strip()
     analysis = local_resume_diagnosis(resume.data["content"], target_role)
     return ToolResult(
@@ -476,9 +504,12 @@ def _match_job(arguments: dict, context: ToolContext) -> ToolResult:
     return ToolResult(
         True,
         data={
-            "resume_id": resume.data["id"], "score": score,
-            "matched_keywords": matched, "missing_keywords": missing,
-            "analysis": analysis, "mode": "local",
+            "resume_id": resume.data["id"],
+            "score": score,
+            "matched_keywords": matched,
+            "missing_keywords": missing,
+            "analysis": analysis,
+            "mode": "local",
         },
         display_text=analysis,
     )
@@ -495,7 +526,11 @@ def _analyze_jd(arguments: dict, context: ToolContext) -> ToolResult:
         f"职责摘录：{focus}\n"
         "准备建议：优先用项目中的真实动作、工具和结果证明上述关键词，再准备一个对应的面试案例。"
     )
-    return ToolResult(True, data={"keywords": keywords, "analysis": analysis, "mode": "local"}, display_text=analysis)
+    return ToolResult(
+        True,
+        data={"keywords": keywords, "analysis": analysis, "mode": "local"},
+        display_text=analysis,
+    )
 
 
 def _interview_question(arguments: dict, context: ToolContext) -> ToolResult:
@@ -534,7 +569,12 @@ def _resume_interview_questions(arguments: dict, context: ToolContext) -> ToolRe
     )
     return ToolResult(
         True,
-        data={"resume_id": resume.data["id"], "questions": questions, "text": text, "mode": "local"},
+        data={
+            "resume_id": resume.data["id"],
+            "questions": questions,
+            "text": text,
+            "mode": "local",
+        },
         display_text=text,
     )
 
@@ -545,27 +585,54 @@ def _evaluate_answer(arguments: dict, context: ToolContext) -> ToolResult:
     engine = InterviewEngine()
     engine.candidate_answers = [arguments["answer"]]
     result = engine.evaluate()
-    return ToolResult(True, data=result, display_text=f"评分：{result['score']}分\n{result['feedback']}")
+    return ToolResult(
+        True, data=result, display_text=f"评分：{result['score']}分\n{result['feedback']}"
+    )
 
 
 def _evaluate_salary(arguments: dict, context: ToolContext) -> ToolResult:
     city = arguments.get("city", "")
     experience = arguments.get("experience", "应届生")
     skills_count = arguments.get("skills_count", 0)
-    factor = {"北京": 1.25, "上海": 1.25, "深圳": 1.2, "广州": 1.05, "杭州": 1.15, "成都": .9}.get(city, 1)
+    factor = {"北京": 1.25, "上海": 1.25, "深圳": 1.2, "广州": 1.05, "杭州": 1.15, "成都": 0.9}.get(
+        city, 1
+    )
     base = {"应届生": 9000, "1-3年": 15000, "3-5年": 24000, "5年以上": 36000}.get(experience, 12000)
     average = int((base + min(5000, skills_count * 500)) * factor)
-    data = {"city": city, "experience": experience, "minimum": int(average * .75), "maximum": int(average * 1.35), "average": average, "estimate_only": True}
-    return ToolResult(True, data=data, display_text=f"规则估算：{data['minimum']}-{data['maximum']} 元/月（非实时行情）")
+    data = {
+        "city": city,
+        "experience": experience,
+        "minimum": int(average * 0.75),
+        "maximum": int(average * 1.35),
+        "average": average,
+        "estimate_only": True,
+    }
+    return ToolResult(
+        True,
+        data=data,
+        display_text=f"规则估算：{data['minimum']}-{data['maximum']} 元/月（非实时行情）",
+    )
 
 
 _APPLICATION_SUMMARY_FIELDS = (
-    "id", "company", "job_title", "status", "city", "updated_at",
+    "id",
+    "company",
+    "job_title",
+    "status",
+    "city",
+    "updated_at",
 )
 _OPPORTUNITY_DETAIL_FIELDS = (
     *_APPLICATION_SUMMARY_FIELDS,
-    "channel", "resume_id", "priority", "next_action_at", "interview_at",
-    "deadline_at", "applied_at", "created_at", "needs_status_review",
+    "channel",
+    "resume_id",
+    "priority",
+    "next_action_at",
+    "interview_at",
+    "deadline_at",
+    "applied_at",
+    "created_at",
+    "needs_status_review",
 )
 
 
@@ -574,14 +641,14 @@ def _project_fields(value: dict, fields: tuple[str, ...]) -> dict:
 
 
 def _list_applications(arguments: dict, context: ToolContext) -> ToolResult:
-    rows = CareerService(context.db_path, context.user_id).list_opportunities(context.user_id)
+    rows = context.career_service.list_opportunities(context.user_id)
     data = [_project_fields(row, _APPLICATION_SUMMARY_FIELDS) for row in rows]
     text = "\n".join(f"{row['company']} / {row['job_title']} / {row['status']}" for row in data)
     return ToolResult(True, data=data, display_text=text or "暂无投递记录")
 
 
 def _dashboard(arguments: dict, context: ToolContext) -> ToolResult:
-    service = CareerService(context.db_path, context.user_id)
+    service = context.career_service
     data = service.agent_dashboard_summary(context.user_id)
     readiness = data["readiness"]
     text = (
@@ -608,7 +675,7 @@ def _career_report(arguments: dict, context: ToolContext) -> ToolResult:
 
 
 def _career_profile(arguments: dict, context: ToolContext) -> ToolResult:
-    data = CareerService(context.db_path, context.user_id).get_profile(context.user_id)
+    data = context.career_service.get_profile(context.user_id)
     return ToolResult(
         True,
         data=data,
@@ -618,9 +685,7 @@ def _career_profile(arguments: dict, context: ToolContext) -> ToolResult:
 
 def _opportunity(arguments: dict, context: ToolContext) -> ToolResult:
     try:
-        row = CareerService(context.db_path, context.user_id).get_opportunity(
-            context.user_id, arguments["opportunity_id"]
-        )
+        row = context.career_service.get_opportunity(context.user_id, arguments["opportunity_id"])
     except LookupError:
         return ToolResult(False, display_text="未找到投递机会", error_code="not_found")
     data = _project_fields(row, _OPPORTUNITY_DETAIL_FIELDS)
@@ -632,9 +697,7 @@ def _opportunity(arguments: dict, context: ToolContext) -> ToolResult:
 
 
 def _training_insights(arguments: dict, context: ToolContext) -> ToolResult:
-    data = InterviewService(context.db_path, context.user_id).training_insights(
-        context.user_id
-    )
+    data = context.interview_service.training_insights(context.user_id)
     return ToolResult(
         True,
         data=data,
@@ -648,9 +711,7 @@ def _training_insights(arguments: dict, context: ToolContext) -> ToolResult:
 
 def _list_action_items(arguments: dict, context: ToolContext) -> ToolResult:
     status = arguments.get("status")
-    data = CareerService(context.db_path, context.user_id).list_action_items(
-        context.user_id
-    )
+    data = context.career_service.list_action_items(context.user_id)
     if status:
         data = [item for item in data if item.get("status") == status]
     text = "\n".join(f"#{item['id']} {item['title']} / {item['status']}" for item in data)
@@ -658,7 +719,11 @@ def _list_action_items(arguments: dict, context: ToolContext) -> ToolResult:
 
 
 def _list_agent_actions(arguments: dict, context: ToolContext) -> ToolResult:
-    service = ActionProposalService(context.db_path, local_user_id=context.user_id)
+    service = ActionProposalService(
+        context.db_path,
+        local_user_id=context.user_id,
+        session_factory=context.session_factory,
+    )
     proposals = service.list_actions(context.user_id, arguments.get("status"))
     data = [service.public(item) for item in proposals]
     text = "\n".join(f"#{item['id']} {item['preview']} / {item['status']}" for item in data)
@@ -666,7 +731,11 @@ def _list_agent_actions(arguments: dict, context: ToolContext) -> ToolResult:
 
 
 def _propose_career_action(arguments: dict, context: ToolContext) -> ToolResult:
-    service = ActionProposalService(context.db_path, local_user_id=context.user_id)
+    service = ActionProposalService(
+        context.db_path,
+        local_user_id=context.user_id,
+        session_factory=context.session_factory,
+    )
     proposal = service.propose(
         context.user_id,
         arguments["action_type"],
@@ -693,11 +762,28 @@ def _web_search(arguments: dict, context: ToolContext) -> ToolResult:
     payload = response.json()
     results = []
     if payload.get("AbstractText"):
-        results.append({"title": payload.get("Heading") or query, "snippet": payload["AbstractText"], "url": payload.get("AbstractURL", "")})
+        results.append(
+            {
+                "title": payload.get("Heading") or query,
+                "snippet": payload["AbstractText"],
+                "url": payload.get("AbstractURL", ""),
+            }
+        )
     for item in payload.get("RelatedTopics", [])[:5]:
         if isinstance(item, dict) and item.get("Text"):
-            results.append({"title": item["Text"][:80], "snippet": item["Text"], "url": item.get("FirstURL", "")})
-    return ToolResult(bool(results), data=results, display_text="\n".join(item["snippet"] for item in results) or "未找到结果", error_code="" if results else "not_found")
+            results.append(
+                {
+                    "title": item["Text"][:80],
+                    "snippet": item["Text"],
+                    "url": item.get("FirstURL", ""),
+                }
+            )
+    return ToolResult(
+        bool(results),
+        data=results,
+        display_text="\n".join(item["snippet"] for item in results) or "未找到结果",
+        error_code="" if results else "not_found",
+    )
 
 
 def _is_safe_public_url(url: str) -> bool:
@@ -705,7 +791,12 @@ def _is_safe_public_url(url: str) -> bool:
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return False
     try:
-        addresses = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))}
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(
+                parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+            )
+        }
     except socket.gaierror:
         return False
     for address in addresses:
@@ -718,7 +809,9 @@ def _is_safe_public_url(url: str) -> bool:
 def _fetch_webpage(arguments: dict, context: ToolContext) -> ToolResult:
     url = arguments["url"]
     if not _is_safe_public_url(url):
-        return ToolResult(False, display_text="拒绝访问本机、内网或无效地址", error_code="unsafe_url")
+        return ToolResult(
+            False, display_text="拒绝访问本机、内网或无效地址", error_code="unsafe_url"
+        )
     response = requests.get(
         url,
         timeout=context.request_timeout(10),
@@ -729,7 +822,9 @@ def _fetch_webpage(arguments: dict, context: ToolContext) -> ToolResult:
     try:
         response.raise_for_status()
         if "text/" not in response.headers.get("Content-Type", ""):
-            return ToolResult(False, display_text="仅支持抓取文本网页", error_code="unsupported_content")
+            return ToolResult(
+                False, display_text="仅支持抓取文本网页", error_code="unsupported_content"
+            )
         chunks = bytearray()
         for chunk in response.iter_content(chunk_size=8192):
             if not chunk:
@@ -745,38 +840,169 @@ def _fetch_webpage(arguments: dict, context: ToolContext) -> ToolResult:
         response.close()
     content = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", content, flags=re.I | re.S)
     text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", content)).strip()[:6000]
-    return ToolResult(bool(text), data={"url": url, "text": text}, display_text=text, error_code="" if text else "empty_content")
+    return ToolResult(
+        bool(text),
+        data={"url": url, "text": text},
+        display_text=text,
+        error_code="" if text else "empty_content",
+    )
 
 
 def build_tool_registry(
     db_path: str,
     *,
     ai_client_provider: Callable | None = None,
+    session_factory: SessionFactory | None = None,
+    career_service: CareerService | None = None,
+    interview_service: InterviewService | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry(
         db_path,
         ai_client_provider=ai_client_provider,
+        session_factory=session_factory,
+        career_service=career_service,
+        interview_service=interview_service,
     )
     definitions = [
         ToolDefinition("list_resumes", "列出当前用户保存的简历元数据。", _object(), _list_resumes),
-        ToolDefinition("get_resume", "读取当前用户指定或最近一份简历的完整正文。", _object({"resume_id": {"type": "integer"}}), _get_resume),
-        ToolDefinition("analyze_resume", "基于简历正文执行即时、本地优先的质量诊断，不等待第二次模型调用。", _object({"resume_id": {"type": "integer"}, "job_title": {"type": "string", "maxLength": 80}}), _analyze_resume),
-        ToolDefinition("diagnose_resume", "对指定简历执行本地优先诊断；无模型密钥也会检查结构、证据和岗位对齐。", _object({"resume_id": {"type": "integer", "minimum": 1}, "job_title": {"type": "string", "maxLength": 80}}, ["resume_id"]), _diagnose_resume),
-        ToolDefinition("prepare_resume_revision", "有模型配置时通读完整简历进行深度改写；无配置时生成事实保真草稿；只生成待确认内容，不保存。", _object({"resume_id": {"type": "integer", "minimum": 1}, "target_job_title": {"type": "string", "maxLength": 80}}, ["resume_id"]), _prepare_resume_revision, timeout_seconds=45),
-        ToolDefinition("match_job", "基于简历和 JD 关键词即时生成可解释的岗位匹配素材。", _object({"resume_id": {"type": "integer"}, "job_title": {"type": "string", "minLength": 2, "maxLength": 80}, "jd": {"type": "string", "maxLength": 8000}}, ["job_title"]), _match_job),
-        ToolDefinition("analyze_jd", "即时提取岗位 JD 的关键词、职责摘录和准备方向。", _object({"jd_text": {"type": "string", "minLength": 10, "maxLength": 10000}}, ["jd_text"]), _analyze_jd),
-        ToolDefinition("get_interview_question", "获取指定方向的一道面试题。", _object({"category": {"type": "string", "maxLength": 30}}), _interview_question),
-        ToolDefinition("generate_resume_interview_questions", "根据指定简历生成多道定制面试题，只返回题目和练习建议。", _object({"resume_id": {"type": "integer", "minimum": 1}}, ["resume_id"]), _resume_interview_questions),
-        ToolDefinition("evaluate_answer", "评估用户的面试回答。", _object({"question": {"type": "string", "minLength": 2, "maxLength": 1000}, "answer": {"type": "string", "minLength": 1, "maxLength": 6000}}, ["question", "answer"]), _evaluate_answer),
-        ToolDefinition("evaluate_salary", "按城市、经验和技能数量给出规则估算薪资区间。", _object({"city": {"type": "string", "maxLength": 20}, "experience": {"type": "string", "enum": ["应届生", "1-3年", "3-5年", "5年以上"]}, "skills_count": {"type": "integer"}}), _evaluate_salary),
-        ToolDefinition("list_applications", "读取当前用户的投递记录。", _object(), _list_applications),
-        ToolDefinition("get_dashboard", "读取当前用户简历、匹配、面试和投递统计。", _object(), _dashboard),
-        ToolDefinition("generate_career_report", "汇总当前用户求职数据形成阶段报告素材。", _object(), _career_report),
-        ToolDefinition("get_career_profile", "读取当前用户已确认的职业档案。", _object(), _career_profile),
-        ToolDefinition("get_opportunity", "读取当前用户指定的未删除投递机会。", _object({"opportunity_id": {"type": "integer"}}, ["opportunity_id"]), _opportunity),
-        ToolDefinition("get_training_insights", "汇总最近完成的面试、题库和语音训练质量，不返回回答、反馈全文或音频内容。", _object(), _training_insights),
-        ToolDefinition("list_action_items", "读取当前用户行动项，可按状态筛选。", _object({"status": {"type": "string", "enum": list(ACTION_STATUSES)}}), _list_action_items),
-        ToolDefinition("list_agent_actions", "读取当前用户的操作提案，只返回脱敏公开字段。", _object({"status": {"type": "string", "enum": sorted(PROPOSAL_STATUSES)}}), _list_agent_actions),
+        ToolDefinition(
+            "get_resume",
+            "读取当前用户指定或最近一份简历的完整正文。",
+            _object({"resume_id": {"type": "integer"}}),
+            _get_resume,
+        ),
+        ToolDefinition(
+            "analyze_resume",
+            "基于简历正文执行即时、本地优先的质量诊断，不等待第二次模型调用。",
+            _object(
+                {"resume_id": {"type": "integer"}, "job_title": {"type": "string", "maxLength": 80}}
+            ),
+            _analyze_resume,
+        ),
+        ToolDefinition(
+            "diagnose_resume",
+            "对指定简历执行本地优先诊断；无模型密钥也会检查结构、证据和岗位对齐。",
+            _object(
+                {
+                    "resume_id": {"type": "integer", "minimum": 1},
+                    "job_title": {"type": "string", "maxLength": 80},
+                },
+                ["resume_id"],
+            ),
+            _diagnose_resume,
+        ),
+        ToolDefinition(
+            "prepare_resume_revision",
+            "有模型配置时通读完整简历进行深度改写；无配置时生成事实保真草稿；只生成待确认内容，不保存。",
+            _object(
+                {
+                    "resume_id": {"type": "integer", "minimum": 1},
+                    "target_job_title": {"type": "string", "maxLength": 80},
+                },
+                ["resume_id"],
+            ),
+            _prepare_resume_revision,
+            timeout_seconds=45,
+        ),
+        ToolDefinition(
+            "match_job",
+            "基于简历和 JD 关键词即时生成可解释的岗位匹配素材。",
+            _object(
+                {
+                    "resume_id": {"type": "integer"},
+                    "job_title": {"type": "string", "minLength": 2, "maxLength": 80},
+                    "jd": {"type": "string", "maxLength": 8000},
+                },
+                ["job_title"],
+            ),
+            _match_job,
+        ),
+        ToolDefinition(
+            "analyze_jd",
+            "即时提取岗位 JD 的关键词、职责摘录和准备方向。",
+            _object(
+                {"jd_text": {"type": "string", "minLength": 10, "maxLength": 10000}}, ["jd_text"]
+            ),
+            _analyze_jd,
+        ),
+        ToolDefinition(
+            "get_interview_question",
+            "获取指定方向的一道面试题。",
+            _object({"category": {"type": "string", "maxLength": 30}}),
+            _interview_question,
+        ),
+        ToolDefinition(
+            "generate_resume_interview_questions",
+            "根据指定简历生成多道定制面试题，只返回题目和练习建议。",
+            _object({"resume_id": {"type": "integer", "minimum": 1}}, ["resume_id"]),
+            _resume_interview_questions,
+        ),
+        ToolDefinition(
+            "evaluate_answer",
+            "评估用户的面试回答。",
+            _object(
+                {
+                    "question": {"type": "string", "minLength": 2, "maxLength": 1000},
+                    "answer": {"type": "string", "minLength": 1, "maxLength": 6000},
+                },
+                ["question", "answer"],
+            ),
+            _evaluate_answer,
+        ),
+        ToolDefinition(
+            "evaluate_salary",
+            "按城市、经验和技能数量给出规则估算薪资区间。",
+            _object(
+                {
+                    "city": {"type": "string", "maxLength": 20},
+                    "experience": {
+                        "type": "string",
+                        "enum": ["应届生", "1-3年", "3-5年", "5年以上"],
+                    },
+                    "skills_count": {"type": "integer"},
+                }
+            ),
+            _evaluate_salary,
+        ),
+        ToolDefinition(
+            "list_applications", "读取当前用户的投递记录。", _object(), _list_applications
+        ),
+        ToolDefinition(
+            "get_dashboard", "读取当前用户简历、匹配、面试和投递统计。", _object(), _dashboard
+        ),
+        ToolDefinition(
+            "generate_career_report",
+            "汇总当前用户求职数据形成阶段报告素材。",
+            _object(),
+            _career_report,
+        ),
+        ToolDefinition(
+            "get_career_profile", "读取当前用户已确认的职业档案。", _object(), _career_profile
+        ),
+        ToolDefinition(
+            "get_opportunity",
+            "读取当前用户指定的未删除投递机会。",
+            _object({"opportunity_id": {"type": "integer"}}, ["opportunity_id"]),
+            _opportunity,
+        ),
+        ToolDefinition(
+            "get_training_insights",
+            "汇总最近完成的面试、题库和语音训练质量，不返回回答、反馈全文或音频内容。",
+            _object(),
+            _training_insights,
+        ),
+        ToolDefinition(
+            "list_action_items",
+            "读取当前用户行动项，可按状态筛选。",
+            _object({"status": {"type": "string", "enum": list(ACTION_STATUSES)}}),
+            _list_action_items,
+        ),
+        ToolDefinition(
+            "list_agent_actions",
+            "读取当前用户的操作提案，只返回脱敏公开字段。",
+            _object({"status": {"type": "string", "enum": sorted(PROPOSAL_STATUSES)}}),
+            _list_agent_actions,
+        ),
         ToolDefinition(
             "propose_career_action",
             "创建待用户在界面确认的职业操作提案；本工具不会执行、确认或取消操作。",
@@ -784,8 +1010,18 @@ def build_tool_registry(
             _propose_career_action,
             read_only=False,
         ),
-        ToolDefinition("web_search", "搜索需要时效性的公开互联网信息。", _object({"query": {"type": "string", "minLength": 2, "maxLength": 200}}, ["query"]), _web_search),
-        ToolDefinition("fetch_webpage", "读取指定公开网页的文本内容。", _object({"url": {"type": "string", "minLength": 8, "maxLength": 2000}}, ["url"]), _fetch_webpage),
+        ToolDefinition(
+            "web_search",
+            "搜索需要时效性的公开互联网信息。",
+            _object({"query": {"type": "string", "minLength": 2, "maxLength": 200}}, ["query"]),
+            _web_search,
+        ),
+        ToolDefinition(
+            "fetch_webpage",
+            "读取指定公开网页的文本内容。",
+            _object({"url": {"type": "string", "minLength": 8, "maxLength": 2000}}, ["url"]),
+            _fetch_webpage,
+        ),
     ]
     for definition in definitions:
         registry.register(definition)

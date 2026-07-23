@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict
+from functools import partial
 
+from backend.adapters.persistence.sqlalchemy import SqlAlchemyUnitOfWork
+from backend.adapters.persistence.sqlalchemy.agent_session import SessionFactory
 from utils.agent_runtime.context import ContextBuilder
 from utils.agent_runtime.local_policy import LocalPolicy
 from utils.agent_runtime.memory import MemoryStore, create_agent_tables
 from utils.agent_runtime.orchestrator import AgentOrchestrator, RemoteModelPolicy
 from utils.agent_runtime.tools import build_tool_registry
 from utils.ai_client import get_ai_client
+from utils.domain import CareerService, InterviewService
 
 
 class AgentService:
@@ -17,18 +21,33 @@ class AgentService:
         db_path: str,
         *,
         ai_client_provider: Callable | None = None,
+        session_factory: SessionFactory | None = None,
     ):
         self.db_path = db_path
-        self.ai_client_provider = ai_client_provider or (
-            lambda: get_ai_client()
-        )
-        create_agent_tables(db_path)
-        self.store = MemoryStore(db_path)
+        self.ai_client_provider = ai_client_provider or (lambda: get_ai_client())
+        if session_factory is None:
+            create_agent_tables(db_path)
+        self.store = MemoryStore(db_path, session_factory=session_factory)
+        runtime_session_factory = self.store._sessions.session_factory
+        if session_factory is None:
+            career_service = CareerService(db_path)
+            interview_service = InterviewService(db_path)
+        else:
+            career_service = CareerService(partial(SqlAlchemyUnitOfWork, runtime_session_factory))
+            interview_service = InterviewService(session_factory=runtime_session_factory)
         self.tools = build_tool_registry(
             db_path,
             ai_client_provider=self.ai_client_provider,
+            session_factory=runtime_session_factory,
+            career_service=career_service,
+            interview_service=interview_service,
         )
-        self.context_builder = ContextBuilder(self.store, db_path)
+        self.context_builder = ContextBuilder(
+            self.store,
+            db_path,
+            session_factory=runtime_session_factory,
+            career_service=career_service,
+        )
 
     def create_conversation(self, user_id: int, title: str = "新对话") -> dict:
         return asdict(self.store.create_conversation(user_id, title))
@@ -75,7 +94,8 @@ class AgentService:
         result = orchestrator.run(user_id, conversation_id, message, entity_context=context or {})
         return {
             **asdict(result),
-            "suggested_actions": result.suggested_actions or self._suggested_actions(result.tools_used),
+            "suggested_actions": result.suggested_actions
+            or self._suggested_actions(result.tools_used),
         }
 
     @staticmethod
@@ -83,11 +103,27 @@ class AgentService:
         mapping = {
             "analyze_resume": {"label": "打开简历实验室", "page": "resume", "module": "analysis"},
             "diagnose_resume": {"label": "打开简历实验室", "page": "resume", "module": "analysis"},
-            "prepare_resume_revision": {"label": "管理简历版本", "page": "resume", "module": "manage"},
+            "prepare_resume_revision": {
+                "label": "管理简历版本",
+                "page": "resume",
+                "module": "manage",
+            },
             "match_job": {"label": "继续 JD 优化", "page": "resume", "module": "jd"},
-            "get_interview_question": {"label": "进入面试训练", "page": "interview", "module": "mock"},
-            "generate_resume_interview_questions": {"label": "进入面试训练", "page": "interview", "module": "mock"},
-            "get_training_insights": {"label": "查看训练记录", "page": "interview", "module": "records"},
+            "get_interview_question": {
+                "label": "进入面试训练",
+                "page": "interview",
+                "module": "mock",
+            },
+            "generate_resume_interview_questions": {
+                "label": "进入面试训练",
+                "page": "interview",
+                "module": "mock",
+            },
+            "get_training_insights": {
+                "label": "查看训练记录",
+                "page": "interview",
+                "module": "records",
+            },
             "list_resumes": {"label": "管理我的简历", "page": "resume", "module": "manage"},
             "list_applications": {"label": "打开投递看板", "page": "tracker", "module": "board"},
             "get_dashboard": {"label": "查看项目总览", "page": "home", "module": ""},

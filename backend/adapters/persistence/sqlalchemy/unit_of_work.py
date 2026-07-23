@@ -5,7 +5,10 @@ from types import TracebackType
 from sqlalchemy.orm import Session, sessionmaker
 
 from .agent_repository import SqlAlchemyAgentContextRepository
+from .career_repository import SqlAlchemyCareerRepository
+from .event_repository import SqlAlchemyEventRepository
 from .insights_repository import SqlAlchemyCareerInsightsRepository
+from .interview_repository import SqlAlchemyInterviewRepository
 from .opportunity_repository import SqlAlchemyOpportunityWorkspaceRepository
 from .resume_repository import SqlAlchemyResumeRepository
 from .training_repository import SqlAlchemyTrainingRepository
@@ -25,6 +28,9 @@ class SqlAlchemyUnitOfWork:
         self.career_insights = SqlAlchemyCareerInsightsRepository(session)
         self.opportunities = SqlAlchemyOpportunityWorkspaceRepository(session)
         self.agent_context = SqlAlchemyAgentContextRepository(session)
+        self.events = SqlAlchemyEventRepository(session)
+        self.career = SqlAlchemyCareerRepository(session, self.events)
+        self.interviews = SqlAlchemyInterviewRepository(session, self.events)
         self.training = SqlAlchemyTrainingRepository(session)
         return self
 

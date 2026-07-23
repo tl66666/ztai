@@ -14,6 +14,8 @@ from .career_models import (
     domain_events,
 )
 from .core_models import job_applications, job_matches, resumes
+from .event_repository import SqlAlchemyEventRepository
+from .interview_repository import SqlAlchemyInterviewRepository
 from .training_models import audio_records, interview_sessions, interviews, practice_records
 from .unit_of_work import SqlAlchemyUnitOfWork
 
@@ -36,5 +38,7 @@ __all__ = [
     "metadata",
     "practice_records",
     "resumes",
+    "SqlAlchemyEventRepository",
+    "SqlAlchemyInterviewRepository",
     "SqlAlchemyUnitOfWork",
 ]

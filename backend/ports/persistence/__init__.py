@@ -133,6 +133,9 @@ class UnitOfWork(Protocol):
     opportunities: OpportunityWorkspaceRepository
     agent_context: AgentContextRepository
     training: TrainingRepository
+    career: Any
+    events: Any
+    interviews: Any
 
     def __enter__(self) -> Self: ...
 

@@ -4,13 +4,13 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
-from .database import APPLICATION_STATUSES, connect, ensure_column
-from .events import apply_event_to_actions
+from backend.adapters.persistence.sqlalchemy.source import coerce_unit_of_work_factory
 
+from .database import APPLICATION_STATUSES
+from .events import apply_event_to_actions
 
 DEFAULT_APPLICATION_STATUS = "已投递"
 ACTION_STATUSES = ("pending", "in_progress", "completed", "cancelled")
@@ -106,58 +106,36 @@ def is_meaningful_jd_snapshot(value: Any) -> bool:
 
 
 class CareerService:
-    def __init__(self, db_path: str | os.PathLike[str], local_user_id: int = 1):
-        self.db_path = os.fspath(db_path)
+    def __init__(self, persistence, local_user_id: int = 1):
+        self.db_path = os.fspath(persistence) if isinstance(
+            persistence, (str, os.PathLike)
+        ) else ""
+        self._unit_of_work = coerce_unit_of_work_factory(persistence)
         self.local_user_id = int(local_user_id)
-        with connect(self.db_path) as conn:
-            ensure_column(conn, "action_items", "action_type", "TEXT")
-            ensure_column(conn, "action_items", "completion_evidence", "TEXT")
-            ensure_column(conn, "job_applications", "deleted_at", "TEXT")
 
     def get_profile(self, user_id: int) -> dict[str, Any] | None:
         self._require_local_user(user_id)
-        with connect(self.db_path) as conn:
-            row = conn.execute(
-                "SELECT * FROM career_profiles WHERE user_id = ?", (self.local_user_id,)
-            ).fetchone()
+        with self._unit_of_work() as unit_of_work:
+            row = unit_of_work.career.profile(self.local_user_id)
         return self._profile_from_row(row) if row else None
 
     def agent_dashboard_summary(self, user_id: int) -> dict[str, Any]:
         """Return compatibility counts plus canonical readiness, without row contents."""
         self._require_local_user(user_id)
-        with connect(self.db_path) as conn:
-            counts = {}
-            for key, table in (
-                ("resumes", "resumes"),
-                ("matches", "job_matches"),
-                ("interviews", "interviews"),
-            ):
-                counts[key] = (
-                    conn.execute(
-                        f'SELECT COUNT(*) FROM "{table}" WHERE user_id = ?',
-                        (self.local_user_id,),
-                    ).fetchone()[0]
-                    if self._table_exists(conn, table)
-                    else 0
-                )
-            counts["applications"] = conn.execute(
-                """
-                SELECT COUNT(*) FROM job_applications
-                WHERE user_id = ? AND deleted_at IS NULL
-                """,
-                (self.local_user_id,),
-            ).fetchone()[0]
+        with self._unit_of_work() as unit_of_work:
+            counts = unit_of_work.career.dashboard_counts(self.local_user_id)
         return {**counts, "readiness": self.calculate_readiness(user_id)}
 
     def calculate_readiness(self, user_id: int) -> dict[str, Any]:
         self._require_local_user(user_id)
-        with connect(self.db_path) as conn:
-            resume = self._readiness_resume(conn)
-            matches = self._readiness_matches(conn)
-            interviews = self._readiness_rows(conn, "interviews", "created_at")
-            practices = self._readiness_rows(conn, "practice_records", "created_at")
-            audios = self._readiness_rows(conn, "audio_records", "created_at")
-            opportunities = self._readiness_opportunities(conn)
+        with self._unit_of_work() as unit_of_work:
+            evidence = unit_of_work.career.readiness_evidence(self.local_user_id)
+        resume = evidence["resume"]
+        matches = evidence["matches"]
+        interviews = evidence["interviews"]
+        practices = evidence["practices"]
+        audios = evidence["audios"]
+        opportunities = evidence["opportunities"]
 
         components = {
             "resume": self._score_resume_component(resume),
@@ -238,97 +216,6 @@ class CareerService:
             "summary": f"当前准备度 {weighted}/100，依据近期质量、完成度、时效和趋势综合计算。",
             "funnel": funnel,
         }
-
-    def _readiness_resume(self, conn: sqlite3.Connection) -> dict[str, Any] | None:
-        if not self._table_exists(conn, "resumes"):
-            return None
-        columns = self._table_columns(conn, "resumes")
-        status_filter = "AND (status IS NULL OR status IN ('active', 'main'))" if "status" in columns else ""
-        order_column = "updated_at" if "updated_at" in columns else "created_at"
-        rows = conn.execute(
-            f"SELECT * FROM resumes WHERE user_id = ? {status_filter}",
-            (self.local_user_id,),
-        ).fetchall()
-        ordered = self._sort_recent_rows([dict(row) for row in rows], order_column)
-        return ordered[0] if ordered else None
-
-    def _readiness_matches(self, conn: sqlite3.Connection) -> list[dict[str, Any]]:
-        if not self._table_exists(conn, "job_matches"):
-            return []
-        columns = self._table_columns(conn, "job_matches")
-        if not self._table_exists(conn, "resumes"):
-            return []
-        jd_expression = "m.jd_text"
-        join = ""
-        application_filter = ""
-        if "application_id" in columns and self._table_exists(conn, "job_applications"):
-            application_columns = self._table_columns(conn, "job_applications")
-            if "jd_text" in application_columns:
-                jd_expression = "COALESCE(m.jd_text, a.jd_text)"
-                deleted_filter = "AND a.deleted_at IS NULL" if "deleted_at" in application_columns else ""
-                join = (
-                    "LEFT JOIN job_applications a ON a.id = m.application_id "
-                    "AND a.user_id = m.user_id AND a.user_id = ? "
-                    f"{deleted_filter}"
-                )
-                application_filter = "AND (m.application_id IS NULL OR a.id IS NOT NULL)"
-        if "jd_text" not in columns:
-            jd_expression = "a.jd_text" if join else "NULL"
-        score_expression = "m.match_score" if "match_score" in columns else "NULL"
-        analysis_expression = "m.analysis" if "analysis" in columns else "NULL"
-        created_expression = "m.created_at" if "created_at" in columns else "NULL"
-        rows = conn.execute(
-            f"""SELECT m.id, m.resume_id, m.job_title,
-                       {('m.application_id' if 'application_id' in columns else 'NULL')} AS application_id,
-                       {score_expression} AS match_score,
-                       {analysis_expression} AS analysis, {jd_expression} AS jd_text,
-                       {created_expression} AS created_at
-                FROM job_matches m
-                JOIN resumes r ON r.id = m.resume_id AND r.user_id = m.user_id
-                    AND r.user_id = ?
-                {join}
-                WHERE m.user_id = ? {application_filter}
-                """,
-            ((self.local_user_id,) if join else ())
-            + (self.local_user_id, self.local_user_id),
-        ).fetchall()
-        return self._sort_recent_rows([dict(row) for row in rows])
-
-    def _readiness_rows(
-        self, conn: sqlite3.Connection, table: str, timestamp_column: str
-    ) -> list[dict[str, Any]]:
-        if not self._table_exists(conn, table):
-            return []
-        columns = self._table_columns(conn, table)
-        if "score" not in columns:
-            return []
-        timestamp = timestamp_column if timestamp_column in columns else "NULL"
-        identity_fields = {
-            "interviews": ("resume_id", "job_title", "conversation", "feedback", "source_session_id"),
-            "practice_records": ("category", "question", "answer"),
-            "audio_records": ("transcript", "metrics", "audio_file"),
-        }.get(table, ())
-        selected = [field for field in identity_fields if field in columns]
-        selected_sql = "".join(f", {field}" for field in selected)
-        rows = conn.execute(
-            f"SELECT id, score, {timestamp} AS created_at{selected_sql} FROM {table} "
-            "WHERE user_id = ?",
-            (self.local_user_id,),
-        ).fetchall()
-        return self._sort_recent_rows([dict(row) for row in rows])
-
-    def _readiness_opportunities(self, conn: sqlite3.Connection) -> list[dict[str, Any]]:
-        if not self._table_exists(conn, "job_applications"):
-            return []
-        columns = self._table_columns(conn, "job_applications")
-        deleted_filter = "AND deleted_at IS NULL" if "deleted_at" in columns else ""
-        selected = [name for name in ("id", "status", "next_action_at", "updated_at") if name in columns]
-        rows = conn.execute(
-            f"SELECT {', '.join(selected)} FROM job_applications "
-            f"WHERE user_id = ? {deleted_filter} ORDER BY id DESC LIMIT 50",
-            (self.local_user_id,),
-        ).fetchall()
-        return self._sort_recent_rows([dict(row) for row in rows], "updated_at")
 
     def _score_resume_component(self, resume: dict[str, Any] | None) -> dict[str, Any]:
         if not resume:
@@ -611,54 +498,27 @@ class CareerService:
         except (TypeError, ValueError):
             return False
 
-    @staticmethod
-    def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
-        return conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
-        ).fetchone() is not None
-
-    @staticmethod
-    def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
-        return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
-
     def upsert_profile(
         self, user_id: int, values: dict[str, Any], source: str = "user"
     ) -> dict[str, Any]:
         self._require_local_user(user_id)
         values = self._require_mapping(values, "profile values")
         source = self._bounded_text(source, "source", 100, required=True)
-        with connect(self.db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            existing = conn.execute(
-                "SELECT * FROM career_profiles WHERE user_id = ?", (self.local_user_id,)
-            ).fetchone()
+        with self._unit_of_work() as unit_of_work:
+            existing = unit_of_work.career.profile(self.local_user_id)
             current = self._profile_from_row(existing) if existing else self._empty_profile()
             merged = self._merge_profile(current, values, source)
             serialized = self._serialize_profile(merged)
-            if existing:
-                conn.execute(
-                    """
-                    UPDATE career_profiles
-                    SET headline = ?, summary = ?, target_roles_json = ?, skills_json = ?,
-                        preferences_json = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE user_id = ?
-                    """,
-                    (*serialized, self.local_user_id),
-                )
-            else:
-                conn.execute(
-                    """
-                    INSERT INTO career_profiles (
-                        user_id, headline, summary, target_roles_json, skills_json, preferences_json
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (self.local_user_id, *serialized),
-                )
-            row = conn.execute(
-                "SELECT * FROM career_profiles WHERE user_id = ?", (self.local_user_id,)
-            ).fetchone()
+            row = unit_of_work.career.upsert_profile(
+                self.local_user_id,
+                headline=serialized[0],
+                summary=serialized[1],
+                target_roles_json=serialized[2],
+                skills_json=serialized[3],
+                preferences_json=serialized[4],
+            )
             self._write_event(
-                conn,
+                unit_of_work.career,
                 "profile",
                 self.local_user_id,
                 "profile.updated",
@@ -670,21 +530,16 @@ class CareerService:
 
     def list_opportunities(self, user_id: int) -> list[dict[str, Any]]:
         self._require_local_user(user_id)
-        with connect(self.db_path) as conn:
-            rows = conn.execute(
-                """
-                SELECT * FROM job_applications
-                WHERE user_id = ? AND deleted_at IS NULL
-                ORDER BY updated_at DESC, id DESC
-                """,
-                (self.local_user_id,),
-            ).fetchall()
+        with self._unit_of_work() as unit_of_work:
+            rows = unit_of_work.career.list_opportunities(self.local_user_id)
         return [self._opportunity_from_row(row) for row in rows]
 
     def get_opportunity(self, user_id: int, opportunity_id: int) -> dict[str, Any]:
         self._require_local_user(user_id)
-        with connect(self.db_path) as conn:
-            row = self._owned_opportunity(conn, opportunity_id)
+        with self._unit_of_work() as unit_of_work:
+            row = unit_of_work.career.owned(
+                "job_applications", opportunity_id, self.local_user_id
+            )
         if not row:
             raise LookupError("opportunity not found")
         return self._opportunity_from_row(row)
@@ -697,21 +552,15 @@ class CareerService:
         source = self._bounded_text(source, "source", 100, required=True)
         values.setdefault("status", DEFAULT_APPLICATION_STATUS)
         values["created_by"] = source
-        columns = [*values]
-        placeholders = ", ".join("?" for _ in columns)
-        with connect(self.db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if values.get("resume_id") is not None and not self._owned_row(
-                conn, "resumes", values["resume_id"]
+        with self._unit_of_work() as unit_of_work:
+            repository = unit_of_work.career
+            if values.get("resume_id") is not None and not repository.owned(
+                "resumes", values["resume_id"], self.local_user_id
             ):
                 raise LookupError("resume not found")
-            cursor = conn.execute(
-                f"INSERT INTO job_applications ({', '.join(columns)}) VALUES ({placeholders})",
-                tuple(values[column] for column in columns),
-            )
-            opportunity_id = cursor.lastrowid
+            opportunity_id = repository.add_opportunity(self.local_user_id, values)
             self._write_event(
-                conn,
+                repository,
                 "opportunity",
                 opportunity_id,
                 "opportunity.created",
@@ -723,7 +572,9 @@ class CareerService:
                     values["status"],
                 ),
             )
-            row = self._owned_opportunity(conn, opportunity_id)
+            row = repository.owned(
+                "job_applications", opportunity_id, self.local_user_id
+            )
         return self._opportunity_from_row(row)
 
     def update_opportunity(
@@ -736,9 +587,11 @@ class CareerService:
         self._require_local_user(user_id)
         changes = self._validate_opportunity_values(changes, creating=False)
         source = self._bounded_text(source, "source", 100, required=True)
-        with connect(self.db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            existing = self._owned_opportunity(conn, opportunity_id)
+        with self._unit_of_work() as unit_of_work:
+            repository = unit_of_work.career
+            existing = repository.owned(
+                "job_applications", opportunity_id, self.local_user_id
+            )
             if not existing:
                 raise LookupError("opportunity not found")
             merged_salary_min = changes.get("salary_min", existing["salary_min"])
@@ -746,8 +599,8 @@ class CareerService:
             if merged_salary_min is not None and merged_salary_max is not None:
                 if merged_salary_min > merged_salary_max:
                     raise ValueError("salary_min cannot exceed salary_max")
-            if changes.get("resume_id") is not None and not self._owned_row(
-                conn, "resumes", changes["resume_id"]
+            if changes.get("resume_id") is not None and not repository.owned(
+                "resumes", changes["resume_id"], self.local_user_id
             ):
                 raise LookupError("resume not found")
             if "status" in changes:
@@ -758,16 +611,15 @@ class CareerService:
                 field: value for field, value in changes.items() if existing[field] != value
             }
             if changes:
-                assignments = ", ".join(f"{column} = ?" for column in changes)
-                conn.execute(
-                    f"UPDATE job_applications SET {assignments}, updated_at = CURRENT_TIMESTAMP "
-                    "WHERE id = ? AND user_id = ?",
-                    (*changes.values(), opportunity_id, self.local_user_id),
+                repository.update_opportunity(
+                    opportunity_id,
+                    self.local_user_id,
+                    changes,
                 )
             result_status = changes.get("status", existing["status"])
             if changes or source.startswith("agent:"):
                 self._write_event(
-                    conn,
+                    repository,
                     "opportunity",
                     opportunity_id,
                     "opportunity.updated",
@@ -779,7 +631,9 @@ class CareerService:
                         result_status,
                     ),
                 )
-            row = self._owned_opportunity(conn, opportunity_id)
+            row = repository.owned(
+                "job_applications", opportunity_id, self.local_user_id
+            )
         return self._opportunity_from_row(row)
 
     def delete_opportunity(
@@ -787,27 +641,29 @@ class CareerService:
     ) -> dict[str, Any]:
         self._require_local_user(user_id)
         source = self._bounded_text(source, "source", 100, required=True)
-        with connect(self.db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            existing = self._owned_opportunity(conn, opportunity_id)
+        with self._unit_of_work() as unit_of_work:
+            repository = unit_of_work.career
+            existing = repository.owned(
+                "job_applications", opportunity_id, self.local_user_id
+            )
             if not existing:
                 raise LookupError("opportunity not found")
             self._write_event(
-                conn,
+                repository,
                 "opportunity",
                 opportunity_id,
                 "opportunity.deleted",
                 {"source": source},
             )
-            conn.execute(
-                """
-                UPDATE job_applications
-                SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-                """,
-                (opportunity_id, self.local_user_id),
+            repository.soft_delete_opportunity(opportunity_id, self.local_user_id)
+            row = repository.owned(
+                "job_applications", opportunity_id, self.local_user_id
             )
-            row = self._owned_row(conn, "job_applications", opportunity_id)
+            if row is None:
+                row = {
+                    **existing,
+                    "deleted_at": datetime.now(timezone.utc).isoformat(),
+                }
         return self._opportunity_from_row(row)
 
     def create_resume_version(
@@ -847,18 +703,20 @@ class CareerService:
         if source_type not in RESUME_SOURCE_TYPES:
             raise ValueError("invalid source_type")
         source = self._bounded_text(source, "source", 100, required=True)
-        with connect(self.db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            source_row = self._owned_row(conn, "resumes", resume_id)
+        with self._unit_of_work() as unit_of_work:
+            repository = unit_of_work.career
+            source_row = repository.owned("resumes", resume_id, self.local_user_id)
             if not source_row:
                 raise LookupError("resume not found")
             application_id = metadata.get("application_id")
-            if application_id is not None and not self._owned_opportunity(conn, application_id):
+            if application_id is not None and not repository.owned(
+                "job_applications", application_id, self.local_user_id
+            ):
                 raise LookupError("opportunity not found")
             action_id = metadata.get("action_id")
             if action_id is not None:
                 action_id = self._integer(action_id, "action_id")
-                action = self._owned_row(conn, "action_items", action_id)
+                action = repository.owned("action_items", action_id, self.local_user_id)
                 if not action:
                     raise LookupError("action item not found")
                 if action["status"] not in {"pending", "in_progress"}:
@@ -868,30 +726,23 @@ class CareerService:
                 if application_id is None or action["application_id"] != application_id:
                     raise ValueError("resume action item opportunity does not match")
             title = metadata.get("title") or metadata.get("version_label") or source_row["title"]
-            cursor = conn.execute(
-                """
-                INSERT INTO resumes (
-                    user_id, title, content, parent_resume_id, version_label,
-                    target_job_title, application_id, status, source_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    self.local_user_id,
-                    title,
-                    content,
-                    resume_id,
-                    metadata.get("version_label"),
-                    metadata.get("target_job_title"),
-                    application_id,
-                    resume_status,
-                    source_type,
-                ),
+            new_id = repository.add_resume_version(
+                self.local_user_id,
+                {
+                    "title": title,
+                    "content": content,
+                    "parent_resume_id": resume_id,
+                    "version_label": metadata.get("version_label"),
+                    "target_job_title": metadata.get("target_job_title"),
+                    "application_id": application_id,
+                    "status": resume_status,
+                    "source_type": source_type,
+                },
             )
-            new_id = cursor.lastrowid
             aggregate_type = "opportunity" if application_id is not None else "resume"
             aggregate_id = application_id if application_id is not None else new_id
             self._write_event(
-                conn,
+                repository,
                 aggregate_type,
                 aggregate_id,
                 "resume.version_created",
@@ -909,7 +760,7 @@ class CareerService:
                     resume_status,
                 ),
             )
-            row = self._owned_row(conn, "resumes", new_id)
+            row = repository.owned("resumes", new_id, self.local_user_id)
         return dict(row)
 
     def create_action_item(
@@ -942,34 +793,29 @@ class CareerService:
         due_at = values.get("due_date", values.get("due_at"))
         due_at = self._bounded_text(due_at, "due date", 100)
         priority = self._integer(values.get("priority", 0), "priority")
-        with connect(self.db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if application_id is not None and not self._owned_opportunity(conn, application_id):
+        with self._unit_of_work() as unit_of_work:
+            repository = unit_of_work.career
+            if application_id is not None and not repository.owned(
+                "job_applications", application_id, self.local_user_id
+            ):
                 raise LookupError("opportunity not found")
-            cursor = conn.execute(
-                """
-                INSERT INTO action_items (
-                    user_id, application_id, title, action_type, description,
-                    status, priority, due_at, source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    self.local_user_id,
-                    application_id,
-                    title,
-                    action_type,
-                    description,
-                    status,
-                    priority,
-                    due_at,
-                    source,
-                ),
+            action_id = repository.add_action(
+                self.local_user_id,
+                {
+                    "application_id": application_id,
+                    "title": title,
+                    "action_type": action_type,
+                    "description": description,
+                    "status": status,
+                    "priority": priority,
+                    "due_at": due_at,
+                    "source": source,
+                },
             )
-            action_id = cursor.lastrowid
             aggregate_type = "opportunity" if application_id is not None else "action_item"
             aggregate_id = application_id if application_id is not None else action_id
             self._write_event(
-                conn,
+                repository,
                 aggregate_type,
                 aggregate_id,
                 "action_item.created",
@@ -981,16 +827,13 @@ class CareerService:
                     status,
                 ),
             )
-            row = self._owned_row(conn, "action_items", action_id)
+            row = repository.owned("action_items", action_id, self.local_user_id)
         return self._action_from_row(row)
 
     def list_action_items(self, user_id: int) -> list[dict[str, Any]]:
         self._require_local_user(user_id)
-        with connect(self.db_path) as conn:
-            rows = conn.execute(
-                "SELECT * FROM action_items WHERE user_id = ? ORDER BY due_at, id DESC",
-                (self.local_user_id,),
-            ).fetchall()
+        with self._unit_of_work() as unit_of_work:
+            rows = unit_of_work.career.list_actions(self.local_user_id)
         return [self._action_from_row(row) for row in rows]
 
     def complete_action_item(
@@ -999,27 +842,19 @@ class CareerService:
         self._require_local_user(user_id)
         evidence = self._bounded_text(evidence, "evidence", 20_000) or ""
         source = self._bounded_text(source, "source", 100, required=True)
-        with connect(self.db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = self._owned_row(conn, "action_items", action_id)
+        with self._unit_of_work() as unit_of_work:
+            repository = unit_of_work.career
+            row = repository.owned("action_items", action_id, self.local_user_id)
             if not row:
                 raise LookupError("action item not found")
             changed = row["status"] != "completed"
             if changed:
-                conn.execute(
-                    """
-                    UPDATE action_items
-                    SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
-                        completion_evidence = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ? AND user_id = ?
-                    """,
-                    (evidence, action_id, self.local_user_id),
-                )
+                repository.complete_action(action_id, self.local_user_id, evidence)
             if changed or source.startswith("agent:"):
                 aggregate_type = "opportunity" if row["application_id"] is not None else "action_item"
                 aggregate_id = row["application_id"] if row["application_id"] is not None else action_id
                 self._write_event(
-                    conn,
+                    repository,
                     aggregate_type,
                     aggregate_id,
                     "action_item.completed",
@@ -1031,7 +866,7 @@ class CareerService:
                         "completed",
                     ),
                 )
-            row = self._owned_row(conn, "action_items", action_id)
+            row = repository.owned("action_items", action_id, self.local_user_id)
         return self._action_from_row(row)
 
     def save_report(
@@ -1063,31 +898,30 @@ class CareerService:
             raise ValueError("content is too large")
         source = self._bounded_text(source, "source", 100, required=True)
         action_id = values.get("action_id")
-        with connect(self.db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._unit_of_work() as unit_of_work:
+            repository = unit_of_work.career
             if action_id is not None:
                 action_id = self._integer(action_id, "action_id")
-                action = self._owned_row(conn, "action_items", action_id)
+                action = repository.owned("action_items", action_id, self.local_user_id)
                 if not action:
                     raise LookupError("action item not found")
                 if action["status"] != "pending":
                     raise ValueError("report action item is not pending")
                 if action["action_type"] not in {"career_report", "save_career_report"}:
                     raise ValueError("action item is not a report action")
-            cursor = conn.execute(
-                """
-                INSERT INTO career_reports (
-                    user_id, report_type, title, period_start, period_end, content_json, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    self.local_user_id, report_type, title, period_start, period_end,
-                    content_json, status,
-                ),
+            report_id = repository.add_report(
+                self.local_user_id,
+                {
+                    "report_type": report_type,
+                    "title": title,
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "content_json": content_json,
+                    "status": status,
+                },
             )
-            report_id = cursor.lastrowid
             self._write_event(
-                conn,
+                repository,
                 "career_report",
                 report_id,
                 "career_report.saved",
@@ -1099,7 +933,7 @@ class CareerService:
                     status,
                 ),
             )
-            row = self._owned_row(conn, "career_reports", report_id)
+            row = repository.owned("career_reports", report_id, self.local_user_id)
         result = dict(row)
         result["content"] = json.loads(result.pop("content_json"))
         return result
@@ -1107,8 +941,10 @@ class CareerService:
     def get_report(self, user_id: int, report_id: int) -> dict[str, Any]:
         self._require_local_user(user_id)
         report_id = self._integer(report_id, "report_id")
-        with connect(self.db_path) as conn:
-            row = self._owned_row(conn, "career_reports", report_id)
+        with self._unit_of_work() as unit_of_work:
+            row = unit_of_work.career.owned(
+                "career_reports", report_id, self.local_user_id
+            )
             if row is None:
                 raise LookupError("career report not found")
         result = dict(row)
@@ -1117,17 +953,16 @@ class CareerService:
 
     def timeline(self, user_id: int, opportunity_id: int) -> list[dict[str, Any]]:
         self._require_local_user(user_id)
-        with connect(self.db_path) as conn:
-            if not self._owned_row(conn, "job_applications", opportunity_id):
+        with self._unit_of_work() as unit_of_work:
+            repository = unit_of_work.career
+            if not repository.owned(
+                "job_applications",
+                opportunity_id,
+                self.local_user_id,
+                include_deleted=True,
+            ):
                 raise LookupError("opportunity not found")
-            rows = conn.execute(
-                """
-                SELECT * FROM domain_events
-                WHERE user_id = ? AND aggregate_type = 'opportunity' AND aggregate_id = ?
-                ORDER BY occurred_at, id
-                """,
-                (self.local_user_id, str(opportunity_id)),
-            ).fetchall()
+            rows = repository.timeline(self.local_user_id, opportunity_id)
         return [self._event_from_row(row) for row in rows]
 
     def _require_local_user(self, user_id: int) -> None:
@@ -1248,7 +1083,7 @@ class CareerService:
             json.dumps(preferences, ensure_ascii=False),
         )
 
-    def _profile_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _profile_from_row(self, row) -> dict[str, Any]:
         target = self._json_object(row["target_roles_json"])
         preferences = self._json_object(row["preferences_json"])
         return {
@@ -1284,13 +1119,13 @@ class CareerService:
         return parsed if isinstance(parsed, list) else []
 
     @staticmethod
-    def _opportunity_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    def _opportunity_from_row(row) -> dict[str, Any]:
         result = dict(row)
         result["needs_status_review"] = result.get("status") not in APPLICATION_STATUSES
         return result
 
     @staticmethod
-    def _action_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    def _action_from_row(row) -> dict[str, Any]:
         result = dict(row)
         result["opportunity_id"] = result.get("application_id")
         result["type"] = result.get("action_type")
@@ -1298,7 +1133,7 @@ class CareerService:
         return result
 
     @staticmethod
-    def _event_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    def _event_from_row(row) -> dict[str, Any]:
         result = dict(row)
         try:
             result["payload"] = json.loads(result.pop("payload_json") or "{}")
@@ -1307,49 +1142,23 @@ class CareerService:
             result.pop("payload_json", None)
         return result
 
-    def _owned_row(self, conn: sqlite3.Connection, table: str, row_id: int) -> sqlite3.Row | None:
-        return conn.execute(
-            f"SELECT * FROM {table} WHERE id = ? AND user_id = ?",
-            (row_id, self.local_user_id),
-        ).fetchone()
-
-    def _owned_opportunity(
-        self, conn: sqlite3.Connection, opportunity_id: int
-    ) -> sqlite3.Row | None:
-        return conn.execute(
-            """
-            SELECT * FROM job_applications
-            WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-            """,
-            (opportunity_id, self.local_user_id),
-        ).fetchone()
-
     def _write_event(
         self,
-        conn: sqlite3.Connection,
+        repository,
         aggregate_type: str,
         aggregate_id: int,
         event_type: str,
         payload: dict[str, Any],
     ) -> None:
-        source = payload.get("source")
-        conn.execute(
-            """
-            INSERT INTO domain_events (
-                user_id, aggregate_type, aggregate_id, event_type, payload_json, source
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                self.local_user_id,
-                aggregate_type,
-                str(aggregate_id),
-                event_type,
-                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                source,
-            ),
+        repository.events.add(
+            self.local_user_id,
+            aggregate_type,
+            aggregate_id,
+            event_type,
+            payload,
         )
         apply_event_to_actions(
-            conn,
+            repository.events,
             self.local_user_id,
             event_type,
             aggregate_type,

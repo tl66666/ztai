@@ -124,8 +124,63 @@ class ArchitectureMigrationTests(unittest.TestCase):
         self.assertNotIn("migrate_database(", runtime_sources)
         self.assertNotIn("create_agent_tables(", runtime_sources)
 
-    def test_remaining_career_constructor_schema_guards_are_frozen(self) -> None:
-        """Keep the next domain-persistence batch explicit instead of growing debt."""
+    def test_production_domain_persistence_has_no_sqlite_specifics(self) -> None:
+        sql_statement = re.compile(
+            r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|PRAGMA)\b",
+            re.IGNORECASE,
+        )
+        production_paths = (
+            ROOT / "utils" / "domain" / "career.py",
+            ROOT / "utils" / "domain" / "events.py",
+            ROOT / "utils" / "domain" / "interviews.py",
+            ROOT / "backend" / "api" / "career.py",
+            *sorted((ROOT / "backend" / "adapters" / "persistence" / "sqlalchemy").glob("*.py")),
+            *sorted((ROOT / "utils" / "agent_runtime").glob("*.py")),
+        )
+        sqlite_tokens = (
+            "PRAGMA",
+            "BEGIN IMMEDIATE",
+            "datetime(",
+            "fts5",
+        )
+        violations = []
+        for path in production_paths:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    if any(alias.name == "sqlite3" for alias in node.names):
+                        violations.append(f"{path.relative_to(ROOT)}:{node.lineno}:sqlite3")
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module == "utils.domain.database" and any(
+                        alias.name in {"connect", "ensure_column", "migrate_database"}
+                        for alias in node.names
+                    ):
+                        violations.append(
+                            f"{path.relative_to(ROOT)}:{node.lineno}:legacy-database"
+                        )
+                    if node.module == "sqlalchemy.dialects.sqlite" or (
+                        node.module == "sqlalchemy.dialects"
+                        and any(alias.name == "sqlite" for alias in node.names)
+                    ):
+                        violations.append(
+                            f"{path.relative_to(ROOT)}:{node.lineno}:sqlite-dialect"
+                        )
+                elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    normalized = node.value.casefold()
+                    for token in sqlite_tokens:
+                        if token.casefold() in normalized:
+                            violations.append(
+                                f"{path.relative_to(ROOT)}:{node.lineno}:{token}"
+                            )
+                    if "?" in node.value and sql_statement.match(node.value):
+                        violations.append(
+                            f"{path.relative_to(ROOT)}:{node.lineno}:qmark-SQL"
+                        )
+
+        self.assertEqual(violations, [])
+
+    def test_career_constructor_has_no_schema_guards(self) -> None:
         source = (ROOT / "utils" / "domain" / "career.py").read_text(
             encoding="utf-8"
         )
@@ -154,14 +209,7 @@ class ArchitectureMigrationTests(unittest.TestCase):
             ):
                 guards.append((node.args[1].value, node.args[2].value))
 
-        self.assertEqual(
-            guards,
-            [
-                ("action_items", "action_type"),
-                ("action_items", "completion_evidence"),
-                ("job_applications", "deleted_at"),
-            ],
-        )
+        self.assertEqual(guards, [])
 
 
 if __name__ == "__main__":

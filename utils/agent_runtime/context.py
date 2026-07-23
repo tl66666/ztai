@@ -1,12 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import json
 import re
-import sqlite3
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
-from utils.agent_runtime.memory import ClosingConnection, MemoryStore
+from backend.adapters.persistence.sqlalchemy.agent_context_store import (
+    SqlAlchemyAgentContextStore,
+)
+from backend.adapters.persistence.sqlalchemy.agent_session import (
+    AgentSessionProvider,
+    SessionFactory,
+)
+from utils.agent_runtime.memory import MemoryStore
 from utils.domain.career import CareerService
 
 
@@ -24,15 +31,12 @@ def safe_text(value, maxlen: int = 500) -> str:
             result = str(value)
     except Exception:
         result = "[unreadable]"
-    return result[:max(0, maxlen)]
+    return result[: max(0, maxlen)]
 
 
 def _json_safe(value):
     if isinstance(value, dict):
-        return {
-            safe_text(key, 100): _json_safe(item)
-            for key, item in list(value.items())[:100]
-        }
+        return {safe_text(key, 100): _json_safe(item) for key, item in list(value.items())[:100]}
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value[:100]]
     if isinstance(value, str):
@@ -84,10 +88,24 @@ class RuntimeContext:
 
 
 class ContextBuilder:
-    def __init__(self, store: MemoryStore, db_path: str, recent_limit: int = 12):
+    def __init__(
+        self,
+        store: MemoryStore,
+        db_path: str,
+        recent_limit: int = 12,
+        *,
+        session_factory: SessionFactory | None = None,
+        career_service: CareerService | None = None,
+    ):
         self.store = store
         self.db_path = db_path
         self.recent_limit = recent_limit
+        self._sessions = AgentSessionProvider(
+            db_path,
+            session_factory=session_factory or store._sessions.session_factory,
+        )
+        self._persistence = SqlAlchemyAgentContextStore(self._sessions)
+        self._career_service = career_service
 
     def needs_summary(self, conversation_id: str, user_id: int) -> bool:
         return self.store.unsummarized_message_count(conversation_id, user_id) > 16
@@ -100,7 +118,9 @@ class ContextBuilder:
             until_id = None
         else:
             user_messages = [message.content for message in messages if message.role == "user"]
-            assistant_messages = [message.content for message in messages if message.role == "assistant"]
+            assistant_messages = [
+                message.content for message in messages if message.role == "assistant"
+            ]
             goal = user_messages[0][:180] if user_messages else "暂无"
             latest = user_messages[-1][:180] if user_messages else "暂无"
             conclusion = assistant_messages[-1][:240] if assistant_messages else "尚未形成结论"
@@ -117,7 +137,10 @@ class ContextBuilder:
         return summary
 
     def build(
-        self, user_id: int, conversation_id: str, query: str,
+        self,
+        user_id: int,
+        conversation_id: str,
+        query: str,
         entity_context: dict | None = None,
     ) -> RuntimeContext:
         conversation = self.store.get_conversation(conversation_id, user_id)
@@ -141,12 +164,11 @@ class ContextBuilder:
         )
         return RuntimeContext(
             conversation_summary=conversation.summary,
-            recent_messages=[{"role": message.role, "content": message.content} for message in messages],
-            profile_facts=profile_facts,
-            episodes=[
-                self._episode_summary(episode["value"])
-                for episode in episodes
+            recent_messages=[
+                {"role": message.role, "content": message.content} for message in messages
             ],
+            profile_facts=profile_facts,
+            episodes=[self._episode_summary(episode["value"]) for episode in episodes],
             career_snapshot=self._career_snapshot(user_id, query, entity_context or {}),
         )
 
@@ -167,125 +189,117 @@ class ContextBuilder:
             for key in ("module",)
             if isinstance(requested_context.get(key), str)
         }
-        with self._business_connection() as context_connection:
-            for key, table, extra in (
-                ("resume_id", "resumes", ""),
-                ("opportunity_id", "job_applications", " AND deleted_at IS NULL"),
-            ):
-                entity_id = requested_context.get(key)
-                if not isinstance(entity_id, int) or isinstance(entity_id, bool) or entity_id <= 0:
-                    continue
-                owned = context_connection.execute(
-                    f'SELECT 1 FROM "{table}" WHERE id = ? AND user_id = ?{extra}',
-                    (entity_id, user_id),
-                ).fetchone()
-                if owned is not None:
-                    entity_context[key] = entity_id
+        for key, table in (
+            ("resume_id", "resumes"),
+            ("opportunity_id", "job_applications"),
+        ):
+            entity_id = requested_context.get(key)
+            if not isinstance(entity_id, int) or isinstance(entity_id, bool) or entity_id <= 0:
+                continue
+            if self._persistence.context_entity_owned(table, entity_id, user_id):
+                entity_context[key] = entity_id
         sections: list[tuple[str, object]] = []
-        sections.append(("ui_context", {
-            key: entity_context[key]
-            for key in ("module", "opportunity_id", "resume_id")
-            if key in entity_context
-        }))
+        sections.append(
+            (
+                "ui_context",
+                {
+                    key: entity_context[key]
+                    for key in ("module", "opportunity_id", "resume_id")
+                    if key in entity_context
+                },
+            )
+        )
         try:
-            service: CareerService | None = CareerService(self.db_path, user_id)
-        except sqlite3.Error:
+            service = self._career_service or CareerService(self.db_path, user_id)
+        except Exception:
             service = None
 
         try:
             profile = service.get_profile(user_id) if service else {}
             profile = profile or {}
-            sections.append(("confirmed_profile", {
-                key: profile.get(key)
-                for key in ("career_direction", "target_role", "cities", "salary", "experience")
-                if profile.get(key) not in (None, "", [], {})
-            }))
-        except (sqlite3.Error, TypeError, ValueError):
+            sections.append(
+                (
+                    "confirmed_profile",
+                    {
+                        key: profile.get(key)
+                        for key in (
+                            "career_direction",
+                            "target_role",
+                            "cities",
+                            "salary",
+                            "experience",
+                        )
+                        if profile.get(key) not in (None, "", [], {})
+                    },
+                )
+            )
+        except Exception:
             sections.append(("confirmed_profile", {}))
 
-        with self._business_connection() as connection:
-            counts = {}
-            for label, table, extra in (
-                ("简历", "resumes", ""),
-                ("投递", "job_applications", " AND deleted_at IS NULL"),
-                ("面试训练", "interviews", ""),
-            ):
-                try:
-                    counts[label] = connection.execute(
-                        f'SELECT COUNT(*) FROM "{table}" WHERE user_id = ?{extra}', (user_id,)
-                    ).fetchone()[0]
-                except sqlite3.Error:
-                    counts[label] = 0
-            sections.append((
-                "counts",
-                f"简历 {counts['简历']} 份；投递 {counts['投递']} 条；面试训练 {counts['面试训练']} 次",
-            ))
+        try:
+            counts = self._persistence.counts(user_id)
+        except Exception:
+            counts = {"简历": 0, "投递": 0, "面试训练": 0}
+
+        def append_business_sections() -> None:
+            sections.append(
+                (
+                    "counts",
+                    (
+                        f"简历 {counts['简历']} 份；投递 {counts['投递']} 条；"
+                        f"面试训练 {counts['面试训练']} 次"
+                    ),
+                )
+            )
             normalized_query = safe_text(query, 1000).casefold()
             query_tokens = set(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", normalized_query))
             try:
-                mentioned_ids = [token for token in query_tokens if token.isdigit()]
-                opportunity_id = entity_context.get("opportunity_id")
-                if isinstance(opportunity_id, int) and opportunity_id > 0:
-                    mentioned_ids.insert(0, str(opportunity_id))
-                id_order = (
-                    f"id IN ({','.join('?' for _ in mentioned_ids)})"
-                    if mentioned_ids else "0"
-                )
-                opportunity_rows = connection.execute(
-                    f"""
-                    SELECT id,company,job_title,status,city,priority,resume_id,
-                           next_action_at,interview_at,deadline_at,updated_at
-                    FROM job_applications
-                    WHERE user_id = ? AND deleted_at IS NULL
-                    ORDER BY
-                        CASE
-                            WHEN {id_order} THEN 3
-                            WHEN typeof(company) = 'text' AND company != ''
-                                 AND instr(?, lower(company)) > 0 THEN 2
-                            WHEN typeof(job_title) = 'text' AND job_title != ''
-                                 AND instr(?, lower(job_title)) > 0 THEN 1
-                            ELSE 0
-                        END DESC,
-                        priority DESC, updated_at DESC, id DESC LIMIT 100
-                    """,
-                    (user_id, *mentioned_ids, normalized_query, normalized_query),
-                ).fetchall()
-            except sqlite3.Error:
+                opportunity_rows = self._persistence.opportunities(user_id)
+            except Exception:
                 opportunity_rows = []
 
             selected_opportunity = None
             selected_opportunity_id = entity_context.get("opportunity_id")
             if isinstance(selected_opportunity_id, int) and selected_opportunity_id > 0:
                 try:
-                    selected_row = connection.execute(
-                        """
-                        SELECT id,company,job_title,status,city,salary_min,salary_max,
-                               priority,resume_id,source_url,channel,next_action_at,
-                               interview_at,deadline_at,applied_at,created_at,updated_at
-                        FROM job_applications
-                        WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-                        """,
-                        (selected_opportunity_id, user_id),
-                    ).fetchone()
+                    selected_row = self._persistence.selected_opportunity(
+                        selected_opportunity_id,
+                        user_id,
+                    )
                     if selected_row is not None:
                         selected_opportunity = {
                             key: (
                                 selected_row[key]
                                 if isinstance(selected_row[key], (int, float))
-                                else safe_text(selected_row[key], 2000 if key == "source_url" else 300)
+                                else safe_text(
+                                    selected_row[key], 2000 if key == "source_url" else 300
+                                )
                             )
                             for key in (
-                                "id", "company", "job_title", "status", "city",
-                                "salary_min", "salary_max", "priority", "resume_id",
-                                "source_url", "channel", "next_action_at", "interview_at",
-                                "deadline_at", "applied_at", "created_at", "updated_at",
+                                "id",
+                                "company",
+                                "job_title",
+                                "status",
+                                "city",
+                                "salary_min",
+                                "salary_max",
+                                "priority",
+                                "resume_id",
+                                "source_url",
+                                "channel",
+                                "next_action_at",
+                                "interview_at",
+                                "deadline_at",
+                                "applied_at",
+                                "created_at",
+                                "updated_at",
                             )
                         }
-                except (sqlite3.Error, TypeError, ValueError):
+                except Exception:
                     selected_opportunity = None
             sections.append(("selected_opportunity", selected_opportunity))
 
-            def opportunity_relevance(candidate: sqlite3.Row) -> tuple:
+            def opportunity_relevance(candidate: Mapping[str, object]) -> tuple:
                 company = safe_text(candidate["company"], 300).casefold()
                 job_title = safe_text(candidate["job_title"], 300).casefold()
                 preferred_id = entity_context.get("opportunity_id")
@@ -294,9 +308,13 @@ class ContextBuilder:
                     + int(str(candidate["id"]) in query_tokens)
                     + int(bool(company) and company in normalized_query)
                     + int(bool(job_title) and job_title in normalized_query),
-                    int(candidate["priority"] or 0) if isinstance(candidate["priority"], (int, float)) else 0,
-                    safe_text(candidate["updated_at"], 100), candidate["id"],
+                    int(candidate["priority"] or 0)
+                    if isinstance(candidate["priority"], (int, float))
+                    else 0,
+                    safe_text(candidate["updated_at"], 100),
+                    candidate["id"],
                 )
+
             try:
                 relevant_opportunity = (
                     None
@@ -311,98 +329,96 @@ class ContextBuilder:
                     and opportunity_relevance(relevant_opportunity)[0] > 0
                     else None
                 )
-                resume_rows = connection.execute(
-                    """
-                    SELECT id, title, version_label, target_job_title, status, updated_at
-                    FROM resumes
-                    WHERE user_id = ? AND COALESCE(status, 'active') != 'archived'
-                    ORDER BY id DESC LIMIT 100
-                    """,
-                    (user_id,),
-                ).fetchall()
+                resume_rows = self._persistence.resumes(user_id)
                 by_id = {candidate["id"]: candidate for candidate in resume_rows}
                 row = by_id.get(selected_resume_id)
                 if row is None and resume_rows and not resume_requested:
                     row = max(
                         resume_rows,
                         key=lambda candidate: (
-                            self._parsed_timestamp(candidate["updated_at"]), candidate["id"]
+                            self._parsed_timestamp(candidate["updated_at"]),
+                            candidate["id"],
                         ),
                     )
-                sections.append(("selected_resume", {
-                    "id": row["id"], "title": safe_text(row["title"], 300),
-                    "version": safe_text(row["version_label"], 100),
-                    "target": safe_text(row["target_job_title"], 300),
-                    "status": safe_text(row["status"], 50),
-                    "updated": safe_text(row["updated_at"], 100),
-                } if row else None))
-            except (sqlite3.Error, TypeError, ValueError):
+                sections.append(
+                    (
+                        "selected_resume",
+                        {
+                            "id": row["id"],
+                            "title": safe_text(row["title"], 300),
+                            "version": safe_text(row["version_label"], 100),
+                            "target": safe_text(row["target_job_title"], 300),
+                            "status": safe_text(row["status"], 50),
+                            "updated": safe_text(row["updated_at"], 100),
+                        }
+                        if row
+                        else None,
+                    )
+                )
+            except Exception:
                 sections.append(("selected_resume", None))
 
             opportunities = []
             try:
                 active_rows = [
-                    row for row in opportunity_rows
+                    row
+                    for row in opportunity_rows
                     if safe_text(row["status"], 50) not in {"已拒绝", "已结束"}
                 ]
                 opportunities = []
                 for row in sorted(active_rows, key=opportunity_relevance, reverse=True)[:5]:
-                    opportunities.append({
-                        "id": row["id"],
-                        "company": safe_text(row["company"], 300),
-                        "job_title": safe_text(row["job_title"], 300),
-                        "status": safe_text(row["status"], 50),
-                        "city": safe_text(row["city"], 200),
-                        "priority": row["priority"] if isinstance(row["priority"], (int, float)) else 0,
-                        "next_action_at": safe_text(row["next_action_at"], 100),
-                        "interview_at": safe_text(row["interview_at"], 100),
-                        "deadline_at": safe_text(row["deadline_at"], 100),
-                        "updated_at": safe_text(row["updated_at"], 100),
-                    })
-            except (sqlite3.Error, TypeError, ValueError):
+                    opportunities.append(
+                        {
+                            "id": row["id"],
+                            "company": safe_text(row["company"], 300),
+                            "job_title": safe_text(row["job_title"], 300),
+                            "status": safe_text(row["status"], 50),
+                            "city": safe_text(row["city"], 200),
+                            "priority": row["priority"]
+                            if isinstance(row["priority"], (int, float))
+                            else 0,
+                            "next_action_at": safe_text(row["next_action_at"], 100),
+                            "interview_at": safe_text(row["interview_at"], 100),
+                            "deadline_at": safe_text(row["deadline_at"], 100),
+                            "updated_at": safe_text(row["updated_at"], 100),
+                        }
+                    )
+            except Exception:
                 opportunities = []
             sections.append(("opportunities", opportunities))
 
             try:
-                rows = connection.execute(
-                    """
-                    SELECT id, application_id, title, action_type AS type, status,
-                           priority, due_at, completed_at, completion_evidence, source
-                    FROM action_items
-                    WHERE user_id = ? AND status IN ('pending', 'in_progress')
-                    ORDER BY updated_at DESC, id DESC LIMIT 8
-                    """,
-                    (user_id,),
-                ).fetchall()
+                rows = self._persistence.action_items(user_id)
                 actions = []
                 for row in rows:
                     action = {
                         key: (
-                            row[key] if isinstance(row[key], (int, float))
+                            row[key]
+                            if isinstance(row[key], (int, float))
                             else safe_text(row[key], 500)
                         )
                         for key in (
-                            "id", "application_id", "title", "type", "status",
-                            "priority", "due_at", "completed_at", "source",
+                            "id",
+                            "application_id",
+                            "title",
+                            "type",
+                            "status",
+                            "priority",
+                            "due_at",
+                            "completed_at",
+                            "source",
                         )
                     }
                     if row["source"] == "domain_event" and row["completion_evidence"]:
                         action["evidence"] = safe_text(row["completion_evidence"], 500)
                     actions.append(action)
                 sections.append(("action_items", actions))
-            except sqlite3.Error:
+            except Exception:
                 sections.append(("action_items", []))
 
             recent_events = []
             try:
-                rows = connection.execute(
-                    """
-                    SELECT aggregate_type, aggregate_id, event_type, payload_json, occurred_at
-                    FROM domain_events WHERE user_id = ?
-                    ORDER BY occurred_at DESC, id DESC LIMIT 12
-                    """,
-                    (user_id,),
-                ).fetchall()
+                rows = self._persistence.recent_events(user_id)
                 for row in rows:
                     outcome = {
                         "type": safe_text(row["event_type"], 100),
@@ -421,57 +437,52 @@ class ContextBuilder:
                                 outcome[key] = _json_safe(value)
                     recent_events.append(outcome)
                 sections.append(("recent_outcomes", recent_events))
-            except sqlite3.Error:
+            except Exception:
                 sections.append(("recent_outcomes", []))
 
-            sections.append(("training_match_trends", self._score_trends(connection, user_id)))
+            try:
+                trends = self._persistence.score_trends(user_id)
+            except Exception:
+                trends = {"matches": [], "interviews": [], "practice": []}
+            sections.append(("training_match_trends", trends))
+
+        append_business_sections()
 
         try:
             readiness = service.calculate_readiness(user_id) if service else {}
-            sections.insert(3, ("readiness", {
-                key: readiness.get(key)
-                for key in ("score", "label", "components", "blockers", "caps")
-            }))
-        except (sqlite3.Error, TypeError, ValueError):
+            sections.insert(
+                3,
+                (
+                    "readiness",
+                    {
+                        key: readiness.get(key)
+                        for key in ("score", "label", "components", "blockers", "caps")
+                    },
+                ),
+            )
+        except Exception:
             sections.insert(3, ("readiness", {}))
 
-        rendered = "\n".join(
-            f"{name}: {json.dumps(_json_safe(value), ensure_ascii=False, sort_keys=True, separators=(',', ':'))}"
-            for name, value in sections
-        )
-        return rendered[:8000]
+        def render_section(section: tuple[str, object]) -> str:
+            name, value = section
+            serialized = json.dumps(
+                _json_safe(value),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            return f"{name}: {serialized}"
 
-    def _business_connection(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path, factory=ClosingConnection)
-        connection.row_factory = sqlite3.Row
-        return connection
+        rendered = "\n".join(render_section(section) for section in sections)
+        return rendered[:8000]
 
     @staticmethod
     def _parsed_timestamp(value) -> datetime:
         value = safe_text(value, 100)
         if not value:
-            return datetime.min.replace(tzinfo=timezone.utc)
+            return datetime.min.replace(tzinfo=UTC)
         try:
             parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
         except (TypeError, ValueError):
-            return datetime.min.replace(tzinfo=timezone.utc)
-
-    @staticmethod
-    def _score_trends(connection: sqlite3.Connection, user_id: int) -> dict[str, list]:
-        trends: dict[str, list] = {}
-        for label, table, column in (
-            ("matches", "job_matches", "match_score"),
-            ("interviews", "interviews", "score"),
-            ("practice", "practice_records", "score"),
-        ):
-            try:
-                rows = connection.execute(
-                    f'SELECT "{column}" FROM "{table}" WHERE user_id = ? '
-                    f'AND "{column}" IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 5',
-                    (user_id,),
-                ).fetchall()
-                trends[label] = [row[0] for row in reversed(rows) if isinstance(row[0], (int, float))]
-            except sqlite3.Error:
-                trends[label] = []
-        return trends
+            return datetime.min.replace(tzinfo=UTC)

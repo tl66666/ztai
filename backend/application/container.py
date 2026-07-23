@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from functools import partial
 
-from backend.adapters.persistence.sqlalchemy import SqlAlchemyUnitOfWork
+from backend.adapters.persistence.sqlalchemy import (
+    SqlAlchemyInterviewRepository,
+    SqlAlchemyUnitOfWork,
+)
 from backend.adapters.storage import LocalBlobStorage
 from backend.adapters.training_audio import LocalTrainingAudioStorage
 from backend.core.runtime import RuntimeDatabase
@@ -76,7 +79,7 @@ class ApplicationContainer:
     def career_service(self) -> CareerService:
         if self._career_service is None:
             self._career_service = CareerService(
-                self.settings.db_path,
+                self.unit_of_work,
                 local_user_id=self.local_user_id,
             )
         return self._career_service
@@ -90,8 +93,10 @@ class ApplicationContainer:
                 voice_analyzer=self.training_logic.analyze_voice,
             )
             self._interview_service = InterviewService(
-                self.settings.db_path,
+                db_path=None,
                 local_user_id=self.local_user_id,
+                session_factory=self.runtime_database.database.session_factory,
+                repository_factory=SqlAlchemyInterviewRepository,
                 stages_builder=flow.build_stages,
                 answer_evaluator=flow.evaluate_answer,
                 profile_selector=lambda profile, resume, job: select_career_profile(
@@ -126,11 +131,13 @@ class ApplicationContainer:
                 AgentService(
                     str(self.settings.db_path),
                     ai_client_provider=self.ai_clients.get_ai_client,
+                    session_factory=self.runtime_database.database.session_factory,
                 ),
                 ActionProposalService(
                     self.settings.db_path,
                     career_service=self.career_service,
                     local_user_id=local_user_id,
+                    session_factory=self.runtime_database.database.session_factory,
                 ),
                 self.unit_of_work,
                 local_user_id=local_user_id,

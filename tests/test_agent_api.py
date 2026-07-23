@@ -4,6 +4,8 @@ import unittest
 from contextlib import closing
 from unittest.mock import Mock, patch
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from tests.agent_api_client import create_agent_test_runtime
 
 
@@ -390,8 +392,8 @@ class AgentAPITests(unittest.TestCase):
 
     def test_profile_and_report_result_endpoints_contain_server_errors(self):
         service = Mock()
-        service.get_profile.side_effect = sqlite3.OperationalError("database unavailable")
-        service.get_report.side_effect = sqlite3.OperationalError("database unavailable")
+        service.get_profile.side_effect = SQLAlchemyError("database unavailable")
+        service.get_report.side_effect = SQLAlchemyError("database unavailable")
 
         with patch.object(self.container, "_career_service", service):
             profile_response = self.client.get("/api/profile/1")

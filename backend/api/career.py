@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
 from backend.api.http import domain_error_response, json_object_body
@@ -36,7 +36,7 @@ def create_career_router(
     async def result_call(method: str, result_id: int):
         try:
             return await call(method, result_id)
-        except sqlite3.Error:
+        except SQLAlchemyError:
             return JSONResponse(
                 {"success": False, "message": "结果暂时无法读取"},
                 status_code=500,

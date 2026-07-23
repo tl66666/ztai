@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
-from typing import Any, Callable
-
-from .database import connect
-from .events import apply_event_to_actions
-
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from typing import Any
 
 StageBuilder = Callable[[dict[str, Any]], list[tuple[str, str]]]
 AnswerEvaluator = Callable[
@@ -58,21 +55,49 @@ class InterviewService:
 
     def __init__(
         self,
-        db_path: str | os.PathLike[str],
+        db_path: str | os.PathLike[str] | None = None,
         local_user_id: int = 1,
         *,
+        session_factory: Callable[[], Any] | None = None,
+        repository_factory: Callable[[Any], Any] | None = None,
         stages_builder: StageBuilder | None = None,
         answer_evaluator: AnswerEvaluator | None = None,
         profile_resolver: ProfileResolver | None = None,
         profile_selector: ProfileSelector | None = None,
         completion_summary: str | None = None,
     ):
-        self.db_path = os.fspath(db_path)
+        self._database = None
+        legacy_sqlite = session_factory is None
+        if session_factory is None:
+            if db_path is None:
+                raise ValueError("db_path or session_factory is required")
+            from backend.core.database import Database, sqlite_database_url
+
+            self._database = Database(sqlite_database_url(db_path))
+            session_factory = self._database.session_factory
+        if repository_factory is None:
+            if legacy_sqlite:
+                from backend.adapters.persistence.legacy_interview_repository import (
+                    LegacySqliteInterviewRepository,
+                )
+
+                repository_factory = LegacySqliteInterviewRepository
+            else:
+                from backend.adapters.persistence.sqlalchemy.interview_repository import (
+                    SqlAlchemyInterviewRepository,
+                )
+
+                repository_factory = SqlAlchemyInterviewRepository
+        self.db_path = os.fspath(db_path) if db_path is not None else None
+        self.session_factory = session_factory
+        self.repository_factory = repository_factory
         self.local_user_id = int(local_user_id)
         self.stages_builder = stages_builder or _default_stages
         self.answer_evaluator = answer_evaluator or _default_evaluator
         self.profile_resolver = profile_resolver or _default_profile
-        self.profile_selector = profile_selector or (lambda profile, _resume, _job: profile or "tech")
+        self.profile_selector = profile_selector or (
+            lambda profile, _resume, _job: profile or "tech"
+        )
         self.completion_summary = completion_summary or (
             "整体流程完成。建议把自我介绍压缩到 120 秒内，并准备 2 个项目深挖版本、"
             "1 个问题定位案例和 1 个团队协作案例。"
@@ -98,24 +123,30 @@ class InterviewService:
         mode = self._text(mode, "mode", 100) or "standard"
         requested_profile = self._text(career_profile, "career_profile", 100)
 
-        with connect(self.db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with self._repository(write=True) as repository:
             resume_content = ""
             if resume_id is not None:
-                resume = self._owned_resource(conn, "resumes", resume_id, "resume")
-                if "status" in resume.keys() and resume["status"] == "archived":
+                resume = self._owned_resource(
+                    repository.get_resume(resume_id),
+                    "resume",
+                )
+                if resume.get("status") == "archived":
                     raise LookupError("resume not found")
                 resume_content = resume["content"] or ""
             if application_id is not None:
                 opportunity = self._owned_resource(
-                    conn, "job_applications", application_id, "opportunity"
+                    repository.get_opportunity(application_id),
+                    "opportunity",
                 )
-                if "deleted_at" in opportunity.keys() and opportunity["deleted_at"]:
+                if opportunity.get("deleted_at"):
                     raise LookupError("opportunity not found")
             if action_id is not None:
                 if application_id is None:
                     raise ValueError("interview action requires an opportunity")
-                action = self._owned_resource(conn, "action_items", action_id, "action item")
+                action = self._owned_resource(
+                    repository.get_action(action_id),
+                    "action item",
+                )
                 if action["status"] not in {"pending", "in_progress"}:
                     raise ValueError("interview action item is not active")
                 if action["action_type"] not in {"interview", "interview_plan", "mock_interview"}:
@@ -144,52 +175,43 @@ class InterviewService:
                 "profile": profile,
                 "resume_content": resume_content,
                 "stage_index": 0,
-                "conversation": [
-                    {"role": "interviewer", "stage": "opening", "content": question}
-                ],
+                "conversation": [{"role": "interviewer", "stage": "opening", "content": question}],
                 "current_question": question,
                 "last_feedback": None,
                 "processed_submissions": {},
                 "action_id": action_id,
             }
-            cursor = conn.execute(
-                """
-                INSERT INTO interview_sessions (
-                    user_id, application_id, resume_id, job_title, mode, status,
-                    current_stage, conversation_json
-                ) VALUES (?, ?, ?, ?, ?, 'active', 'opening', ?)
-                """,
-                (
-                    self.local_user_id,
-                    application_id,
-                    resume_id,
-                    job_title,
-                    mode,
-                    self._dump(state),
-                ),
+            session_id = repository.create_session(
+                {
+                    "user_id": self.local_user_id,
+                    "application_id": application_id,
+                    "resume_id": resume_id,
+                    "job_title": job_title,
+                    "mode": mode,
+                    "status": "active",
+                    "current_stage": "opening",
+                    "conversation_json": self._dump(state),
+                }
             )
-            session_id = cursor.lastrowid
             self._write_event(
-                conn,
+                repository,
                 session_id,
                 "interview.started",
                 {
-                    "resume_id": resume_id, "application_id": application_id,
-                    "mode": mode, "action_id": action_id,
+                    "resume_id": resume_id,
+                    "application_id": application_id,
+                    "mode": mode,
+                    "action_id": action_id,
                 },
             )
-            row = conn.execute(
-                "SELECT * FROM interview_sessions WHERE id = ?", (session_id,)
-            ).fetchone()
+            row = repository.get_session(session_id)
         return self._response(row, state)
 
     def get(self, user_id: int, session_id: int) -> dict[str, Any] | None:
         self._require_local_user(user_id)
         session_id = self._required_id(session_id, "session_id")
-        with connect(self.db_path) as conn:
-            row = conn.execute(
-                "SELECT * FROM interview_sessions WHERE id = ?", (session_id,)
-            ).fetchone()
+        with self._repository() as repository:
+            row = repository.get_session(session_id)
         if not row:
             return None
         self._require_row_owner(row)
@@ -220,19 +242,12 @@ class InterviewService:
         has_submission_id = submission_id is not None
         has_expected_stage = expected_stage_index is not None
         if has_submission_id != has_expected_stage:
-            raise ValueError(
-                "submission_id and expected_stage_index must be provided together"
-            )
-        submission_id = self._text(
-            submission_id, "submission_id", 128, required=has_submission_id
-        )
+            raise ValueError("submission_id and expected_stage_index must be provided together")
+        submission_id = self._text(submission_id, "submission_id", 128, required=has_submission_id)
         expected_stage_index = self._expected_stage_index(expected_stage_index)
 
-        with connect(self.db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT * FROM interview_sessions WHERE id = ?", (session_id,)
-            ).fetchone()
+        with self._repository(write=True) as repository:
+            row = repository.get_session(session_id, for_update=True)
             if not row:
                 raise LookupError("interview session not found")
             self._require_row_owner(row)
@@ -243,10 +258,7 @@ class InterviewService:
                 response["idempotent"] = True
                 return response
             current_stage_index = state["stage_index"]
-            if (
-                expected_stage_index is not None
-                and expected_stage_index != current_stage_index
-            ):
+            if expected_stage_index is not None and expected_stage_index != current_stage_index:
                 raise InterviewConflictError(
                     "interview session stage changed; refresh before retrying"
                 )
@@ -289,27 +301,18 @@ class InterviewService:
                     {"role": "interviewer", "stage": stage, "content": question}
                 )
 
-            conn.execute(
-                """
-                UPDATE interview_sessions
-                SET status = ?, current_stage = ?, conversation_json = ?, score = ?,
-                    feedback = ?, completed_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE completed_at END,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND user_id = ?
-                """,
-                (
-                    "completed" if completed else "active",
-                    stage,
-                    self._dump(state),
-                    score,
-                    self._dump(feedback),
-                    completed,
-                    session_id,
-                    self.local_user_id,
-                ),
+            repository.update_session(
+                session_id,
+                self.local_user_id,
+                status="completed" if completed else "active",
+                current_stage=stage,
+                conversation_json=self._dump(state),
+                score=score,
+                feedback=self._dump(feedback),
+                completed=completed,
             )
             self._write_event(
-                conn,
+                repository,
                 session_id,
                 "interview.answered",
                 {
@@ -321,59 +324,40 @@ class InterviewService:
                 },
             )
             if completed:
-                conn.execute(
-                    """
-                    INSERT INTO interviews (
-                        user_id, resume_id, job_title, conversation, score, feedback,
-                        source_session_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        self.local_user_id,
-                        row["resume_id"],
-                        row["job_title"],
-                        self._dump(state["conversation"]),
-                        score,
-                        self._dump(feedback),
-                        str(session_id),
-                    ),
+                repository.add_completed_interview(
+                    user_id=self.local_user_id,
+                    resume_id=row["resume_id"],
+                    job_title=row["job_title"],
+                    conversation=self._dump(state["conversation"]),
+                    score=score,
+                    feedback=self._dump(feedback),
+                    source_session_id=session_id,
                 )
                 self._write_event(
-                    conn,
+                    repository,
                     session_id,
                     "interview.completed",
                     {
-                        "score": score, "answer_count": len(candidates),
+                        "score": score,
+                        "answer_count": len(candidates),
                         "action_id": state.get("action_id"),
                     },
                 )
-            row = conn.execute(
-                "SELECT * FROM interview_sessions WHERE id = ?", (session_id,)
-            ).fetchone()
+            row = repository.get_session(session_id)
             response = self._response(row, state)
             if submission_id:
                 processed_submissions[submission_id] = response
-                conn.execute(
-                    """
-                    UPDATE interview_sessions
-                    SET conversation_json = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ? AND user_id = ?
-                    """,
-                    (self._dump(state), session_id, self.local_user_id),
+                repository.update_state(
+                    session_id,
+                    self.local_user_id,
+                    self._dump(state),
                 )
         return response
 
     def list_open(self, user_id: int) -> list[dict[str, Any]]:
         self._require_local_user(user_id)
-        with connect(self.db_path) as conn:
-            rows = conn.execute(
-                """
-                SELECT * FROM interview_sessions
-                WHERE user_id = ? AND status != 'completed'
-                ORDER BY updated_at DESC, id DESC
-                """,
-                (self.local_user_id,),
-            ).fetchall()
+        with self._repository() as repository:
+            rows = repository.list_open(self.local_user_id)
         sessions = []
         for row in rows:
             try:
@@ -387,16 +371,32 @@ class InterviewService:
         self._require_local_user(user_id)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
             raise ValueError("limit must be an integer between 1 and 20")
-        with connect(self.db_path) as conn:
-            interviews = self._recent_training_rows(conn, "interviews", limit)
-            practices = self._recent_training_rows(conn, "practice_records", limit)
-            audios = self._recent_training_rows(conn, "audio_records", limit)
+        with self._repository() as repository:
+            interviews = repository.recent_training_rows(
+                "interview",
+                self.local_user_id,
+                limit,
+            )
+            practices = repository.recent_training_rows(
+                "practice",
+                self.local_user_id,
+                limit,
+            )
+            audios = repository.recent_training_rows(
+                "audio",
+                self.local_user_id,
+                limit,
+            )
 
         interview_scores = [
-            score for row in interviews if (score := self._quality_score(row, "interview")) is not None
+            score
+            for row in interviews
+            if (score := self._quality_score(row, "interview")) is not None
         ]
         practice_scores = [
-            score for row in practices if (score := self._quality_score(row, "practice")) is not None
+            score
+            for row in practices
+            if (score := self._quality_score(row, "practice")) is not None
         ]
         audio_scores = [
             score for row in audios if (score := self._quality_score(row, "audio")) is not None
@@ -406,24 +406,6 @@ class InterviewService:
             "practice": self._quality_summary(practices, practice_scores, "average_score"),
             "audio": self._quality_summary(audios, audio_scores, "average_quality_score"),
         }
-
-    def _recent_training_rows(
-        self, conn: sqlite3.Connection, table: str, limit: int
-    ) -> list[dict[str, Any]]:
-        exists = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
-        ).fetchone()
-        if not exists:
-            return []
-        columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
-        if "user_id" not in columns:
-            return []
-        ordering = "created_at DESC, id DESC" if "created_at" in columns else "id DESC"
-        rows = conn.execute(
-            f'SELECT * FROM "{table}" WHERE user_id = ? ORDER BY {ordering} LIMIT ?',
-            (self.local_user_id, limit),
-        ).fetchall()
-        return [dict(row) for row in rows]
 
     @classmethod
     def _quality_score(cls, row: dict[str, Any], kind: str) -> float | None:
@@ -469,7 +451,7 @@ class InterviewService:
         result["latest_completed_at"] = timestamps[0] if timestamps else None
         return result
 
-    def _response(self, row: sqlite3.Row, state: dict[str, Any]) -> dict[str, Any]:
+    def _response(self, row: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         conversation = state.get("conversation")
         if not isinstance(conversation, list):
             raise ValueError("invalid interview session state")
@@ -498,14 +480,18 @@ class InterviewService:
         return result
 
     @staticmethod
-    def _recovery_response(row: sqlite3.Row) -> dict[str, str]:
+    def _recovery_response(row: dict[str, Any]) -> dict[str, str]:
         return {
             "session_id": str(row["id"]),
             "status": "recovery_error",
             "recovery_error": "invalid interview session state",
         }
 
-    def _session_context(self, row: sqlite3.Row, state: dict[str, Any]) -> dict[str, Any]:
+    def _session_context(
+        self,
+        row: dict[str, Any],
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
         return {
             "session_id": row["id"],
             "user_id": row["user_id"],
@@ -517,16 +503,17 @@ class InterviewService:
         }
 
     def _owned_resource(
-        self, conn: sqlite3.Connection, table: str, row_id: int, label: str
-    ) -> sqlite3.Row:
-        row = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (row_id,)).fetchone()
+        self,
+        row: dict[str, Any] | None,
+        label: str,
+    ) -> dict[str, Any]:
         if not row:
             raise LookupError(f"{label} not found")
         if row["user_id"] != self.local_user_id:
             raise PermissionError(f"{label} belongs to another user")
         return row
 
-    def _load_state(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _load_state(self, row: dict[str, Any]) -> dict[str, Any]:
         try:
             state = json.loads(row["conversation_json"] or "{}")
         except (TypeError, json.JSONDecodeError) as exc:
@@ -541,8 +528,7 @@ class InterviewService:
             raise ValueError("invalid interview session state")
         processed = state.setdefault("processed_submissions", {})
         if not isinstance(processed, dict) or not all(
-            isinstance(key, str) and isinstance(value, dict)
-            for key, value in processed.items()
+            isinstance(key, str) and isinstance(value, dict) for key, value in processed.items()
         ):
             raise ValueError("invalid interview session state")
         try:
@@ -555,15 +541,14 @@ class InterviewService:
         if (row["status"] == "completed") != (stage_index == 5):
             raise ValueError("invalid interview session state")
         if not all(
-            self._valid_cached_response(row, response, stages)
-            for response in processed.values()
+            self._valid_cached_response(row, response, stages) for response in processed.values()
         ):
             raise ValueError("invalid interview session state")
         return state
 
     @staticmethod
     def _valid_cached_response(
-        row: sqlite3.Row,
+        row: dict[str, Any],
         response: dict[str, Any],
         stages: list[tuple[str, str]],
     ) -> bool:
@@ -588,38 +573,57 @@ class InterviewService:
         if user_id != self.local_user_id:
             raise PermissionError("operation is restricted to the local user")
 
-    def _require_row_owner(self, row: sqlite3.Row) -> None:
+    def _require_row_owner(self, row: dict[str, Any]) -> None:
         if row["user_id"] != self.local_user_id:
             raise PermissionError("interview session belongs to another user")
 
     def _write_event(
         self,
-        conn: sqlite3.Connection,
+        repository_or_connection: Any,
         session_id: int,
         event_type: str,
         payload: dict[str, Any],
     ) -> None:
-        conn.execute(
-            """
-            INSERT INTO domain_events (
-                user_id, aggregate_type, aggregate_id, event_type, payload_json
-            ) VALUES (?, 'interview_session', ?, ?, ?)
-            """,
-            (
+        method = getattr(repository_or_connection, "record_event", None)
+        if callable(method):
+            method(
                 self.local_user_id,
-                str(session_id),
+                "interview_session",
+                session_id,
                 event_type,
-                self._dump(payload),
-            ),
+                payload,
+            )
+            return
+
+        from backend.adapters.persistence.legacy_event_repository import (
+            LegacySqliteEventRepository,
         )
-        apply_event_to_actions(
-            conn,
+
+        LegacySqliteEventRepository(repository_or_connection).record_and_apply(
             self.local_user_id,
-            event_type,
             "interview_session",
             session_id,
+            event_type,
             payload,
         )
+
+    @contextmanager
+    def _repository(self, *, write: bool = False) -> Iterator[Any]:
+        session = self.session_factory()
+        repository = self.repository_factory(session)
+        try:
+            begin_write = getattr(repository, "begin_write", None)
+            if write and callable(begin_write):
+                begin_write()
+            yield repository
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+            if self._database is not None:
+                self._database.dispose()
 
     @staticmethod
     def _dump(value: Any) -> str:

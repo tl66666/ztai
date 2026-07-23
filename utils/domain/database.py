@@ -334,6 +334,8 @@ def _migrate_to_version_5(conn: sqlite3.Connection) -> None:
             ("application_id", "INTEGER REFERENCES job_applications(id)"),
             ("status", "TEXT DEFAULT 'active'"),
             ("source_type", "TEXT DEFAULT 'manual'"),
+            ("created_at", "TEXT"),
+            ("updated_at", "TEXT"),
         ),
         "job_matches": (
             ("match_score", "INTEGER"),
@@ -348,6 +350,8 @@ def _migrate_to_version_5(conn: sqlite3.Connection) -> None:
             ("salary_max", "INTEGER"),
             ("notes", "TEXT"),
             ("applied_at", "TEXT"),
+            ("created_at", "TEXT"),
+            ("updated_at", "TEXT"),
             ("deleted_at", "TEXT"),
             ("jd_text", "TEXT"),
             ("source_url", "TEXT"),
@@ -393,6 +397,8 @@ def _migrate_to_version_5(conn: sqlite3.Connection) -> None:
         for column, column_type in columns:
             ensure_column(conn, table, column, column_type)
     _create_domain_tables(conn)
+    ensure_column(conn, "action_items", "action_type", "TEXT")
+    ensure_column(conn, "action_items", "completion_evidence", "TEXT")
     _create_domain_indexes(conn)
 
 

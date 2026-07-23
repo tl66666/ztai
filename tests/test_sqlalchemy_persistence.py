@@ -6,12 +6,15 @@ import unittest
 from pathlib import Path
 
 from sqlalchemy import insert
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.schema import CreateIndex, CreateTable
 
 from backend.adapters.persistence.sqlalchemy import (
     SqlAlchemyUnitOfWork,
     audio_records,
     interviews,
     job_applications,
+    metadata,
     practice_records,
 )
 from backend.core.database import Database, sqlite_database_url
@@ -130,6 +133,14 @@ class SqlAlchemyPersistenceTests(unittest.TestCase):
                     opportunity_id=foreign_opportunity_id,
                 )
             )
+
+    def test_schema_compiles_for_postgresql(self) -> None:
+        dialect = postgresql.dialect()
+
+        for table in metadata.sorted_tables:
+            self.assertTrue(str(CreateTable(table).compile(dialect=dialect)))
+            for index in table.indexes:
+                self.assertTrue(str(CreateIndex(index).compile(dialect=dialect)))
 
     def test_training_repository_preserves_history_contract(self) -> None:
         with self.database.session() as session:
