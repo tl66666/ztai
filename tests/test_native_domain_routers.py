@@ -180,6 +180,23 @@ class NativeDomainRouterTests(unittest.TestCase):
         ):
             self.assertIn(path, openapi["paths"])
 
+    def test_job_match_does_not_reveal_a_foreign_resume(self):
+        with sqlite3.connect(self.settings.db_path) as connection:
+            foreign_resume_id = connection.execute(
+                """
+                INSERT INTO resumes (user_id, title, content)
+                VALUES (2, 'Private', 'secret')
+                """
+            ).lastrowid
+
+        response = self.client.post(
+            "/api/job-match",
+            json={"resume_id": foreign_resume_id, "jd": "Python FastAPI"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["message"], "resume not found")
+
     def test_career_compatibility_routes_are_native_and_owner_scoped(self):
         profile = self.client.put(
             "/api/profile",

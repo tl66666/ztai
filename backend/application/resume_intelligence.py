@@ -144,11 +144,9 @@ class ResumeIntelligenceModule:
         application_id = self._positive_integer(
             body.get("application_id"), "application_id", required=False
         )
-        row = self._resume_any_owner(resume_id)
+        row = self._resume(resume_id)
         if row is None:
             return {"success": False, "message": "resume not found"}, 404
-        if int(row["user_id"]) != self._local_user_id:
-            raise PermissionError("当前本地版本仅允许访问当前用户数据")
         if application_id is not None:
             with connect(self._db_path) as connection:
                 application = connection.execute(
@@ -340,10 +338,6 @@ class ResumeIntelligenceModule:
                 "SELECT * FROM resumes WHERE id = ? AND user_id = ?",
                 (resume_id, self._local_user_id),
             ).fetchone()
-
-    def _resume_any_owner(self, resume_id: int):
-        with connect(self._db_path) as connection:
-            return connection.execute("SELECT * FROM resumes WHERE id = ?", (resume_id,)).fetchone()
 
     @staticmethod
     def _positive_integer(value: Any, name: str, *, required: bool) -> int | None:
