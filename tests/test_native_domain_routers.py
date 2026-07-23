@@ -226,6 +226,33 @@ class NativeDomainRouterTests(unittest.TestCase):
         ):
             self.assertIn(path, openapi["paths"])
 
+    def test_career_insights_routes_are_native_and_keep_read_models(self):
+        application = self.client.post(
+            "/api/applications",
+            json={"company": "Acme", "job_title": "Platform Engineer"},
+        )
+        application_id = application.json()["application_id"]
+
+        dashboard = self.client.get("/api/dashboard/1")
+        report = self.client.post("/api/career/report/1")
+        coach = self.client.post(f"/api/applications/{application_id}/coach")
+        denied = self.client.get("/api/dashboard/2")
+        openapi = self.client.get("/api/v1/openapi.json").json()
+
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertIn("career_pulse", dashboard.json())
+        self.assertEqual(report.status_code, 200)
+        self.assertIn("求职作战报告", report.json()["report"])
+        self.assertEqual(coach.status_code, 200)
+        self.assertEqual(coach.json()["company"], "Acme")
+        self.assertEqual(denied.status_code, 403)
+        for path in (
+            "/api/dashboard/{user_id}",
+            "/api/career/report/{user_id}",
+            "/api/applications/{application_id}/coach",
+        ):
+            self.assertIn(path, openapi["paths"])
+
     def test_resume_upload_uses_generated_object_key_and_preserves_original(self):
         uploaded = self.client.post(
             "/api/resumes/upload",
