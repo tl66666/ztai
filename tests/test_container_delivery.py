@@ -30,6 +30,7 @@ class ContainerDeliveryTests(unittest.TestCase):
         self.assertIn("JOBHUNTER_AUTH_MODE=cloudflare_access", environment)
         self.assertIn("JOBHUNTER_ALLOWED_ORIGINS=https://", environment)
         self.assertIn("JOBHUNTER_ALLOWED_HOSTS=", environment)
+        self.assertIn("localhost,127.0.0.1", environment)
         self.assertNotIn("JOBHUNTER_ALLOWED_ORIGINS=*", environment)
 
 
