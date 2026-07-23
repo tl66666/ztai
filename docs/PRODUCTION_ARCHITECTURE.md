@@ -81,7 +81,9 @@ backend/
 
 ## 5. 身份与安全
 
-当前 `USER_ID = 1` 仅允许本地兼容运行。生产必须先完成 Principal seam：
+当前已建立最外层 Principal seam：本地模式生成固定开发身份；Ubuntu
+可验证 Cloudflare Access JWT，并通过受众与邮箱 allowlist 映射到当前兼容用户。
+这使单用户在线部署具备可信入口，但 PostgreSQL 多租户 owner 映射仍未完成：
 
 - 浏览器获得短期 session/token；服务端从可信凭据生成 `Principal`。
 - 业务代码只接受可信 principal，不接受浏览器提交的 `user_id`。
@@ -91,7 +93,8 @@ backend/
 - 上传校验 MIME、扩展名、大小、文件名和对象 owner；下载使用短时签名 URL 或授权流。
 - 反向代理设置请求体上限、超时、速率限制和安全响应头。
 
-认证 middleware 必须位于最外层 ASGI seam，确保原生 FastAPI router 与临时 WSGI adapter 都受保护。
+认证 middleware 位于最外层 ASGI seam，原生 FastAPI router 与临时 WSGI
+adapter 均受保护；只有 `/api/v1/healthz` 和 CORS preflight 免认证。
 
 ## 6. 数据、文件与后台任务
 
@@ -148,10 +151,19 @@ uv run python -m backend.cli
 JOBHUNTER_ENV=production \
 JOBHUNTER_HOST=127.0.0.1 \
 JOBHUNTER_PORT=8000 \
+JOBHUNTER_AUTH_MODE=cloudflare_access \
+JOBHUNTER_CF_ACCESS_TEAM_DOMAIN=team.cloudflareaccess.com \
+JOBHUNTER_CF_ACCESS_AUDIENCE=replace-with-access-aud \
+JOBHUNTER_ALLOWED_IDENTITY_EMAILS=owner@example.com \
+JOBHUNTER_ALLOWED_HOSTS=api.example.com \
+JOBHUNTER_ALLOWED_ORIGINS=https://career.example.com \
 uv run python -m backend.cli
 ```
 
-兼容期必须保持 `JOBHUNTER_WORKERS=1`。生产域名通过 `JOBHUNTER_ALLOWED_HOSTS`，Cloudflare 来源通过 `JOBHUNTER_ALLOWED_ORIGINS` 精确配置。生产默认关闭 OpenAPI UI。
+兼容期必须保持 `JOBHUNTER_WORKERS=1`。Cloudflare Access 模式强制要求
+`JOBHUNTER_ALLOWED_HOSTS` 与 `JOBHUNTER_ALLOWED_ORIGINS` 为显式非通配符；
+生产默认关闭 OpenAPI UI。反向代理必须保留
+`Cf-Access-Jwt-Assertion` 请求头。
 
 ## 9. 可观测性与发布门禁
 

@@ -45,6 +45,10 @@ class Settings:
     workers: int = 1
     max_upload_bytes: int = 20 * 1024 * 1024
     ai_config_path: Path | None = None
+    auth_mode: str = "local"
+    cloudflare_access_team_domain: str = ""
+    cloudflare_access_audience: str = ""
+    allowed_identity_emails: tuple[str, ...] = ()
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -53,10 +57,36 @@ class Settings:
             os.environ.get("JOBHUNTER_PROJECT_ROOT", default_root)
         ).expanduser().resolve()
         host = os.environ.get("JOBHUNTER_HOST", "127.0.0.1").strip()
-        if host not in {"127.0.0.1", "localhost", "::1"}:
+        auth_mode = os.environ.get("JOBHUNTER_AUTH_MODE", "local").strip()
+        if auth_mode not in {"local", "cloudflare_access"}:
             raise ValueError(
-                "JOBHUNTER_HOST must remain a loopback address until production authentication "
-                "and tenant isolation are enabled"
+                "JOBHUNTER_AUTH_MODE must be local or cloudflare_access"
+            )
+        team_domain = os.environ.get(
+            "JOBHUNTER_CF_ACCESS_TEAM_DOMAIN", ""
+        ).strip()
+        audience = os.environ.get(
+            "JOBHUNTER_CF_ACCESS_AUDIENCE", ""
+        ).strip()
+        allowed_identity_emails = _csv(
+            "JOBHUNTER_ALLOWED_IDENTITY_EMAILS"
+        )
+        if auth_mode == "cloudflare_access" and (
+            not team_domain
+            or not audience
+            or not allowed_identity_emails
+        ):
+            raise ValueError(
+                "Cloudflare Access authentication requires team domain, "
+                "audience, and at least one allowed identity email"
+            )
+        if (
+            host not in {"127.0.0.1", "localhost", "::1"}
+            and auth_mode != "cloudflare_access"
+        ):
+            raise ValueError(
+                "JOBHUNTER_HOST may be public only when Cloudflare Access "
+                "authentication is configured"
             )
         port = int(os.environ.get("JOBHUNTER_PORT", "5000"))
         workers = int(os.environ.get("JOBHUNTER_WORKERS", "1"))
@@ -68,6 +98,24 @@ class Settings:
             f"http://localhost:{port}",
             f"http://127.0.0.1:{port}",
         )
+        allowed_origins = _csv("JOBHUNTER_ALLOWED_ORIGINS", local_origins)
+        allowed_hosts = _csv(
+            "JOBHUNTER_ALLOWED_HOSTS",
+            ("localhost", "127.0.0.1", "testserver"),
+        )
+        if auth_mode == "cloudflare_access":
+            if (
+                "JOBHUNTER_ALLOWED_ORIGINS" not in os.environ
+                or "JOBHUNTER_ALLOWED_HOSTS" not in os.environ
+                or not allowed_origins
+                or not allowed_hosts
+                or "*" in allowed_origins
+                or "*" in allowed_hosts
+            ):
+                raise ValueError(
+                    "Cloudflare Access mode requires explicit non-wildcard "
+                    "allowed origins and hosts"
+                )
         return cls(
             environment=os.environ.get("JOBHUNTER_ENV", "development"),
             db_path=_path(
@@ -82,11 +130,8 @@ class Settings:
                 project_root,
                 os.environ.get("JOBHUNTER_EXPORT_FOLDER", "exports"),
             ),
-            allowed_origins=_csv("JOBHUNTER_ALLOWED_ORIGINS", local_origins),
-            allowed_hosts=_csv(
-                "JOBHUNTER_ALLOWED_HOSTS",
-                ("localhost", "127.0.0.1", "testserver"),
-            ),
+            allowed_origins=allowed_origins,
+            allowed_hosts=allowed_hosts,
             api_docs_enabled=_boolean(
                 "JOBHUNTER_API_DOCS",
                 os.environ.get("JOBHUNTER_ENV", "development") != "production",
@@ -104,4 +149,8 @@ class Settings:
                     "output/runtime/ai-config.json",
                 ),
             ),
+            auth_mode=auth_mode,
+            cloudflare_access_team_domain=team_domain,
+            cloudflare_access_audience=audience,
+            allowed_identity_emails=allowed_identity_emails,
         )

@@ -129,8 +129,28 @@ class FastAPIRuntimeTests(unittest.TestCase):
             {"JOBHUNTER_HOST": "0.0.0.0"},
             clear=True,
         ):
-            with self.assertRaisesRegex(ValueError, "loopback"):
+            with self.assertRaisesRegex(ValueError, "Cloudflare Access"):
                 Settings.from_environment()
+
+    def test_public_runtime_requires_complete_cloudflare_access_boundary(self):
+        environment = {
+            "JOBHUNTER_HOST": "0.0.0.0",
+            "JOBHUNTER_AUTH_MODE": "cloudflare_access",
+            "JOBHUNTER_CF_ACCESS_TEAM_DOMAIN": "team.cloudflareaccess.com",
+            "JOBHUNTER_CF_ACCESS_AUDIENCE": "audience-id",
+            "JOBHUNTER_ALLOWED_IDENTITY_EMAILS": "owner@example.com",
+            "JOBHUNTER_ALLOWED_ORIGINS": "https://career.example.com",
+            "JOBHUNTER_ALLOWED_HOSTS": "api.example.com",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            settings = Settings.from_environment()
+
+        self.assertEqual(settings.host, "0.0.0.0")
+        self.assertEqual(settings.auth_mode, "cloudflare_access")
+        self.assertEqual(
+            settings.allowed_identity_emails,
+            ("owner@example.com",),
+        )
 
     def test_application_factories_keep_legacy_runtime_state_isolated(self):
         with (
