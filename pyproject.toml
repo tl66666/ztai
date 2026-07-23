@@ -10,6 +10,7 @@ dependencies = [
     "flask-cors>=4,<7",
     "pdf2docx>=0.5.6,<1",
     "pypdf2>=3,<4",
+    "python-multipart>=0.0.20,<1",
     "python-docx>=0.8.11,<2",
     "reportlab>=3.6,<5",
     "requests>=2.28,<3",

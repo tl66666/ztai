@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
-from html import escape
 import json
 import os
 import re
@@ -10,16 +8,18 @@ import sqlite3
 import subprocess
 import tempfile
 import uuid
+from html import escape
 from urllib.parse import urlsplit
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from werkzeug.security import safe_join
 
-from backend.application import InterviewModule, OpportunityModule
-from utils.ai_client import extract_keywords, get_ai_client, set_api_key
+from backend.adapters.storage import LocalBlobStorage
+from backend.application import InterviewModule, OpportunityModule, ResumeModule
 from utils.agent_runtime.memory import create_agent_tables, is_browser_event_artifact
 from utils.agent_runtime.resume_draft import model_resume_draft
+from utils.ai_client import extract_keywords, get_ai_client, set_api_key
 from utils.domain import (
     APPLICATION_STATUSES,
     CareerService,
@@ -30,12 +30,10 @@ from utils.domain.database import ensure_column, ensure_local_user, migrate_data
 from utils.domain.interview_flow import InterviewFlow
 from utils.domain.opportunity_coaching import build_followup_plan
 
-
 BASE_DIR = os.path.dirname(__file__)
 DB_PATH = os.environ.get("JOBHUNTER_DB_PATH", os.path.join(BASE_DIR, "jobhunter.db"))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 EXPORT_FOLDER = os.path.join(BASE_DIR, "exports")
-ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "txt", "png", "jpg", "jpeg"}
 
 app = Flask(__name__, static_folder="static")
 LOCAL_PORT = int(os.environ.get("JOBHUNTER_PORT", "5000"))
@@ -288,6 +286,14 @@ def get_opportunity_module() -> OpportunityModule:
     )
 
 
+def get_resume_module() -> ResumeModule:
+    return ResumeModule(
+        DB_PATH,
+        LocalBlobStorage(UPLOAD_FOLDER, max_bytes=app.config["MAX_CONTENT_LENGTH"]),
+        local_user_id=AGENT_USER_ID,
+    )
+
+
 def career_error_response(exc: Exception):
     if isinstance(exc, InterviewConflictError):
         return jsonify({
@@ -311,38 +317,6 @@ def json_object_body():
     if not isinstance(data, dict):
         raise ValueError("JSON body must be an object")
     return data
-
-
-def allowed_file(filename: str) -> bool:
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-def parse_resume_file(file_path: str, file_type: str) -> str:
-    try:
-        if file_type == "txt":
-            for encoding in ("utf-8", "gbk"):
-                try:
-                    with open(file_path, "r", encoding=encoding) as file:
-                        return file.read()
-                except UnicodeDecodeError:
-                    continue
-        if file_type == "pdf":
-            import PyPDF2
-
-            text = []
-            with open(file_path, "rb") as file:
-                reader = PyPDF2.PdfReader(file)
-                for page in reader.pages:
-                    text.append(page.extract_text() or "")
-            return "\n".join(text).strip()
-        if file_type in {"doc", "docx"}:
-            from docx import Document
-
-            doc = Document(file_path)
-            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        return "图片简历已上传。建议手动补充文本内容，便于 AI 分析。"
-    except Exception as exc:
-        return f"文件已上传，但解析失败：{exc}"
 
 
 def get_resume_or_404(resume_id: int):
@@ -415,7 +389,7 @@ def build_resume_pdf(resume: sqlite3.Row, output_path: str) -> None:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
     font_name = register_chinese_pdf_font()
     doc = SimpleDocTemplate(
@@ -899,39 +873,24 @@ def ai_status():
 
 @app.route("/api/resumes", methods=["POST"])
 def create_resume():
-    if request.files:
-        file = request.files.get("file")
-        requested_user_id = request.form.get("user_id")
-        if requested_user_id is not None and require_agent_user(requested_user_id) is None:
-            return agent_access_denied()
-        user_id = AGENT_USER_ID
-        title = (request.form.get("title") or (file.filename if file else "未命名简历")).strip()
-        if not file or not file.filename or not allowed_file(file.filename):
-            return jsonify({"success": False, "message": "请上传 PDF、Word、TXT 或图片格式简历。"}), 400
-        file_type = file.filename.rsplit(".", 1)[1].lower()
-        filename = f"resume_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
-        file_path = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(file_path)
-        content = parse_resume_file(file_path, file_type)
-    else:
-        data = request.get_json() or {}
-        if "user_id" in data and require_agent_user(data.get("user_id")) is None:
-            return agent_access_denied()
-        user_id = AGENT_USER_ID
-        title = (data.get("title") or "").strip()
-        content = (data.get("content") or "").strip()
-        file_path = None
-        file_type = None
-        if not title or not content:
-            return jsonify({"success": False, "message": "标题和内容不能为空。"}), 400
-
-    with get_db() as conn:
-        cursor = conn.execute(
-            "INSERT INTO resumes (user_id, title, content, file_path, file_type) VALUES (?, ?, ?, ?, ?)",
-            (user_id, title, content, file_path, file_type),
-        )
-        resume_id = cursor.lastrowid
-    return jsonify({"success": True, "message": "简历已保存", "resume_id": resume_id, "parsed_content": content[:1000]}), 201
+    try:
+        if request.files:
+            file = request.files.get("file")
+            if not file:
+                raise ValueError("请上传 PDF、Word、TXT 或图片格式简历。")
+            result, status_code = get_resume_module().create_upload(
+                file.stream,
+                filename=file.filename or "",
+                title=request.form.get("title"),
+                requested_user_id=request.form.get("user_id"),
+            )
+        else:
+            result, status_code = get_resume_module().create_text(
+                request.get_json() or {}
+            )
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify(result), status_code
 
 
 @app.route("/api/resumes/upload", methods=["POST"])
@@ -941,80 +900,59 @@ def upload_resume():
 
 @app.route("/api/resumes/<int:user_id>")
 def list_resumes(user_id):
-    if require_agent_user(user_id) is None:
-        return agent_access_denied()
-    with get_db() as conn:
-        rows = conn.execute("SELECT * FROM resumes WHERE user_id = ? ORDER BY updated_at DESC", (user_id,)).fetchall()
-    return jsonify({"success": True, "data": [dict(row) for row in rows]})
+    try:
+        result = get_resume_module().list(user_id)
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify(result)
 
 
 @app.route("/api/resumes/detail/<int:resume_id>")
 def resume_detail(resume_id):
-    row = get_resume_or_404(resume_id)
-    if not row:
-        return jsonify({"success": False, "message": "简历不存在"}), 404
-    return jsonify({"success": True, "data": dict(row)})
+    result, status_code = get_resume_module().detail(resume_id)
+    return jsonify(result), status_code
 
 
 @app.route("/api/resumes/<int:resume_id>/original")
 def resume_original(resume_id):
-    row = get_resume_or_404(resume_id)
-    if not row:
-        return jsonify({"success": False, "message": "简历不存在"}), 404
-    original_path = row["file_path"]
-    if not original_path or not os.path.exists(original_path):
-        return jsonify({"success": False, "message": "这份简历没有保存原始文件，只能编辑文本内容。"}), 404
-    return send_file(original_path, as_attachment=False, download_name=os.path.basename(original_path))
+    try:
+        original_path, filename = get_resume_module().original(resume_id)
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return send_file(original_path, as_attachment=False, download_name=filename)
 
 
 @app.route("/api/resumes/<int:resume_id>/replace-file", methods=["POST"])
 def replace_resume_file(resume_id):
-    row = get_resume_or_404(resume_id)
-    if not row:
-        return jsonify({"success": False, "message": "简历不存在"}), 404
     file = request.files.get("file")
-    if not file or not file.filename or not allowed_file(file.filename):
-        return jsonify({"success": False, "message": "请上传 PDF、Word、TXT 或图片格式简历。"}), 400
-    file_type = file.filename.rsplit(".", 1)[1].lower()
-    filename = f"resume_replace_{resume_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
-    file_path = os.path.join(UPLOAD_FOLDER, filename)
-    file.save(file_path)
-    content = parse_resume_file(file_path, file_type)
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE resumes SET file_path = ?, file_type = ?, content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (file_path, file_type, content, resume_id),
+    try:
+        if not file:
+            raise ValueError("请上传 PDF、Word、TXT 或图片格式简历。")
+        result = get_resume_module().replace_upload(
+            resume_id,
+            file.stream,
+            filename=file.filename or "",
         )
-    return jsonify({"success": True, "message": "原文件已替换并重新解析", "parsed_content": content[:1000]})
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify(result)
 
 
 @app.route("/api/resumes/<int:resume_id>", methods=["PUT"])
 def update_resume(resume_id):
-    data = request.get_json() or {}
-    title = (data.get("title") or "").strip()
-    content = (data.get("content") or "").strip()
-    if not title or not content:
-        return jsonify({"success": False, "message": "标题和内容不能为空"}), 400
-    with get_db() as conn:
-        cursor = conn.execute(
-            "UPDATE resumes SET title = ?, content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
-            (title, content, resume_id, AGENT_USER_ID),
+    try:
+        result, status_code = get_resume_module().update(
+            resume_id, request.get_json() or {}
         )
-    if cursor.rowcount == 0:
-        return jsonify({"success": False, "message": "简历不存在"}), 404
-    return jsonify({"success": True, "message": "简历已更新"})
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return jsonify(result), status_code
 
 
 @app.route("/api/resumes/<int:resume_id>", methods=["DELETE"])
 def delete_resume(resume_id):
-    with get_db() as conn:
-        cursor = conn.execute(
-            "DELETE FROM resumes WHERE id = ? AND user_id = ?",
-            (resume_id, AGENT_USER_ID),
-        )
-    if cursor.rowcount == 0:
-        return jsonify({"success": False, "message": "简历不存在"}), 404
-    return jsonify({"success": True, "message": "简历已删除"})
+    result, status_code = get_resume_module().delete(resume_id)
+    return jsonify(result), status_code
 
 
 @app.route("/api/resumes/<int:resume_id>/export/<format_type>")

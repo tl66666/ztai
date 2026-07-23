@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from backend.adapters.legacy_flask import LegacyFlaskAdapter
+from backend.adapters.storage import LocalBlobStorage
 from backend.core.settings import Settings
 
 from .interviews import InterviewModule
 from .opportunities import OpportunityModule
+from .resumes import ResumeModule
 
 
 class ApplicationContainer:
@@ -15,6 +17,7 @@ class ApplicationContainer:
         self.legacy = LegacyFlaskAdapter(settings)
         self._interviews: InterviewModule | None = None
         self._opportunities: OpportunityModule | None = None
+        self._resumes: ResumeModule | None = None
 
     def initialize(self) -> None:
         self.legacy.initialize()
@@ -40,3 +43,16 @@ class ApplicationContainer:
                 local_user_id=self.legacy.local_user_id,
             )
         return self._opportunities
+
+    @property
+    def resumes(self) -> ResumeModule:
+        if self._resumes is None:
+            self._resumes = ResumeModule(
+                self.settings.db_path,
+                LocalBlobStorage(
+                    self.settings.upload_folder,
+                    max_bytes=self.settings.max_upload_bytes,
+                ),
+                local_user_id=self.legacy.local_user_id,
+            )
+        return self._resumes

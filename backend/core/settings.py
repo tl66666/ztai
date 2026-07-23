@@ -43,6 +43,7 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 5000
     workers: int = 1
+    max_upload_bytes: int = 20 * 1024 * 1024
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -92,4 +93,7 @@ class Settings:
             host=host,
             port=port,
             workers=workers,
+            max_upload_bytes=int(
+                os.environ.get("JOBHUNTER_MAX_UPLOAD_BYTES", 20 * 1024 * 1024)
+            ),
         )

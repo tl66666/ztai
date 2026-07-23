@@ -9,6 +9,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from backend.api.interviews import create_interview_router
 from backend.api.opportunities import create_opportunity_router
+from backend.api.resumes import create_resume_router
 from backend.api.system import create_system_router
 from backend.application.container import ApplicationContainer
 from backend.core.settings import Settings
@@ -58,5 +59,6 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     application.include_router(
         create_opportunity_router(lambda: container.opportunities)
     )
+    application.include_router(create_resume_router(lambda: container.resumes))
     application.mount("/", WSGIMiddleware(container.legacy.application))
     return application
