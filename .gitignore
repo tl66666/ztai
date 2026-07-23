@@ -32,7 +32,6 @@ static/assets/images/*.docx
 .env
 .env.*
 !.env.example
-deploy/backend.env
 
 # IDE / OS
 .vscode/

@@ -165,25 +165,23 @@ uv run python -m backend.cli
 生产默认关闭 OpenAPI UI。反向代理必须保留
 `Cf-Access-Jwt-Assertion` 请求头。
 
-### Ubuntu 容器运行
+### Ubuntu 直接运行
 
-仓库提供同一套 OCI 镜像和 Compose 配置，Windows/macOS 可用 Docker
-Desktop 验证，Ubuntu 使用 Docker Engine 运行，不依赖 PowerShell：
+当前阶段不引入 Docker。Windows、macOS 和 Ubuntu 统一使用 `uv` 管理 Python
+版本、锁定依赖和启动命令，避免维护多套 PowerShell、shell 与容器入口。
+Ubuntu 使用普通非 root 应用用户安装 `uv`，在发布目录中执行：
 
 ```bash
-cp deploy/backend.env.example deploy/backend.env
-# 编辑域名、Cloudflare Access audience 和邮箱 allowlist
-docker compose config
-docker compose build backend
-docker compose up -d backend
-docker compose ps
+uv sync --frozen --no-dev
+uv run python -m backend.cli
 ```
 
-容器使用非 root 用户、只读根文件系统、移除 Linux capabilities，并把
-SQLite、上传、导出和运行时配置集中挂载到 `/app/data`。宿主机端口只绑定
-`127.0.0.1:8000`，应由 Cloudflare Tunnel 或反向代理提供公网 TLS；不要把
-Compose 的端口映射改为 `0.0.0.0`。生产数据库切换到 PostgreSQL 后才允许
-增加 worker 数量。
+进程管理器只负责注入环境变量、自动重启、日志轮转和启动上述命令，不复制业务
+配置。运行数据、上传和导出目录放在发布目录之外的持久路径，并通过
+`JOBHUNTER_DB_PATH`、`JOBHUNTER_UPLOAD_FOLDER` 与
+`JOBHUNTER_EXPORT_FOLDER` 显式配置。后端只监听 `127.0.0.1:8000`，由
+Cloudflare Tunnel 或反向代理提供公网 TLS。生产数据库切换到 PostgreSQL
+且完成并发验证后，才允许增加 worker 数量。
 
 ## 9. 可观测性与发布门禁
 
