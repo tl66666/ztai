@@ -178,10 +178,29 @@ class BackendFeatureTests(unittest.TestCase):
         self.assertTrue(questions["success"])
         self.assertGreaterEqual(len(questions["data"]), 5)
 
-        pack = self.client.post(
-            "/api/interview/professional-pack",
-            json={"category": "career", "career_profile": "education", "job_title": "小学语文教师"},
-        ).get_json()
+        from pathlib import Path
+
+        from fastapi.testclient import TestClient
+
+        from backend.core.settings import Settings
+        from backend.main import create_application
+
+        root = Path(self.temp_dir.name)
+        settings = Settings(
+            environment="test",
+            db_path=Path(os.environ["JOBHUNTER_DB_PATH"]),
+            upload_folder=root / "uploads",
+            export_folder=root / "exports",
+        )
+        with TestClient(create_application(settings)) as client:
+            pack = client.post(
+                "/api/interview/professional-pack",
+                json={
+                    "category": "career",
+                    "career_profile": "education",
+                    "job_title": "小学语文教师",
+                },
+            ).json()
 
         self.assertTrue(pack["success"])
         self.assertEqual(pack["profile"]["id"], "education")

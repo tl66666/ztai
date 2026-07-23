@@ -9,6 +9,8 @@ from types import ModuleType
 from backend.core.settings import Settings
 from utils.ai_client import AIClientManager
 
+from .legacy_training import LegacyTrainingLogic
+
 
 class LegacyFlaskAdapter:
     """Expose the existing Flask application behind the ASGI migration seam."""
@@ -38,6 +40,10 @@ class LegacyFlaskAdapter:
     @property
     def interview_service(self):
         return self._legacy.get_interview_service()
+
+    @property
+    def training_logic(self) -> LegacyTrainingLogic:
+        return LegacyTrainingLogic(self._legacy)
 
     def initialize(self) -> None:
         self.settings.upload_folder.mkdir(parents=True, exist_ok=True)

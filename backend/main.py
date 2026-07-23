@@ -16,6 +16,7 @@ from backend.api.opportunities import create_opportunity_router
 from backend.api.resume_intelligence import create_resume_intelligence_router
 from backend.api.resumes import create_resume_router
 from backend.api.system import create_system_router
+from backend.api.training import create_training_router
 from backend.application.container import ApplicationContainer
 from backend.core.settings import Settings
 from backend.security import (
@@ -100,6 +101,7 @@ def create_application(
     application.include_router(
         create_resume_intelligence_router(lambda: container.resume_intelligence)
     )
+    application.include_router(create_training_router(lambda: container.training))
     application.mount("/", WSGIMiddleware(container.legacy.application))
     return application
 

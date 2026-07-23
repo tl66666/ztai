@@ -1245,7 +1245,6 @@ def evaluate_interview_answer(
     )
 
 
-@app.route("/api/interview/analyze-voice", methods=["POST"])
 def analyze_voice_answer():
     data = request.get_json() or {}
     answer = data.get("answer", "")
@@ -1254,7 +1253,6 @@ def analyze_voice_answer():
     return jsonify({"success": True, **analyze_voice_text(answer, data.get("duration_seconds"), data.get("audio_metrics"))})
 
 
-@app.route("/api/interview/analyze-audio", methods=["POST"])
 def analyze_audio_answer():
     requested_user_id = request.form.get("user_id")
     if requested_user_id is not None and require_agent_user(requested_user_id) is None:
@@ -1298,7 +1296,6 @@ def build_audio_summary(result: dict, saved_name: str = "") -> str:
     )
 
 
-@app.route("/api/interview/professional-pack", methods=["POST"])
 def professional_pack():
     data = request.get_json() or {}
     category = data.get("category", "test")
@@ -1395,7 +1392,6 @@ def build_project_followup_questions(category: str, job_title: str, level: str) 
     ]
 
 
-@app.route("/api/interview/practice-feedback", methods=["POST"])
 def practice_feedback():
     data = request.get_json() or {}
     if "user_id" in data and require_agent_user(data.get("user_id")) is None:
@@ -1500,7 +1496,6 @@ def build_sample_practice_answer(question: str, category: str) -> str:
     return "参考回答：我会先给结论，再用一个真实项目举例说明背景、我的行动和结果，最后回到岗位要求，说明这段经历为什么能证明我适合这个岗位。"
 
 
-@app.route("/api/training-records/<int:user_id>")
 def list_training_records(user_id):
     if require_agent_user(user_id) is None:
         return agent_access_denied()
@@ -1525,7 +1520,6 @@ def list_training_records(user_id):
     })
 
 
-@app.route("/api/training-records/<record_type>/<int:record_id>", methods=["DELETE"])
 def delete_training_record(record_type, record_id):
     table_map = {
         "interview": "interviews",
@@ -1556,7 +1550,6 @@ def delete_training_record(record_type, record_id):
     return jsonify({"success": True, "message": "记录已删除"})
 
 
-@app.route("/api/training-records/<int:user_id>/clear", methods=["DELETE"])
 def clear_training_records(user_id):
     if require_agent_user(user_id) is None:
         return agent_access_denied()

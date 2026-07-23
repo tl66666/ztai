@@ -7,8 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # These ceilings must only move down while the compatibility application is retired.
-MAX_LEGACY_ROUTE_DECORATORS = 74
-MAX_LEGACY_ROUTE_OPERATIONS = 78
+MAX_LEGACY_ROUTE_DECORATORS = 67
+MAX_LEGACY_ROUTE_OPERATIONS = 71
 
 
 def _legacy_route_counts() -> tuple[int, int]:

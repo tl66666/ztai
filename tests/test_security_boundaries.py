@@ -7,7 +7,11 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 import app as app_module
+from backend.core.settings import Settings
+from backend.main import create_application
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,8 +28,21 @@ class LocalSecurityBoundaryTests(unittest.TestCase):
         app_module.app.config["UPLOAD_FOLDER"] = app_module.UPLOAD_FOLDER
         app_module.init_db()
         self.client = app_module.app.test_client()
+        root = Path(self.temp_dir.name)
+        self.asgi_client = TestClient(
+            create_application(
+                Settings(
+                    environment="test",
+                    db_path=Path(app_module.DB_PATH),
+                    upload_folder=Path(app_module.UPLOAD_FOLDER),
+                    export_folder=root / "exports",
+                )
+            )
+        )
+        self.asgi_client.__enter__()
 
     def tearDown(self):
+        self.asgi_client.__exit__(None, None, None)
         app_module.DB_PATH = self.original_db_path
         app_module.UPLOAD_FOLDER = self.original_upload_folder
         app_module.app.config["UPLOAD_FOLDER"] = self.original_upload_folder
@@ -45,28 +62,29 @@ class LocalSecurityBoundaryTests(unittest.TestCase):
         response.close()
 
     def test_legacy_write_apis_reject_client_selected_user(self):
-        responses = (
-            self.client.post(
-                "/api/resumes",
-                json={"user_id": 2, "title": "foreign", "content": "content"},
-            ),
-            self.client.post(
+        resume_response = self.client.post(
+            "/api/resumes",
+            json={"user_id": 2, "title": "foreign", "content": "content"},
+        )
+        training_responses = (
+            self.asgi_client.post(
                 "/api/interview/practice-feedback",
                 json={"user_id": 2, "question": "q", "answer": "long enough answer"},
             ),
-            self.client.post(
+            self.asgi_client.post(
                 "/api/interview/analyze-audio",
+                files={"audio": ("answer.wav", BytesIO(b"RIFF"), "audio/wav")},
                 data={
                     "user_id": "2",
                     "transcript": "audio transcript",
-                    "audio": (BytesIO(b"RIFF"), "answer.wav"),
                 },
-                content_type="multipart/form-data",
             ),
         )
 
-        for response in responses:
-            with self.subTest(path=response.request.path):
+        self.assertEqual(resume_response.status_code, 403)
+        resume_response.close()
+        for response in training_responses:
+            with self.subTest(path=response.request.url.path):
                 self.assertEqual(response.status_code, 403)
             response.close()
 
@@ -85,19 +103,27 @@ class LocalSecurityBoundaryTests(unittest.TestCase):
             ).lastrowid
             conn.commit()
 
-        requests = (
+        legacy_requests = (
             self.client.get("/api/resumes/2"),
             self.client.get(f"/api/resumes/detail/{resume_id}"),
             self.client.delete(f"/api/resumes/{resume_id}"),
-            self.client.get("/api/training-records/2"),
-            self.client.delete(f"/api/training-records/practice/{practice_id}"),
-            self.client.delete("/api/training-records/2/clear"),
             self.client.post("/api/career/report/2"),
             self.client.get("/api/applications/2"),
         )
+        training_requests = (
+            self.asgi_client.get("/api/training-records/2"),
+            self.asgi_client.delete(
+                f"/api/training-records/practice/{practice_id}"
+            ),
+            self.asgi_client.delete("/api/training-records/2/clear"),
+        )
 
-        for response in requests:
+        for response in legacy_requests:
             with self.subTest(path=response.request.path):
+                self.assertIn(response.status_code, {403, 404})
+            response.close()
+        for response in training_requests:
+            with self.subTest(path=response.request.url.path):
                 self.assertIn(response.status_code, {403, 404})
             response.close()
 
