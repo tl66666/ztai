@@ -8,4 +8,5 @@ python-docx>=0.8.11
 reportlab>=3.6.0
 pdf2docx>=0.5.6
 PyPDF2>=3.0.0
+python-multipart>=0.0.20
 uvicorn[standard]>=0.30,<1
