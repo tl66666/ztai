@@ -649,7 +649,29 @@ class InterviewFrontendSubmissionTests(unittest.TestCase):
         with open(
             os.path.join(PROJECT_ROOT, "static", "js", "app.js"), encoding="utf-8"
         ) as file:
-            script = file.read()
+            app_script = file.read()
+        with open(
+            os.path.join(
+                PROJECT_ROOT,
+                "frontend",
+                "src",
+                "interview",
+                "interview-controller.ts",
+            ),
+            encoding="utf-8",
+        ) as file:
+            controller_script = file.read()
+        with open(
+            os.path.join(
+                PROJECT_ROOT,
+                "static",
+                "js",
+                "interview_submission.js",
+            ),
+            encoding="utf-8",
+        ) as file:
+            submission_script = file.read()
+        script = app_script + controller_script + submission_script
 
         self.assertIn("interviewStageIndex", script)
         self.assertIn("pendingInterviewSubmission", script)

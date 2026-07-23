@@ -51,6 +51,28 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+function renderIcons() {
+  if (!window.lucide || typeof window.lucide.createIcons !== "function") return false;
+  try {
+    window.lucide.createIcons();
+    return true;
+  } catch (error) {
+    console.warn("Icon rendering is unavailable; text controls remain usable.", error);
+    return false;
+  }
+}
+
+const agentContext = ContextualAgent.createContextStore();
+const agentConversationEpoch = ContextualAgent.createConversationEpoch();
+const agentCommandCenterGate = ContextualAgent.createLatestRequestGate();
+const {
+  applicationPayloadForJob,
+  buildApplicationHandoff,
+  buildInterviewHandoff,
+  buildInterviewStartPayload,
+  buildMatchPayload,
+  routeLeavesFlow,
+} = OpportunityHandoffs;
 const resumeController = JobHunterResumeController.create({
   userId: USER_ID,
   apiBaseUrl: API,
@@ -72,33 +94,27 @@ const resumeController = JobHunterResumeController.create({
   buildMatchPayload,
   downloadResponse,
 });
-
-function renderIcons() {
-  if (!window.lucide || typeof window.lucide.createIcons !== "function") return false;
-  try {
-    window.lucide.createIcons();
-    return true;
-  } catch (error) {
-    console.warn("Icon rendering is unavailable; text controls remain usable.", error);
-    return false;
-  }
-}
-
-const audioPreviewUrls = InterviewMedia.createObjectUrlRegistry({
-  create: (blob) => URL.createObjectURL(blob),
-  revoke: (url) => URL.revokeObjectURL(url),
-});
-const agentContext = ContextualAgent.createContextStore();
-const agentConversationEpoch = ContextualAgent.createConversationEpoch();
-const agentCommandCenterGate = ContextualAgent.createLatestRequestGate();
-const {
-  applicationPayloadForJob,
-  buildApplicationHandoff,
-  buildInterviewHandoff,
+const interviewController = JobHunterInterviewController.create({
+  userId: USER_ID,
+  apiBaseUrl: API,
+  state,
+  request: api,
+  byId: $,
+  escapeHtml,
+  renderText,
+  toast,
+  withLoading,
+  renderIcons,
+  selectedCareerProfile,
+  loadDashboard,
   buildInterviewStartPayload,
-  buildMatchPayload,
-  routeLeavesFlow,
-} = OpportunityHandoffs;
+  downloadBlob,
+  downloadResponse,
+  confirmAction: (message) => window.confirm(message),
+  submission: InterviewSubmission,
+  media: InterviewMedia,
+  capabilities: BrowserCapabilities,
+});
 const opportunityHistory = OpportunityHistory.createOpportunityHistoryController({
   window,
   defaultModule: defaultModuleForPage,
@@ -745,73 +761,11 @@ function downloadBlob(blob, filename) {
 }
 
 function audioExtensionFromMime(mime = "") {
-  return BrowserCapabilities.extensionForMime(mime);
-}
-
-function audioDownloadBase(filename = "interview-answer") {
-  return filename.replace(/\.[^.]+$/, "") || "interview-answer";
-}
-
-async function blobToWav(blob) {
-  const AudioContext = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContext) throw new Error("当前浏览器不支持音频解码");
-  const buffer = await InterviewMedia.decodeAudioBlob(blob, AudioContext);
-  const channels = Math.min(2, buffer.numberOfChannels);
-  const sampleRate = buffer.sampleRate;
-  const samples = buffer.length;
-  const bytesPerSample = 2;
-  const blockAlign = channels * bytesPerSample;
-  const dataSize = samples * blockAlign;
-  const wav = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(wav);
-  const writeString = (offset, text) => {
-    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
-  };
-  writeString(0, "RIFF");
-  view.setUint32(4, 36 + dataSize, true);
-  writeString(8, "WAVE");
-  writeString(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, channels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * blockAlign, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true);
-  writeString(36, "data");
-  view.setUint32(40, dataSize, true);
-  const channelData = Array.from({ length: channels }, (_, index) => buffer.getChannelData(index));
-  let offset = 44;
-  for (let i = 0; i < samples; i += 1) {
-    for (let channel = 0; channel < channels; channel += 1) {
-      const sample = Math.max(-1, Math.min(1, channelData[channel][i]));
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-      offset += 2;
-    }
-  }
-  return new Blob([wav], { type: "audio/wav" });
+  return interviewController.extensionFromMime(mime);
 }
 
 async function downloadSavedAudio(filename, format = "wav") {
-  if (!filename) return toast("没有可下载的音频文件");
-  if (format === "wav") {
-    try {
-      const response = await api.raw(`/uploads/${encodeURIComponent(filename)}`);
-      if (!response.ok) throw new Error("音频读取失败");
-      const wavBlob = await blobToWav(await response.blob());
-      downloadBlob(wavBlob, `${audioDownloadBase(filename)}.wav`);
-      toast("WAV 音频已开始下载");
-      return;
-    } catch (error) {
-      toast(`WAV 导出失败：${error.message}`);
-      return;
-    }
-  }
-  const response = await api.raw(`/uploads/${encodeURIComponent(filename)}/download/${format}`);
-  const fallbackName = format === "original"
-    ? BrowserCapabilities.audioFileDescriptor({ name: filename, type: "" }).filename
-    : `${audioDownloadBase(filename)}.${format}`;
-  await downloadResponse(response, fallbackName);
+  return interviewController.downloadSavedAudio(filename, format);
 }
 
 async function downloadResponse(response, fallbackName) {
@@ -946,598 +900,159 @@ async function renderSkills() {
 }
 
 async function startInterview() {
-  const handoff = state.interviewOpportunityHandoff;
-  const resumeId = handoff?.resumeId || $("interviewResumeSelect").value || state.resumes[0]?.id;
-  if (!resumeId) return toast("请先保存或选择简历");
-  const baseBody = {
-    user_id: USER_ID,
-    resume_id: Number(resumeId),
-    job_title: $("interviewJobTitle").value || "软件测试工程师",
-    jd: $("interviewJd").value,
-    career_profile: selectedCareerProfile(),
-    mode: "campus",
-  };
-  const body = buildInterviewStartPayload(baseBody, handoff);
-  const data = await api("/interview/sessions", {
-    method: "POST",
-    body,
-  });
-  if (!data.success) return toast(data.message || "面试创建失败");
-  state.activeInterview = data.session_id;
-  state.pendingInterviewSubmission = null;
-  state.interviewSubmitting = false;
-  state.interviewOpportunityHandoff = null;
-  updateInterviewQuestion(data);
-  $("interviewFeedback").classList.add("hidden");
-  openInterviewRoom(data);
+  return interviewController.start();
 }
 
 function updateInterviewQuestion(data) {
-  state.interviewStageIndex = Math.max(0, Number(data.progress || 1) - 1);
-  state.currentInterviewSession = data;
-  $("currentQuestion").textContent = data.question;
-  $("interviewStageLabel").textContent = stageName(data.stage);
-  const progress = Math.min(100, (data.progress / data.total) * 100);
-  $("interviewProgress").style.width = `${progress}%`;
-  $("interviewProgress").parentElement.classList.toggle("has-progress", progress > 0);
-  $("roomQuestion").textContent = data.question;
-  $("roomStageLabel").textContent = stageName(data.stage);
-  $("roomProgress").style.width = `${progress}%`;
+  return interviewController.updateQuestion(data);
 }
 
 function openInterviewRoom(data) {
-  updateInterviewQuestion(data);
-  $("roomAnswer").value = "";
-  $("roomFeedback").classList.add("hidden");
-  $("interviewRoom").classList.remove("hidden");
-  renderIcons();
+  return interviewController.openRoom(data);
 }
 
 function stageName(stage) {
-  return {
-    opening: "自我介绍",
-    resume_deep_dive: "项目深挖",
-    technical: "技术追问",
-    professional: "专业追问",
-    behavioral: "行为面",
-    candidate_questions: "反问环节",
-    finished: "面试结束",
-  }[stage] || stage;
+  return interviewController.stageName(stage);
 }
 
 async function sendInterviewAnswer() {
-  if (!state.activeInterview) return toast("请先开始模拟面试");
-  if (state.interviewSubmitting) return;
-  const answer = $("answerInput").value.trim();
-  if (!answer) return toast("请先输入回答");
-  const result = await InterviewSubmission.submitInterviewAnswer(state, answer, {
-    createId: () => (
-      globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
-        ? globalThis.crypto.randomUUID()
-        : `interview-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    ),
-    send: (pending) => api(`/interview/sessions/${state.activeInterview}/answer`, {
-      method: "POST",
-      body: {
-        answer: pending.answer,
-        submission_id: pending.submissionId,
-        expected_stage_index: pending.expectedStageIndex,
-      },
-    }),
-    reload: () => api(`/interview/sessions/${state.activeInterview}`),
-  });
-  if (result.kind === "success") {
-    const data = result.session;
-    updateInterviewQuestion(data);
-    $("answerInput").value = "";
-    renderFeedback(data.feedback);
-    if (data.stage === "finished") {
-      loadDashboard();
-      loadTrainingRecords();
-    }
-    return;
-  }
-  if (result.kind === "conflict_recovered") {
-    updateInterviewQuestion(result.session);
-    $("answerInput").value = "";
-    toast("面试进度已同步，请回答当前问题");
-    return;
-  }
-  if (result.kind !== "busy") toast("提交结果不确定，请重试");
+  return interviewController.sendAnswer();
 }
 
 async function sendRoomAnswer() {
-  const roomAnswer = $("roomAnswer").value.trim();
-  if (!roomAnswer) return toast("请先输入本轮回答");
-  $("answerInput").value = roomAnswer;
-  await sendInterviewAnswer();
-  $("roomAnswer").value = "";
-  $("roomFeedback").classList.remove("hidden");
-  $("roomFeedback").innerHTML = $("interviewFeedback").innerHTML;
+  return interviewController.sendRoomAnswer();
 }
 
 function renderFeedback(feedback) {
-  $("interviewFeedback").classList.remove("hidden");
-  $("interviewFeedback").innerHTML = renderFeedbackHtml(feedback);
+  return interviewController.renderFeedback(feedback);
 }
 
 function renderFeedbackHtml(feedback) {
-  const dimensions = feedback.voice.dimension_scores || {};
-  return `
-    <h4>即时反馈：${feedback.score} 分</h4>
-    <div>${escapeHtml(feedback.summary)}</div>
-    <div>语速：${feedback.voice.estimated_speech_rate} 字/分钟（${feedback.voice.pace_label || "自然"}），口头禅：${feedback.voice.filler_count} 次，结构分：${feedback.voice.structure_score}</div>
-    <div><b>维度分</b><br>${Object.entries(dimensions).map(([key, value]) => `${key}：${value}`).join("　")}</div>
-    ${feedback.voice.audio_quality ? `<div><b>真实录音质量</b><br>${escapeHtml(feedback.voice.audio_quality)}</div>` : ""}
-    ${feedback.answer_upgrade ? `<div><b>表达升级</b><br>${escapeHtml(feedback.answer_upgrade)}</div>` : ""}
-    ${(feedback.suggestions || []).map((item) => `<div>• ${escapeHtml(item)}</div>`).join("")}
-  `;
+  return interviewController.renderFeedbackHtml(feedback);
 }
 
 async function analyzeVoice() {
-  const answer = $("answerInput").value.trim();
-  if (!answer) return toast("请先输入或语音录入回答");
-  const data = await api("/interview/analyze-voice", { method: "POST", body: { answer } });
-  renderFeedback({ score: data.overall_score, summary: "表达分析完成", voice: data, suggestions: data.tips });
+  return interviewController.analyzeVoice();
 }
 
 function getRecordingController() {
-  if (state.recordingController) return state.recordingController;
-  state.recordingController = InterviewMedia.createRecordingController({
-    acquireStream: () => navigator.mediaDevices.getUserMedia({ audio: true }),
-    createRecorder: (stream, options) => (
-      options ? new MediaRecorder(stream, options) : new MediaRecorder(stream)
-    ),
-    createBlob: (chunks, options) => new Blob(chunks, options),
-    computeMetrics: (blob, source, startedAt) => computeAudioMetrics(blob, source, startedAt),
-    publish: ({ blob, metrics, target }) => {
-      state.audioBlob = blob;
-      state.audioMetrics = metrics;
-      renderAudioPreview(target);
-      toast("录音已生成，可以回放或分析");
-    },
-    onError: (error) => {
-      toast(error?.name === "NotAllowedError"
-        ? "未获得麦克风权限，请上传音频或使用文字回答"
-        : "录音发生错误，请上传音频或使用文字回答");
-    },
-  });
-  return state.recordingController;
+  return interviewController.getRecordingController();
 }
 
 async function startAudioRecording(target = "answer") {
-  const plan = BrowserCapabilities.audioInputPlan(window, navigator);
-  if (!plan.canRecord) return toast("当前浏览器不能直接录音，请上传音频或使用文字回答");
-  const result = await getRecordingController().start({ target, format: plan.recorderFormat });
-  if (result.ok) return toast(target === "room" ? "模拟面试录音开始" : "真实录音开始");
-  if (result.reason === "busy") toast("正在启动或录制音频，请先停止当前录音");
+  return interviewController.startAudioRecording(target);
 }
 
 function stopAudioRecording() {
-  if (!getRecordingController().stop()) toast("当前没有正在录制的音频");
+  return interviewController.stopAudioRecording();
 }
 
 async function handleAudioUpload() {
-  getRecordingController().invalidate();
-  const file = $("audioFileInput").files[0];
-  if (!file) return;
-  state.audioBlob = file;
-  state.audioMetrics = await computeAudioMetrics(file, "upload");
-  renderAudioPreview("answer");
-  toast("已载入上传音频，可以回放或分析");
+  return interviewController.handleAudioUpload();
 }
 
 async function computeAudioMetrics(blob, source = "upload", startedAt = 0) {
-  return InterviewMedia.computeAudioMetrics(blob, {
-    source,
-    startedAt,
-    AudioContext: window.AudioContext || window.webkitAudioContext || null,
-  });
+  return interviewController.computeAudioMetrics(blob, source, startedAt);
 }
 
 function renderAudioPreview(target = "answer") {
-  const playback = target === "room" ? $("roomAudioPlayback") : $("audioPlayback");
-  const preview = target === "room" ? $("roomAudioMetricPreview") : $("audioMetricPreview");
-  const status = target === "room" ? $("roomAudioPlaybackStatus") : $("audioPlaybackStatus");
-  const download = target === "room" ? $("roomAudioDownloadLink") : $("audioDownloadLink");
-  if (state.audioBlob) {
-    const url = audioPreviewUrls.replace(target, state.audioBlob);
-    const descriptor = BrowserCapabilities.audioFileDescriptor(state.audioBlob);
-    playback.src = url;
-    playback.dataset.url = url;
-    download.href = url;
-    download.download = descriptor.filename;
-    download.classList.remove("hidden");
-    status.classList.remove("hidden", "is-warning");
-    status.textContent = descriptor.mayNotPlay
-      ? BrowserCapabilities.audioPlaybackErrorMessage()
-      : `已载入 ${descriptor.filename}，可回放或下载原文件。`;
-    status.classList.toggle("is-warning", descriptor.mayNotPlay);
-    playback.onerror = () => {
-      status.textContent = BrowserCapabilities.audioPlaybackErrorMessage();
-      status.classList.remove("hidden");
-      status.classList.add("is-warning");
-      download.classList.remove("hidden");
-    };
-    playback.oncanplay = () => {
-      if (!descriptor.mayNotPlay) status.classList.remove("is-warning");
-    };
-  }
-  const metrics = state.audioMetrics || {};
-  const duration = metrics.duration_seconds == null ? "未知" : `${metrics.duration_seconds}s`;
-  preview.classList.remove("hidden");
-  preview.innerHTML = `
-    <span>时长 ${duration}</span>
-    <span>音量 ${metrics.average_volume || 0}</span>
-    <span>停顿 ${(metrics.silence_ratio || 0) * 100}%</span>
-    <span>爆音 ${(metrics.clipping_ratio || 0) * 100}%</span>
-  `;
+  return interviewController.renderAudioPreview(target);
 }
 
 async function analyzeRecordedAudio(target = "answer") {
-  if (!state.audioBlob) return toast("请先录音或上传音频");
-  const transcript = target === "room" ? $("roomAnswer").value.trim() : $("answerInput").value.trim();
-  if (!transcript) return toast("请补充转写文本，AI 需要结合内容和声音一起分析");
-  const form = new FormData();
-  const descriptor = BrowserCapabilities.audioFileDescriptor(state.audioBlob);
-  form.append("audio", state.audioBlob, descriptor.filename);
-  form.append("user_id", USER_ID);
-  form.append("transcript", transcript);
-  if (Number.isFinite(state.audioMetrics?.duration_seconds)) {
-    form.append("duration_seconds", String(state.audioMetrics.duration_seconds));
-  }
-  form.append("metrics", JSON.stringify(state.audioMetrics || {}));
-  const data = await withLoading(
-    () => api("/interview/analyze-audio", { method: "POST", body: form }),
-    "AI 正在分析真实录音..."
-  );
-  if (!data.success) return toast(data.message || "录音分析失败");
-  const feedback = { score: data.overall_score, summary: data.summary, voice: data, suggestions: data.tips };
-  if (target === "room") {
-    $("roomFeedback").classList.remove("hidden");
-    $("roomFeedback").innerHTML = renderFeedbackHtml(feedback);
-  } else {
-    renderFeedback(feedback);
-  }
-  await loadTrainingRecords();
+  return interviewController.analyzeRecordedAudio(target);
 }
 
 async function loadQuestions(category = "all") {
-  const resolvedCategory = category === "career" ? selectedCareerProfile() : category;
-  state.currentPracticeCategory = category;
-  const data = await api(`/questions?category=${encodeURIComponent(resolvedCategory)}`);
-  const questions = data.success ? data.data : [];
-  $("questionList").innerHTML = questions.length
-    ? questions.map((item, index) => `
-      <article class="question-card">
-        <b>${index + 1}. ${escapeHtml(item.question)}</b>
-        <small>${categoryName(item.category)} · 点击“练习”后可输入自己的回答</small>
-        <div class="list-actions">
-          <button class="ghost small" onclick="selectQuestion('${escapeAttr(item.question)}', '${escapeAttr(category === "career" ? "career" : item.category)}')">练习</button>
-          <button class="ghost small" onclick="showSampleAnswer('${escapeAttr(item.answer)}')">参考答案</button>
-        </div>
-      </article>
-    `).join("")
-    : `<article class="question-card"><b>暂无题目</b><small>换一个分类试试</small></article>`;
+  return interviewController.loadQuestions(category);
 }
 
 function escapeAttr(text = "") {
-  return String(text).replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, " ");
+  return interviewController.escapeAttr(text);
 }
 
 function categoryName(category) {
-  return {
-    general: "通用面试",
-    career: "跟随求职方向",
-    test: "软件测试",
-    python: "Python / Flask",
-    frontend: "前端基础",
-    ai: "AI Agent",
-    tech: "计算机 / 软件 / AI",
-    ops: "运营 / 新媒体",
-    marketing: "市场 / 销售",
-    finance: "财务 / 会计",
-    education: "教育 / 师范",
-    hr: "行政 / 人事",
-  }[category] || category;
+  return interviewController.categoryName(category);
 }
 
 function selectQuestion(question, category) {
-  $("practiceQuestion").value = question;
-  state.currentPracticeCategory = category;
-  $("practiceAnswer").focus();
-  toast("题目已放入练习区");
+  return interviewController.selectQuestion(question, category);
 }
 
 function showSampleAnswer(answer) {
-  $("practiceResult").classList.remove("hidden");
-  $("practiceResult").innerHTML = `<h4>参考答案</h4>${renderText(answer)}`;
+  return interviewController.showSampleAnswer(answer);
 }
 
 async function loadTrainingRecords() {
-  const box = $("trainingRecords");
-  if (!box) return;
-  const data = await api(`/training-records/${USER_ID}`);
-  if (!data.success) return;
-  const interviews = data.interviews || [];
-  const practices = data.practices || [];
-  const audios = data.audios || [];
-  box.innerHTML = `
-    ${renderRecordColumn("模拟面试", "interview", interviews, (item) => `
-      <b>${escapeHtml(item.job_title || "模拟面试")}</b>
-      <small>${formatDate(item.created_at)} · ${item.score ?? 0} 分</small>
-      <p>${escapeHtml(parseFeedbackSummary(item.feedback) || "已完成一轮模拟面试。")}</p>
-    `)}
-    ${renderRecordColumn("答题练习", "practice", practices, (item) => `
-      <b>${escapeHtml(categoryName(item.category))} · ${item.score ?? 0} 分</b>
-      <small>${formatDate(item.created_at)}</small>
-      <p>${escapeHtml(item.question || "")}</p>
-    `)}
-    ${renderRecordColumn("语音录音", "audio", audios, (item) => `
-      <b>语音表达分析 · ${item.score ?? 0} 分</b>
-      <small>${formatDate(item.created_at)}${item.audio_file ? " · 已保存音频" : ""}</small>
-      <p>${escapeHtml((item.transcript || "").slice(0, 90))}</p>
-    `)}
-  `;
-  renderIcons();
+  return interviewController.loadTrainingRecords();
 }
 
 function renderRecordColumn(title, type, items, bodyRenderer) {
-  return `
-    <section class="record-column">
-      <h4>${escapeHtml(title)}<span>${items.length}</span></h4>
-      ${items.length ? items.map((item) => `
-        <article class="record-card">
-          ${bodyRenderer(item)}
-          <div class="record-actions">
-            <button class="ghost small" onclick="viewTrainingRecord('${type}', ${item.id})">查看详情</button>
-            <button class="ghost small danger" onclick="deleteTrainingRecord('${type}', ${item.id})">删除</button>
-          </div>
-        </article>
-      `).join("") : `<article class="record-card"><b>暂无记录</b><small>完成训练后会自动出现在这里</small></article>`}
-    </section>
-  `;
+  return interviewController.renderRecordColumn(title, type, items, bodyRenderer);
 }
 
 async function viewTrainingRecord(type, id) {
-  const data = await api(`/training-records/${USER_ID}`);
-  if (!data.success) return toast("记录读取失败");
-  const source = type === "interview" ? data.interviews : type === "practice" ? data.practices : data.audios;
-  const item = (source || []).find((record) => Number(record.id) === Number(id));
-  if (!item) return toast("记录不存在或已删除");
-  const detail = $("recordDetail");
-  detail.classList.remove("hidden");
-  detail.innerHTML = renderRecordDetail(type, item);
-  detail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  return interviewController.viewTrainingRecord(type, id);
 }
 
 function renderRecordDetail(type, item) {
-  const feedback = safeJson(item.feedback);
-  const metrics = safeJson(item.metrics);
-  if (type === "audio") {
-    return `
-      <h4>语音复盘详情：${item.score ?? 0} 分</h4>
-      <div><b>时间</b><br>${formatDate(item.created_at)}</div>
-      <div><b>转写文本</b><br>${escapeHtml(item.transcript || "暂无转写文本")}</div>
-      <div><b>声音指标</b><br>时长 ${metrics.duration_seconds || 0}s，平均音量 ${metrics.average_volume || 0}，停顿占比 ${Math.round((metrics.silence_ratio || 0) * 100)}%，爆音占比 ${Math.round((metrics.clipping_ratio || 0) * 100)}%</div>
-      ${item.audio_file ? `
-        <audio controls src="${API}/uploads/${encodeURIComponent(item.audio_file)}"></audio>
-        <div class="audio-downloads">
-          <button class="ghost small" onclick="downloadSavedAudio('${escapeAttr(item.audio_file)}', 'wav')">下载 WAV</button>
-          <button class="ghost small" onclick="downloadSavedAudio('${escapeAttr(item.audio_file)}', 'mp3')">下载 MP3</button>
-          <button class="ghost small" onclick="downloadSavedAudio('${escapeAttr(item.audio_file)}', 'original')">下载原始音频</button>
-        </div>
-        <small>WAV 可由浏览器本地转换；MP3 由后端 ffmpeg 转码生成。</small>
-      ` : ""}
-      <div><b>AI 建议</b><br>${escapeHtml(feedback.summary || "")}</div>
-      ${(feedback.tips || []).map((tip) => `<div>• ${escapeHtml(tip)}</div>`).join("")}
-    `;
-  }
-  if (type === "practice") {
-    return `
-      <h4>答题记录详情：${item.score ?? 0} 分</h4>
-      <div><b>时间</b><br>${formatDate(item.created_at)}</div>
-      <div><b>题目</b><br>${escapeHtml(item.question || "")}</div>
-      <div><b>我的回答</b><br>${escapeHtml(item.answer || "")}</div>
-      <div><b>维度评分</b><br>${Object.entries(feedback.dimension_scores || {}).map(([key, value]) => `${escapeHtml(key)}：${escapeHtml(String(value))}`).join("　") || "暂无"}</div>
-      ${(feedback.problems || []).map((problem) => `<div>• ${escapeHtml(problem)}</div>`).join("")}
-      ${feedback.sample_answer ? `<h4>参考答案</h4>${renderText(feedback.sample_answer)}` : ""}
-      ${feedback.upgrade ? `<h4>表达升级</h4><div>${escapeHtml(feedback.upgrade)}</div>` : ""}
-    `;
-  }
-  return `
-    <h4>模拟面试详情：${item.score ?? 0} 分</h4>
-    <div><b>岗位</b><br>${escapeHtml(item.job_title || "模拟面试")}</div>
-    <div><b>时间</b><br>${formatDate(item.created_at)}</div>
-    <div><b>总体反馈</b><br>${escapeHtml(feedback.summary || parseFeedbackSummary(item.feedback) || "暂无总结")}</div>
-    ${(feedback.suggestions || []).map((suggestion) => `<div>• ${escapeHtml(suggestion)}</div>`).join("")}
-    <h4>面试对话</h4>
-    ${renderConversation(item.conversation)}
-  `;
+  return interviewController.renderRecordDetail(type, item);
 }
 
 function safeJson(value) {
-  try {
-    return JSON.parse(value || "{}");
-  } catch {
-    return {};
-  }
+  return interviewController.safeJson(value);
 }
 
 function renderConversation(value) {
-  const data = safeJson(value);
-  const turns = Array.isArray(data) ? data : data.turns || data.conversation || [];
-  if (!turns.length) return `<div>暂无完整对话记录。</div>`;
-  return turns.map((turn) => {
-    const role = turn.role || turn.speaker || "记录";
-    const text = turn.content || turn.text || turn.question || turn.answer || "";
-    return `<div class="conversation-line"><b>${escapeHtml(role)}</b><span>${escapeHtml(text)}</span></div>`;
-  }).join("");
+  return interviewController.renderConversation(value);
 }
 
 function parseFeedbackSummary(feedback) {
-  try {
-    const data = JSON.parse(feedback || "{}");
-    return data.summary || "";
-  } catch {
-    return "";
-  }
+  return interviewController.parseFeedbackSummary(feedback);
 }
 
 function formatDate(value) {
-  return value ? new Date(value).toLocaleString() : "";
+  return interviewController.formatDate(value);
 }
 
 async function deleteTrainingRecord(type, id) {
-  if (!confirm("确定删除这条训练记录吗？")) return;
-  const data = await api(`/training-records/${type}/${id}`, { method: "DELETE" });
-  if (!data.success) return toast(data.message || "删除失败");
-  toast("训练记录已删除");
-  await loadTrainingRecords();
-  await loadDashboard();
+  return interviewController.deleteTrainingRecord(type, id);
 }
 
 async function clearTrainingRecords() {
-  if (!confirm("确定清空所有面试、答题和语音记录吗？")) return;
-  const data = await api(`/training-records/${USER_ID}/clear`, { method: "DELETE" });
-  if (!data.success) return toast(data.message || "清空失败");
-  toast("训练记录已清空");
-  await loadTrainingRecords();
-  await loadDashboard();
+  return interviewController.clearTrainingRecords();
 }
 
 async function loadProfessionalPack() {
-  const data = await withLoading(
-    () => api("/interview/professional-pack", {
-      method: "POST",
-      body: {
-        category: $("professionalCategory").value,
-        career_profile: selectedCareerProfile(),
-        level: $("professionalLevel").value,
-        job_title: $("professionalJobTitle").value || $("interviewJobTitle").value || "目标岗位",
-      },
-    }),
-    "AI 正在生成专业面试题组..."
-  );
-  if (!data.success) return toast(data.message || "题组生成失败");
-  $("professionalPack").innerHTML = data.questions.map((item, index) => `
-    <article class="question-card">
-      <b>${index + 1}. ${escapeHtml(item.question)}</b>
-      <small>${escapeHtml(item.focus)} · ${escapeHtml(item.difficulty)}</small>
-      <div class="list-actions">
-        <button class="ghost small" onclick="selectProfessionalQuestion('${escapeAttr(item.question)}')">作答</button>
-        <button class="ghost small" onclick="showProfessionalReference('${escapeAttr(item.reference)}')">参考思路</button>
-      </div>
-    </article>
-  `).join("");
+  return interviewController.loadProfessionalPack();
 }
 
 function selectProfessionalQuestion(question) {
-  $("professionalQuestion").value = question;
-  $("professionalAnswer").focus();
-  toast("专业问题已放入作答区");
+  return interviewController.selectProfessionalQuestion(question);
 }
 
 function showProfessionalReference(reference) {
-  $("professionalResult").classList.remove("hidden");
-  $("professionalResult").innerHTML = `<h4>参考思路</h4>${renderText(reference)}`;
+  return interviewController.showProfessionalReference(reference);
 }
 
 async function scoreProfessionalAnswer() {
-  const question = $("professionalQuestion").value.trim();
-  const answer = $("professionalAnswer").value.trim();
-  if (!question || !answer) return toast("请先选择专业问题并填写回答");
-  const data = await api("/interview/practice-feedback", {
-    method: "POST",
-    body: {
-      question,
-      answer,
-      user_id: USER_ID,
-      category: $("professionalCategory").value,
-      career_profile: selectedCareerProfile(),
-      job_title: $("professionalJobTitle").value || $("interviewJobTitle").value || "目标岗位",
-    },
-  });
-  if (!data.success) return toast(data.message || "评分失败");
-  $("professionalResult").classList.remove("hidden");
-  $("professionalResult").innerHTML = `
-    <h4>专业回答评分：${data.score} 分</h4>
-    <div><b>维度分</b><br>${Object.entries(data.dimension_scores).map(([key, value]) => `${key}：${value}`).join("　")}</div>
-    <div><b>命中关键词</b><br>${escapeHtml((data.hits || []).join("、") || "暂无")}</div>
-    ${(data.problems || []).map((item) => `<div>• ${escapeHtml(item)}</div>`).join("")}
-    <h4>参考答案</h4>${renderText(data.sample_answer)}
-    <h4>追问建议</h4>${escapeHtml(data.follow_up || "把回答继续落到你的项目经历、测试工具和实际结果上。")}
-  `;
-  await loadTrainingRecords();
+  return interviewController.scoreProfessionalAnswer();
 }
 
 async function scorePractice() {
-  const question = $("practiceQuestion").value.trim();
-  const answer = $("practiceAnswer").value.trim();
-  if (!question || !answer) return toast("请先填写题目和你的回答");
-  const data = await api("/interview/practice-feedback", {
-    method: "POST",
-    body: { question, answer, category: state.currentPracticeCategory, career_profile: selectedCareerProfile(), job_title: $("interviewJobTitle").value || "目标岗位", user_id: USER_ID },
-  });
-  if (!data.success) return toast(data.message || "评分失败");
-  $("practiceResult").classList.remove("hidden");
-  $("practiceResult").innerHTML = `
-    <h4>练习评分：${data.score} 分</h4>
-    <div><b>维度分</b><br>${Object.entries(data.dimension_scores).map(([key, value]) => `${key}：${value}`).join("　")}</div>
-    <div><b>命中关键词</b><br>${escapeHtml((data.hits || []).join("、") || "暂无")}</div>
-    ${(data.problems || []).map((item) => `<div>• ${escapeHtml(item)}</div>`).join("")}
-    <h4>参考答案</h4>${renderText(data.sample_answer)}
-    <h4>表达升级</h4>${escapeHtml(data.upgrade)}
-  `;
-  await loadTrainingRecords();
+  return interviewController.scorePractice();
 }
 
 function applyBrowserCapabilities() {
-  const speech = BrowserCapabilities.speechRecognition(window);
-  const audio = BrowserCapabilities.audioInputPlan(window, navigator);
-  BrowserCapabilities.applyCapabilityUI(document, { speech, audio });
+  return interviewController.applyBrowserCapabilities();
 }
 
 function setupSpeechRecognition() {
-  const speech = BrowserCapabilities.speechRecognition(window);
-  if (!speech.Recognition) return;
-  state.recognition = new speech.Recognition();
-  state.recognition.lang = "zh-CN";
-  state.recognition.continuous = true;
-  state.recognition.interimResults = true;
-  state.speechController = InterviewMedia.bindSpeechRecognition(state.recognition, {
-    getText: () => $("answerInput").value.replace(/\s*$/, ""),
-    setText: (value) => { $("answerInput").value = value; },
-    setActive: (active) => {
-      state.recognizing = active;
-      $("voiceBtn").classList.toggle("recording", active);
-    },
-    onError: (event) => {
-      const denied = event?.error === "not-allowed" || event?.error === "service-not-allowed";
-      toast(denied
-        ? "未获得语音识别权限，请直接使用文字回答"
-        : "语音识别暂时不可用，请直接使用文字回答");
-    },
-  });
+  return interviewController.setupSpeechRecognition();
 }
 
 function toggleVoiceInput() {
-  if (!state.recognition) return toast("当前浏览器不支持语音识别，可以使用 Chrome 尝试");
-  if (state.recognizing) {
-    try {
-      state.recognition.stop();
-    } catch (error) {
-      state.speechController?.finish();
-    }
-    return;
-  }
-  state.speechController?.begin();
-  const result = BrowserCapabilities.startSpeechSafely(state.recognition);
-  if (!result.ok) {
-    state.speechController?.finish();
-    return toast("无法启动语音识别，请直接使用文字回答");
-  }
-  toast("正在语音录入");
+  return interviewController.toggleVoiceInput();
 }
 
 async function saveApplication() {

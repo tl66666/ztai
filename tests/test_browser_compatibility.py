@@ -27,7 +27,9 @@ class BrowserCompatibilityFrontendContracts(unittest.TestCase):
 
     def test_audio_preview_has_accessible_error_and_download_fallbacks(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-        app = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        controller = (
+            ROOT / "frontend" / "src" / "interview" / "interview-audio.ts"
+        ).read_text(encoding="utf-8")
 
         for control_id in (
             "audioPlaybackStatus",
@@ -36,8 +38,8 @@ class BrowserCompatibilityFrontendContracts(unittest.TestCase):
             "roomAudioDownloadLink",
         ):
             self.assertIn(f'id="{control_id}"', html)
-        self.assertIn("audioPlaybackErrorMessage", app)
-        self.assertIn("audioFileDescriptor", app)
+        self.assertIn("audioPlaybackErrorMessage", controller)
+        self.assertIn("audioFileDescriptor", controller)
 
     def test_fixed_agent_launcher_has_reserved_space_and_tabs_do_not_overlay_content(self):
         css = (ROOT / "static" / "css" / "style.css").read_text(encoding="utf-8")

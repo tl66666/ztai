@@ -18,6 +18,13 @@ class OpportunityFrontendContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
         cls.script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        cls.interview_controller = (
+            ROOT
+            / "frontend"
+            / "src"
+            / "interview"
+            / "interview-controller.ts"
+        ).read_text(encoding="utf-8")
 
     def test_kanban_uses_api_statuses_and_keeps_legacy_records_visible(self):
         self.assertIn("data.canonical_statuses", self.script)
@@ -51,14 +58,15 @@ class OpportunityFrontendContractTests(unittest.TestCase):
         self.assertIn("currentOpportunityId", self.script)
         self.assertIn("opportunityHistory.open", self.script)
         self.assertIn("applicationPayloadForJob(state.pendingApplicationHandoff", self.script)
-        self.assertIn("buildInterviewStartPayload(baseBody, handoff)", self.script)
+        self.assertIn("buildInterviewStartPayload({", self.interview_controller)
+        self.assertIn("}, handoff)", self.interview_controller)
         self.assertIn("buildMatchPayload", self.script)
         self.assertIn("actionId", self.script)
 
     def test_opportunity_interview_handoff_is_cleared_after_successful_start(self):
         start = re.search(
-            r"async function startInterview\(\).*?function updateInterviewQuestion",
-            self.script,
+            r"async function start\(\).*?function renderFeedbackHtml",
+            self.interview_controller,
             re.DOTALL,
         ).group(0)
         self.assertIn("state.interviewOpportunityHandoff = null", start)
