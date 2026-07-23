@@ -658,7 +658,6 @@ class InterviewFrontendSubmissionTests(unittest.TestCase):
         self.assertIn("submission_id: pending.submissionId", script)
         self.assertIn("expected_stage_index: pending.expectedStageIndex", script)
         self.assertIn("if (state.interviewSubmitting) return", script)
-        self.assertIn("http_status: response.status", script)
         with open(
             os.path.join(PROJECT_ROOT, "static", "index.html"), encoding="utf-8"
         ) as file:

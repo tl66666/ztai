@@ -55,9 +55,22 @@ Agent 的工作方式是：
 
 支持计算机/软件/AI、运营/新媒体、市场/销售、财务/会计、教育/师范、行政/人事等求职方向。语音能力会根据浏览器特性检测；不支持语音识别或录音时，文字回答和音频上传仍可使用。
 
-## 快速开始（Windows）
+## 快速开始（跨平台）
 
-要求：Windows 10/11、Python 3.10 或更高版本。建议安装 Microsoft Edge、Google Chrome 或 Mozilla Firefox。
+Windows、macOS 和 Linux 使用同一套 Python/ASGI 运行入口，不依赖 PowerShell：
+
+```bash
+uv sync --frozen
+uv run python -m backend.cli
+```
+
+默认访问 `http://127.0.0.1:5000`。当前兼容数据层仍是 SQLite，因此保持单 worker 和回环地址。
+
+Windows 的 `start.bat` / `start-jobhunter.ps1` 仅作为旧版本地便捷入口保留，不是未来 Ubuntu 生产部署方式。
+
+### Windows 旧版便捷启动
+
+要求：Windows 10/11、Python 3.11 或更高版本。建议安装 Microsoft Edge、Google Chrome 或 Mozilla Firefox。
 
 1. 下载或克隆仓库。
 2. 双击 `start.bat`。
@@ -74,11 +87,11 @@ Agent 的工作方式是：
 
 启动日志位于 `output/runtime/`。启动器不会结束占用目标端口的其他程序，而会安全选择下一个可用端口。
 
-## 手动启动
+## 传统 pip 兼容启动
 
-```powershell
+```bash
 python -m pip install -r requirements.txt
-python app.py
+python -m backend.cli
 ```
 
 默认访问 `http://127.0.0.1:5000`。系统默认只监听回环地址，当前版本是本地单用户应用，不适合直接暴露到公网或多人共享网络。
@@ -87,9 +100,8 @@ python app.py
 
 系统支持智谱 GLM、DeepSeek、Kimi/Moonshot 等 OpenAI-compatible 接口。可以在页面“模型配置”中临时提交 Key，或在启动进程前设置环境变量：
 
-```powershell
-$env:DEEPSEEK_API_KEY = "你的 Key"
-python app.py
+```bash
+DEEPSEEK_API_KEY="你的 Key" uv run python -m backend.cli
 ```
 
 页面输入的 Key 不写入 SQLite、浏览器存储或仓库；为支持重启后复用，它会保存到 Git 忽略的本机 `output/runtime/ai-config.json`。该文件包含明文 Key，应仅由当前电脑用户保管；在“模型配置”中留空保存即可清除。使用远程模型时，完成请求所需的对话和上下文会发送给所选供应商，请勿提交不愿交给该供应商处理的敏感信息。
@@ -116,11 +128,13 @@ python app.py
 
 ## 技术设计
 
-- 后端：Python、Flask、SQLite、FTS5 可选全文检索。
-- 前端：原生 HTML/CSS/JavaScript，无构建步骤；Chart.js 与 Lucide 用于图表和图标。
+- 后端：FastAPI 统一 ASGI 入口；Flask、SQLite、FTS5 是当前兼容 adapter。
+- 前端：当前为模块化原生 HTML/CSS/JavaScript；目标为 Vanilla TypeScript + Vite。
 - 业务层：版本化数据库迁移、职业领域服务、持久化面试会话、领域事件。
 - Agent：22 个结构化工具、有界编排循环、本地确定性多工具规划、分层记忆、上下文重建、确认式动作、幂等回执。
 - 测试：Python `unittest`、Node test runner、Playwright 浏览器矩阵、Windows 启动 smoke。
+
+目标生产栈与渐进迁移状态见[生产架构](docs/PRODUCTION_ARCHITECTURE.md)。FastAPI 已成为统一 ASGI 运行入口；Flask/SQLite/经典 JavaScript 当前只作为保持功能的兼容层，不能在认证和用户隔离完成前直接公开部署。
 
 本项目目前没有引入 LangChain/LangGraph。现有问题的核心是业务事实、工具边界、记忆质量和交互闭环，而不是缺少编排框架；轻量自研运行时更符合本地单体应用，也更容易审计。具体取舍和未来引入条件见[架构说明](docs/ARCHITECTURE.md)。
 

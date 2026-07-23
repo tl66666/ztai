@@ -1,6 +1,7 @@
 const API = window.location.protocol === "file:" ? "http://localhost:5000/api" : "/api";
 const USER_ID = 1;
 const JOBHUNTER_AGENT_CONVERSATION = `jobhunter_agent_conversation_${USER_ID}`;
+const api = JobHunterApiClient.create({ baseUrl: API });
 
 const state = {
   resumes: [],
@@ -315,23 +316,6 @@ $("openAgentWorkspaceFromHelper")?.addEventListener("click", openAgentDrawer);
       sendAgentMessage();
     });
   });
-}
-
-async function api(path, options = {}) {
-  const init = { method: "GET", ...options };
-  if (init.body && !(init.body instanceof FormData)) {
-    init.headers = { "Content-Type": "application/json", ...(init.headers || {}) };
-    init.body = JSON.stringify(init.body);
-  }
-  const response = await fetch(`${API}${path}`, init);
-  const type = response.headers.get("content-type") || "";
-  if (type.includes("application/json")) {
-    const payload = await response.json();
-    if (response.ok || !payload || typeof payload !== "object") return payload;
-    return { ...payload, http_status: response.status };
-  }
-  const payload = { success: response.ok, content: await response.text() };
-  return response.ok ? payload : { ...payload, http_status: response.status };
 }
 
 async function loadCareerProfiles() {
@@ -881,7 +865,7 @@ async function downloadSavedAudio(filename, format = "wav") {
   if (!filename) return toast("没有可下载的音频文件");
   if (format === "wav") {
     try {
-      const response = await fetch(`${API}/uploads/${encodeURIComponent(filename)}`);
+      const response = await api.raw(`/uploads/${encodeURIComponent(filename)}`);
       if (!response.ok) throw new Error("音频读取失败");
       const wavBlob = await blobToWav(await response.blob());
       downloadBlob(wavBlob, `${audioDownloadBase(filename)}.wav`);
@@ -892,7 +876,7 @@ async function downloadSavedAudio(filename, format = "wav") {
       return;
     }
   }
-  const response = await fetch(`${API}/uploads/${encodeURIComponent(filename)}/download/${format}`);
+  const response = await api.raw(`/uploads/${encodeURIComponent(filename)}/download/${format}`);
   const fallbackName = format === "original"
     ? BrowserCapabilities.audioFileDescriptor({ name: filename, type: "" }).filename
     : `${audioDownloadBase(filename)}.${format}`;
@@ -920,7 +904,7 @@ async function downloadResponse(response, fallbackName) {
 async function exportResume(format) {
   const resumeId = $("exportResumeSelect").value || selectedResumeId();
   if (!resumeId) return toast("请先选择要导出的简历");
-  const response = await fetch(`${API}/resumes/${resumeId}/export/${format}`);
+  const response = await api.raw(`/resumes/${resumeId}/export/${format}`);
   await downloadResponse(response, format === "pdf" ? "resume.pdf" : "resume.docx");
 }
 
@@ -930,7 +914,7 @@ async function convertDocument(route, inputId) {
   if (!file) return;
   const form = new FormData();
   form.append("file", file);
-  const response = await fetch(`${API}/convert/${route}`, { method: "POST", body: form });
+  const response = await api.raw(`/convert/${route}`, { method: "POST", body: form });
   await downloadResponse(response, route === "pdf-to-word" ? "converted.docx" : "converted.pdf");
   input.value = "";
 }

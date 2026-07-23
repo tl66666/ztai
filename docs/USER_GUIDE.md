@@ -12,7 +12,7 @@
 
 ## 2. 第一次启动
 
-Windows 用户双击 `start.bat`。启动器检查 Python 3.10+ 和依赖，自动选择安全端口并打开默认浏览器。若未自动打开，查看窗口中显示的本地地址。
+Windows、macOS 和 Linux 均可执行 `uv sync --frozen` 与 `uv run python -m backend.cli`，再用浏览器打开显示的地址。Windows 用户也可继续双击旧版兼容入口 `start.bat`。
 
 首次进入后建议：
 

@@ -4,23 +4,23 @@
 
 ## 1. 环境
 
-- Python 3.10+
+- Python 3.11+
 - Node.js 20+（JavaScript 与浏览器测试）
 - PowerShell 5.1+（Windows 启动 smoke）
 - Playwright 包及 Chromium/Firefox；Edge 矩阵使用系统安装的 Microsoft Edge
 
 安装 Python 依赖：
 
-```powershell
-python -m pip install -r requirements.txt
+```bash
+uv sync --frozen
 ```
 
 ## 2. Python 测试
 
 完整套件：
 
-```powershell
-python -m unittest discover -s tests -p "test_*.py" -v
+```bash
+uv run python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 测试使用临时数据库，不应读取或修改仓库根目录的 `jobhunter.db`。重点分组：

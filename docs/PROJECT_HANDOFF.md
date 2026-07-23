@@ -70,8 +70,8 @@
 ## 7. 接手与验证入口
 
 1. 阅读 [用户指南](USER_GUIDE.md)、[Agent 双模式](AGENT_MODES.md) 和 [架构说明](ARCHITECTURE.md)。
-2. Windows 用户双击仓库根目录的 `start.bat`；开发模式可执行 `python app.py`。
-3. 运行 Python 全量测试：`python -m unittest discover -s tests -p "test_*.py" -v`。
+2. 跨平台开发执行 `uv sync --frozen` 和 `uv run python -m backend.cli`；Windows 的 `start.bat` 仅为旧版兼容入口。
+3. 运行 Python 全量测试：`uv run python -m unittest discover -s tests -p "test_*.py" -v`。
 4. 静态、浏览器、启动器和发布门禁的命令见 [测试指南](TESTING.md)。
 5. 项目展示页仅用于阅读真实界面和设计说明；业务流程必须在本地应用中体验。
 

@@ -185,6 +185,12 @@ class AgentOrchestrator:
                     "runtime_limit", action_proposals,
                 )
             decision = self.policy.decide(state, self.tools.schemas())
+            if time.monotonic() >= state.deadline:
+                return self._finish(
+                    user_id, conversation_id, "处理已达到时间预算，请缩小问题范围后重试。",
+                    "degraded", iteration, tools_used, events, task_id, started,
+                    "runtime_limit", action_proposals,
+                )
             if decision.type == "needs_input":
                 decision_arguments = decision.arguments if isinstance(decision.arguments, dict) else {}
                 input_request = decision_arguments.get("input_request")

@@ -1,5 +1,7 @@
 # 职途 AI 架构说明
 
+> 本文记录当前 Flask/SQLite 兼容实现及其业务不变量。目标生产拓扑、FastAPI 模块化单体、Cloudflare/Vite 前端、PostgreSQL/R2 与迁移门禁见[生产架构](PRODUCTION_ARCHITECTURE.md)。兼容实现不得直接作为公开 SaaS 部署。
+
 ## 1. 设计目标
 
 职途 AI 是本地单用户求职工作台，不是通用聊天机器人。架构优先保证四件事：业务数据一致、Agent 行为可控、刷新或重启后可继续、没有模型 Key 也能诚实运行。
