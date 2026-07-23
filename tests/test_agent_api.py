@@ -3,10 +3,10 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
-from unittest.mock import patch
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import app as app_module
+from tests.agent_api_client import create_agent_test_runtime
 
 
 class AgentAPITests(unittest.TestCase):
@@ -14,13 +14,14 @@ class AgentAPITests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.original_db_path = app_module.DB_PATH
         app_module.DB_PATH = os.path.join(self.temp_dir.name, "api.db")
-        app_module._agent_service = None
-        app_module.init_db()
-        app_module.app.config["TESTING"] = True
-        self.client = app_module.app.test_client()
+        self.client_context, self.client = create_agent_test_runtime(
+            self.temp_dir.name
+        )
+        self.client_context.__enter__()
+        self.container = self.client_context.app.state.container
 
     def tearDown(self):
-        app_module._agent_service = None
+        self.client_context.__exit__(None, None, None)
         app_module.DB_PATH = self.original_db_path
         self.temp_dir.cleanup()
 
@@ -110,7 +111,7 @@ class AgentAPITests(unittest.TestCase):
             conn.commit()
         context = {"module": "resume:jd", "opportunity_id": opportunity_id, "resume_id": resume_id}
 
-        with patch.object(app_module, "get_agent_service", return_value=service):
+        with patch.object(self.container.agent, "service", service):
             response = self.client.post(
                 "/api/agent/chat",
                 json={"conversation_id": "conversation-1", "message": "分析差距", "context": context},
@@ -229,7 +230,7 @@ class AgentAPITests(unittest.TestCase):
 
     def test_list_conversations_returns_only_owned_records(self):
         self.create_conversation(user_id=1, title="我的会话")
-        app_module.get_agent_service().store.create_conversation(2, "别人的会话")
+        self.container.agent.service.store.create_conversation(2, "别人的会话")
 
         response = self.client.get("/api/agent/conversations/1").get_json()
 
@@ -237,7 +238,7 @@ class AgentAPITests(unittest.TestCase):
 
     def test_listing_conversations_repairs_only_known_browser_event_artifacts(self):
         conversation_id = self.create_conversation()
-        store = app_module.get_agent_service().store
+        store = self.container.agent.service.store
         store.name_conversation_from_message(conversation_id, 1, "[object PointerEvent]")
         store.add_message(conversation_id, 1, "assistant", "正常欢迎语")
         store.add_message(conversation_id, 1, "user", "[object PointerEvent]")
@@ -397,8 +398,9 @@ class AgentAPITests(unittest.TestCase):
         service.get_report.side_effect = sqlite3.OperationalError("database unavailable")
 
         with patch.object(app_module, "get_career_service", return_value=service):
-            profile_response = self.client.get("/api/profile/1")
-            report_response = self.client.get("/api/career-reports/1")
+            legacy_client = app_module.app.test_client()
+            profile_response = legacy_client.get("/api/profile/1")
+            report_response = legacy_client.get("/api/career-reports/1")
 
         self.assertEqual(profile_response.status_code, 500)
         self.assertEqual(report_response.status_code, 500)

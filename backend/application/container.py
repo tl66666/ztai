@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from backend.adapters.legacy_flask import LegacyFlaskAdapter
-from backend.adapters.persistence import TrainingRepository
+from backend.adapters.persistence import AgentRepository, TrainingRepository
 from backend.adapters.storage import LocalBlobStorage
 from backend.adapters.training_audio import LocalTrainingAudioStorage
 from backend.core.settings import Settings
 
+from .agent import AgentModule
 from .career import CareerModule
 from .career_insights import CareerInsightsModule
 from .interviews import InterviewModule
@@ -21,6 +22,7 @@ class ApplicationContainer:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.legacy = LegacyFlaskAdapter(settings)
+        self._agent: AgentModule | None = None
         self._interviews: InterviewModule | None = None
         self._career: CareerModule | None = None
         self._career_insights: CareerInsightsModule | None = None
@@ -34,6 +36,29 @@ class ApplicationContainer:
 
     def database_ready(self) -> bool:
         return self.legacy.database_ready()
+
+    @property
+    def agent(self) -> AgentModule:
+        if self._agent is None:
+            from utils.agent_runtime.actions import ActionProposalService
+            from utils.agent_runtime.service import AgentService
+
+            local_user_id = self.legacy.local_user_id
+            self._agent = AgentModule(
+                AgentService(
+                    str(self.settings.db_path),
+                    ai_client_provider=self.legacy.ai_client_manager.get_ai_client,
+                ),
+                ActionProposalService(
+                    self.settings.db_path,
+                    career_service=self.legacy.career_service,
+                    local_user_id=local_user_id,
+                ),
+                AgentRepository(self.settings.db_path),
+                local_user_id=local_user_id,
+                allowed_origins=self.settings.allowed_origins,
+            )
+        return self._agent
 
     @property
     def career(self) -> CareerModule:

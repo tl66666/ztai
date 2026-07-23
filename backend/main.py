@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from backend.api.agent import create_agent_router
 from backend.api.career import create_career_router
 from backend.api.career_insights import create_career_insights_router
 from backend.api.interviews import create_interview_router
@@ -54,6 +55,7 @@ def create_application(
         redoc_url=None,
         openapi_url=("/api/v1/openapi.json" if runtime_settings.api_docs_enabled else None),
     )
+    application.state.container = container
 
     @application.middleware("http")
     async def authenticate(request: Request, call_next: Callable):
@@ -93,6 +95,7 @@ def create_application(
         create_system_router(container.database_ready),
         prefix="/api/v1",
     )
+    application.include_router(create_agent_router(lambda: container.agent))
     application.include_router(create_career_router(lambda: container.career))
     application.include_router(create_career_insights_router(lambda: container.career_insights))
     application.include_router(create_interview_router(lambda: container.interviews))

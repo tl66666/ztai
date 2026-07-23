@@ -6,6 +6,7 @@ from contextlib import ExitStack, closing
 from unittest.mock import patch
 
 import app as app_module
+from tests.agent_api_client import create_agent_test_runtime
 
 
 class AgentResumeWorkflowTests(unittest.TestCase):
@@ -13,11 +14,13 @@ class AgentResumeWorkflowTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.original_db_path = app_module.DB_PATH
         app_module.DB_PATH = os.path.join(self.temp_dir.name, "resume-agent.db")
-        app_module._agent_service = None
-        app_module._agent_action_service = None
         app_module.init_db()
-        app_module.app.config["TESTING"] = True
-        self.client = app_module.app.test_client()
+        self.client_context, self.client = create_agent_test_runtime(
+            self.temp_dir.name,
+            db_name="resume-agent.db",
+        )
+        self.client_context.__enter__()
+        self.container = self.client_context.app.state.container
         with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
             self.resume_id = conn.execute(
                 "INSERT INTO resumes(user_id,title,content) VALUES (1,?,?)",
@@ -36,8 +39,7 @@ class AgentResumeWorkflowTests(unittest.TestCase):
         )
 
     def tearDown(self):
-        app_module._agent_service = None
-        app_module._agent_action_service = None
+        self.client_context.__exit__(None, None, None)
         app_module.DB_PATH = self.original_db_path
         self.temp_dir.cleanup()
 
@@ -213,7 +215,7 @@ class AgentResumeWorkflowTests(unittest.TestCase):
         self.assertIn("本地简历诊断", diagnosed["reply"])
 
     def test_draft_endpoint_rejects_non_resume_proposals(self):
-        action = app_module.get_agent_action_service().propose(
+        action = self.container.agent.action_service.propose(
             1, "create_action_item", {"title": "Prepare interview"}
         )
         response = self.client.get(f"/api/agent/actions/{action['id']}/draft")

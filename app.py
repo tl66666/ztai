@@ -1647,7 +1647,6 @@ def public_agent_action(action):
     return get_agent_action_service().public(action)
 
 
-@app.route("/api/agent/actions", methods=["GET"])
 def list_agent_actions():
     try:
         user_id = agent_action_user()
@@ -1662,7 +1661,6 @@ def list_agent_actions():
         return agent_action_error(exc)
 
 
-@app.route("/api/agent/actions/<int:proposal_id>", methods=["GET"])
 def get_agent_action(proposal_id):
     try:
         user_id = agent_action_user()
@@ -1672,7 +1670,6 @@ def get_agent_action(proposal_id):
         return agent_action_error(exc)
 
 
-@app.route("/api/agent/actions/<int:proposal_id>/draft", methods=["GET"])
 def get_agent_action_draft(proposal_id):
     try:
         user_id = agent_action_user()
@@ -1706,7 +1703,6 @@ def require_local_action_origin():
         )
 
 
-@app.route("/api/agent/actions/<int:proposal_id>/edit", methods=["POST"])
 def edit_agent_action(proposal_id):
     try:
         require_local_action_origin()
@@ -1718,7 +1714,6 @@ def edit_agent_action(proposal_id):
         return agent_action_error(exc)
 
 
-@app.route("/api/agent/actions/<int:proposal_id>/confirm", methods=["POST"])
 def confirm_agent_action(proposal_id):
     try:
         require_local_action_origin()
@@ -1738,7 +1733,6 @@ def confirm_agent_action(proposal_id):
         return agent_action_error(exc)
 
 
-@app.route("/api/agent/actions/<int:proposal_id>/cancel", methods=["POST"])
 def cancel_agent_action(proposal_id):
     try:
         require_local_action_origin()
@@ -1764,7 +1758,6 @@ def agent_access_denied():
     return jsonify({"success": False, "message": "当前本地版本仅允许访问当前用户数据"}), 403
 
 
-@app.route("/api/agent/conversations", methods=["POST"])
 def create_agent_conversation():
     data = request.get_json() or {}
     user_id = require_agent_user(data.get("user_id", AGENT_USER_ID))
@@ -1776,7 +1769,6 @@ def create_agent_conversation():
     return jsonify({"success": True, "conversation": conversation}), 201
 
 
-@app.route("/api/agent/conversations/<int:user_id>", methods=["GET"])
 def list_agent_conversations(user_id):
     if require_agent_user(user_id) is None:
         return agent_access_denied()
@@ -1784,7 +1776,6 @@ def list_agent_conversations(user_id):
     return jsonify({"success": True, "conversations": conversations})
 
 
-@app.route("/api/agent/conversations/<conversation_id>/messages", methods=["GET"])
 def list_agent_conversation_messages(conversation_id):
     user_id = require_agent_user(request.args.get("user_id", AGENT_USER_ID))
     if user_id is None:
@@ -1795,7 +1786,6 @@ def list_agent_conversation_messages(conversation_id):
     return jsonify({"success": True, "messages": messages})
 
 
-@app.route("/api/agent/conversations/<conversation_id>/clear", methods=["POST"])
 def clear_agent_conversation(conversation_id):
     data = request.get_json() or {}
     user_id = require_agent_user(data.get("user_id", AGENT_USER_ID))
@@ -1806,7 +1796,6 @@ def clear_agent_conversation(conversation_id):
     return jsonify({"success": True, "message": "当前会话已清空"})
 
 
-@app.route("/api/agent/chat", methods=["POST"])
 def agent_chat():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -1878,7 +1867,6 @@ def agent_chat():
     })
 
 
-@app.route("/api/agent/clear-memory", methods=["POST"])
 def agent_clear_memory():
     """Deprecated compatibility endpoint; only clears one owned conversation."""
     data = request.get_json() or {}
