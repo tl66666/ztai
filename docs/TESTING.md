@@ -89,7 +89,7 @@ node --test tests/browser/job_hunter_flow.spec.js
 
 - Chromium、Firefox、已安装的 Edge；缺少的浏览器输出明确 SKIP 原因，不冒充通过。
 - `1440x900` 桌面和 `390x844` 移动视口；Chromium 另做中间宽度几何 smoke。
-- 每个组合使用独立空闲回环端口、临时 SQLite 和 Flask 子进程。
+- 每个组合使用独立回环端口、临时数据库、FastAPI 子进程和 Vite 静态服务。
 - 关闭所有模型 Key，走确定性本地 Agent，避免测试依赖外部模型。
 - 完成职业档案、简历、JD 匹配、机会、Agent 提案确认、面试恢复、阶段更新和可见时间线。
 - 检查项目资源 404、页面异常、控制台 error、横向溢出、关键遮挡和 Agent 桌面/移动布局。
@@ -124,7 +124,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-start.ps1
 ## 6. 静态检查
 
 ```powershell
-python -m compileall -q app.py config.py utils tests
+uv run python -m compileall -q backend utils tests
 node --check static/js/app.js
 node --check static/js/browser_capabilities.js
 node --check tests/browser/job_hunter_flow.spec.js
@@ -153,7 +153,7 @@ node tests/agent_request_races.test.js
 node tests/js/test_opportunity_handoffs.js
 node tests/js/test_opportunity_history.js
 node tests/js/test_opportunity_load_generation.js
-python -m compileall -q app.py config.py utils tests
+uv run python -m compileall -q backend utils tests
 node --check static/js/app.js
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-start.ps1
 git diff --check

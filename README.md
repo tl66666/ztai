@@ -4,7 +4,7 @@
 
 [在线项目展示](https://tl66666.github.io/ztai/static/showcase.html) · [项目交接](docs/PROJECT_HANDOFF.md) · [用户指南](docs/USER_GUIDE.md) · [Agent 双模式](docs/AGENT_MODES.md) · [架构说明](docs/ARCHITECTURE.md) · [测试指南](docs/TESTING.md) · [简历项目素材](docs/RESUME_PROJECT_ENTRY.md) · [版本记录](CHANGELOG.md)
 
-> GitHub Pages 只展示真实产品截图和设计说明。完整系统需要在本机启动，数据默认保存在本机 SQLite 数据库中。
+> 本地开发默认使用 SQLite 和本地文件存储；生产目标为 Cloudflare 前端、Ubuntu FastAPI、PostgreSQL 与 R2。
 
 ## 它解决什么问题
 
@@ -64,28 +64,8 @@ uv sync --frozen
 uv run python -m backend.cli
 ```
 
-默认访问 `http://127.0.0.1:5000`。当前兼容数据层仍是 SQLite，因此保持单 worker 和回环地址。
-
-Windows 的 `start.bat` / `start-jobhunter.ps1` 仅作为旧版本地便捷入口保留，不是未来 Ubuntu 生产部署方式。
-
-### Windows 旧版便捷启动
-
-要求：Windows 10/11、Python 3.11 或更高版本。建议安装 Microsoft Edge、Google Chrome 或 Mozilla Firefox。
-
-1. 下载或克隆仓库。
-2. 双击 `start.bat`。
-3. 启动器会检查 Python 和依赖、选择可用且浏览器允许的端口、启动服务并打开系统默认浏览器。
-4. 关闭启动器窗口或按 `Ctrl+C`，它只会停止自己创建的服务进程。
-
-常用参数：
-
-```powershell
-.\start.bat -NoBrowser
-.\start.bat -Port 5050
-.\start.bat -SkipInstall -Diagnostics
-```
-
-启动日志位于 `output/runtime/`。启动器不会结束占用目标端口的其他程序，而会安全选择下一个可用端口。
+默认后端访问 `http://127.0.0.1:5000`。前端开发使用 `npm run dev`；Windows、macOS
+与 Linux 均使用相同命令，不再维护 PowerShell 或批处理启动链。
 
 ## 传统 pip 兼容启动
 
@@ -114,7 +94,8 @@ DEEPSEEK_API_KEY="你的 Key" uv run python -m backend.cli
 - 上传文件位于 `uploads/`，导出文件位于 `exports/`；这些目录和数据库均被 Git 忽略。
 - Agent 写操作必须经过提案确认，确认接口限制为同端口回环来源。
 - 业务表是实时事实来源；长期记忆只保存确认过的偏好、摘要和结果引用，避免复制整份简历。
-- 当前没有账号、登录、权限管理和云同步。不要把监听地址改为局域网或公网后交给不受信任用户使用。
+- 本地模式使用固定开发身份；公开部署必须配置 Cloudflare Access、精确邮箱 allowlist、
+  PostgreSQL 与 R2，不能把 `local` 认证模式直接暴露到公网。
 
 ## 浏览器与可选能力
 
@@ -128,13 +109,15 @@ DEEPSEEK_API_KEY="你的 Key" uv run python -m backend.cli
 
 ## 技术设计
 
-- 后端：FastAPI 统一 ASGI 入口；Flask、SQLite、FTS5 是当前兼容 adapter。
-- 前端：当前为模块化原生 HTML/CSS/JavaScript；目标为 Vanilla TypeScript + Vite。
-- 业务层：版本化数据库迁移、职业领域服务、持久化面试会话、领域事件。
+- 后端：FastAPI 模块化单体、Pydantic、Uvicorn；没有 Flask/WSGI 兼容层。
+- 前端：React 19、strict TypeScript、Vite 单一 ESM graph，复用原页面 DOM/CSS。
+- 数据：SQLAlchemy 2 + Alembic；SQLite 本地 adapter、PostgreSQL 生产 adapter。
+- 文件与任务：Local/R2 `BlobStorage`、opaque `BlobRef`、可恢复 `background_jobs` worker。
 - Agent：22 个结构化工具、有界编排循环、本地确定性多工具规划、分层记忆、上下文重建、确认式动作、幂等回执。
-- 测试：Python `unittest`、Node test runner、Playwright 浏览器矩阵、Windows 启动 smoke。
+- 测试：Python `unittest`、Vitest、Node test runner、Playwright 浏览器矩阵、跨平台启动 smoke。
 
-目标生产栈与渐进迁移状态见[生产架构](docs/PRODUCTION_ARCHITECTURE.md)。FastAPI 已成为统一 ASGI 运行入口；Flask/SQLite/经典 JavaScript 当前只作为保持功能的兼容层，不能在认证和用户隔离完成前直接公开部署。
+生产拓扑与配置见[生产架构](docs/PRODUCTION_ARCHITECTURE.md)。SQLite 和本地文件只作为
+本地 adapter；生产公开前仍需在真实 PostgreSQL、R2 与 Cloudflare Access 环境完成验收。
 
 本项目目前没有引入 LangChain/LangGraph。现有问题的核心是业务事实、工具边界、记忆质量和交互闭环，而不是缺少编排框架；轻量自研运行时更符合本地单体应用，也更容易审计。具体取舍和未来引入条件见[架构说明](docs/ARCHITECTURE.md)。
 
@@ -142,15 +125,15 @@ DEEPSEEK_API_KEY="你的 Key" uv run python -m backend.cli
 
 运行完整 Python 测试：
 
-```powershell
-python -m unittest discover -s tests -p "test_*.py" -v
+```bash
+uv run python -m unittest discover -s tests -p "test_*.py"
 ```
 
 浏览器测试、静态检查和干净路径启动验证见[测试指南](docs/TESTING.md)。发布前必须通过仓库卫生测试，禁止提交真实 Key、数据库、个人简历、音频、运行日志和 Playwright 产物。
 
 ## 已知限制
 
-- 当前是本地单用户版本，没有认证、多人协作和云端同步。
+- 当前身份模型是单租户 allowlist，不提供组织级多人协作和权限管理。
 - 本地规则模式可执行确定性任务，但不能替代高质量大模型的开放式表达。
 - 薪资估算、匹配分和准备度是求职辅助信息，不是招聘结果保证。
 - Web Speech 支持取决于浏览器和系统；始终保留文字与文件上传路径。
