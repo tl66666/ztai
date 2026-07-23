@@ -161,6 +161,53 @@ class FastAPIRuntimeTests(unittest.TestCase):
             self.assertTrue(first_settings.db_path.exists())
             self.assertFalse(second_settings.db_path.exists())
 
+    def test_application_factories_keep_ai_configuration_isolated(self):
+        with (
+            tempfile.TemporaryDirectory() as first_directory,
+            tempfile.TemporaryDirectory() as second_directory,
+        ):
+            first_root = Path(first_directory)
+            second_root = Path(second_directory)
+            first_settings = Settings(
+                environment="test",
+                db_path=first_root / "jobhunter.db",
+                upload_folder=first_root / "uploads",
+                export_folder=first_root / "exports",
+                ai_config_path=first_root / "runtime" / "ai.json",
+            )
+            second_settings = Settings(
+                environment="test",
+                db_path=second_root / "jobhunter.db",
+                upload_folder=second_root / "uploads",
+                export_folder=second_root / "exports",
+                ai_config_path=second_root / "runtime" / "ai.json",
+            )
+            first_application = create_application(first_settings)
+            second_application = create_application(second_settings)
+
+            with (
+                TestClient(first_application) as first_client,
+                TestClient(second_application) as second_client,
+            ):
+                configured = first_client.post(
+                    "/api/config/ai-key",
+                    json={
+                        "provider": "deepseek",
+                        "model": "deepseek-chat",
+                        "api_key": "first-runtime-key",
+                    },
+                )
+                first_status = first_client.get("/api/config/ai-status")
+                second_status = second_client.get("/api/config/ai-status")
+
+            self.assertEqual(configured.status_code, 200)
+            self.assertTrue(first_status.json()["ai_enabled"])
+            self.assertEqual(first_status.json()["provider"], "deepseek")
+            self.assertFalse(second_status.json()["ai_enabled"])
+            self.assertEqual(second_status.json()["provider"], "glm")
+            self.assertTrue(first_settings.ai_config_path.is_file())
+            self.assertFalse(second_settings.ai_config_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

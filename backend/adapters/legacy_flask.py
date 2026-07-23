@@ -7,6 +7,7 @@ from pathlib import Path
 from types import ModuleType
 
 from backend.core.settings import Settings
+from utils.ai_client import AIClientManager
 
 
 class LegacyFlaskAdapter:
@@ -14,6 +15,11 @@ class LegacyFlaskAdapter:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        ai_config_path = (
+            settings.ai_config_path
+            or settings.db_path.parent / "runtime" / "ai-config.json"
+        )
+        self.ai_client_manager = AIClientManager(ai_config_path)
         self._legacy = self._load_isolated_application_module()
         self._configure()
 
@@ -66,6 +72,8 @@ class LegacyFlaskAdapter:
         legacy.UPLOAD_FOLDER = str(self.settings.upload_folder)
         legacy.EXPORT_FOLDER = str(self.settings.export_folder)
         legacy.app.config["UPLOAD_FOLDER"] = str(self.settings.upload_folder)
+        legacy.get_ai_client = self.ai_client_manager.get_ai_client
+        legacy.set_api_key = self.ai_client_manager.set_api_key
         legacy._agent_service = None
         legacy._agent_action_service = None
         legacy._interview_service = None

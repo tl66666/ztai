@@ -44,6 +44,7 @@ class Settings:
     port: int = 5000
     workers: int = 1
     max_upload_bytes: int = 20 * 1024 * 1024
+    ai_config_path: Path | None = None
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -95,5 +96,12 @@ class Settings:
             workers=workers,
             max_upload_bytes=int(
                 os.environ.get("JOBHUNTER_MAX_UPLOAD_BYTES", 20 * 1024 * 1024)
+            ),
+            ai_config_path=_path(
+                project_root,
+                os.environ.get(
+                    "JOBHUNTER_AI_CONFIG_PATH",
+                    "output/runtime/ai-config.json",
+                ),
             ),
         )

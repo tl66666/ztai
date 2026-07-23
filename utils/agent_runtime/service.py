@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict
 
 from utils.agent_runtime.context import ContextBuilder
@@ -11,11 +12,22 @@ from utils.ai_client import get_ai_client
 
 
 class AgentService:
-    def __init__(self, db_path: str):
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        ai_client_provider: Callable | None = None,
+    ):
         self.db_path = db_path
+        self.ai_client_provider = ai_client_provider or (
+            lambda: get_ai_client()
+        )
         create_agent_tables(db_path)
         self.store = MemoryStore(db_path)
-        self.tools = build_tool_registry(db_path)
+        self.tools = build_tool_registry(
+            db_path,
+            ai_client_provider=self.ai_client_provider,
+        )
         self.context_builder = ContextBuilder(self.store, db_path)
 
     def create_conversation(self, user_id: int, title: str = "新对话") -> dict:
@@ -48,7 +60,7 @@ class AgentService:
 
         self.store.name_conversation_from_message(conversation_id, user_id, message)
 
-        client = get_ai_client()
+        client = self.ai_client_provider()
         policy = (
             LocalPolicy()
             if LocalPolicy.prefers_local_routing(message) or not client.api_key

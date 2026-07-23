@@ -1727,7 +1727,10 @@ def get_agent_service():
     from utils.agent_runtime.service import AgentService
 
     if _agent_service is None or _agent_service.db_path != DB_PATH:
-        _agent_service = AgentService(DB_PATH)
+        _agent_service = AgentService(
+            DB_PATH,
+            ai_client_provider=get_ai_client,
+        )
     return _agent_service
 
 

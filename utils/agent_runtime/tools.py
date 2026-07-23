@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import ipaddress
 import json
 import math
@@ -9,18 +8,23 @@ import re
 import socket
 import sqlite3
 import time
+from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import urlparse
 
 import requests
 
-from utils.agent_runtime.memory import ClosingConnection
-from utils.agent_runtime.models import ToolResult
-from utils.agent_runtime.resume_draft import local_resume_diagnosis, local_resume_draft, model_resume_draft
 from utils.agent_runtime.actions import (
     PROPOSAL_STATUSES,
     ActionProposalService,
     career_action_tool_schema,
+)
+from utils.agent_runtime.memory import ClosingConnection
+from utils.agent_runtime.models import ToolResult
+from utils.agent_runtime.resume_draft import (
+    local_resume_diagnosis,
+    local_resume_draft,
+    model_resume_draft,
 )
 from utils.ai_client import extract_keywords, get_ai_client
 from utils.domain.career import ACTION_STATUSES, CareerService
@@ -32,6 +36,7 @@ class ToolContext:
     user_id: int
     db_path: str
     deadline: float
+    ai_client_provider: Callable
 
     def remaining_seconds(self) -> float:
         return self.deadline - time.monotonic()
@@ -214,9 +219,17 @@ def _matches_schema_type(expected: str, value) -> bool:
 
 
 class ToolRegistry:
-    def __init__(self, db_path: str, local_user_id: int = 1):
+    def __init__(
+        self,
+        db_path: str,
+        local_user_id: int = 1,
+        ai_client_provider: Callable | None = None,
+    ):
         self.db_path = db_path
         self.local_user_id = int(local_user_id)
+        self.ai_client_provider = ai_client_provider or (
+            lambda: get_ai_client()
+        )
         self._tools: dict[str, ToolDefinition] = {}
 
     def register(self, definition: ToolDefinition) -> None:
@@ -282,6 +295,7 @@ class ToolRegistry:
                 user_id=self.local_user_id,
                 db_path=self.db_path,
                 deadline=time.monotonic() + effective_timeout,
+                ai_client_provider=self.ai_client_provider,
             )
             result = definition.executor(safe_arguments, context)
             context.check_timeout()
@@ -389,7 +403,7 @@ def _prepare_resume_revision(arguments: dict, context: ToolContext) -> ToolResul
         return resume
     profile = CareerService(context.db_path, local_user_id=context.user_id).get_profile(context.user_id) or {}
     target_role = str(arguments.get("target_job_title") or profile.get("target_role") or "").strip()
-    client = get_ai_client()
+    client = context.ai_client_provider()
     draft = (
         model_resume_draft(
             client,
@@ -734,8 +748,15 @@ def _fetch_webpage(arguments: dict, context: ToolContext) -> ToolResult:
     return ToolResult(bool(text), data={"url": url, "text": text}, display_text=text, error_code="" if text else "empty_content")
 
 
-def build_tool_registry(db_path: str) -> ToolRegistry:
-    registry = ToolRegistry(db_path)
+def build_tool_registry(
+    db_path: str,
+    *,
+    ai_client_provider: Callable | None = None,
+) -> ToolRegistry:
+    registry = ToolRegistry(
+        db_path,
+        ai_client_provider=ai_client_provider,
+    )
     definitions = [
         ToolDefinition("list_resumes", "列出当前用户保存的简历元数据。", _object(), _list_resumes),
         ToolDefinition("get_resume", "读取当前用户指定或最近一份简历的完整正文。", _object({"resume_id": {"type": "integer"}}), _get_resume),
