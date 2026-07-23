@@ -71,9 +71,9 @@ Ubuntu FastAPI、PostgreSQL 与 R2；不得把本地认证模式直接公开。
 ## 7. 接手与验证入口
 
 1. 阅读 [用户指南](USER_GUIDE.md)、[Agent 双模式](AGENT_MODES.md) 和 [架构说明](ARCHITECTURE.md)。
-2. 跨平台开发执行 `uv sync --frozen` 和 `uv run python -m backend.cli`；Windows 的 `start.bat` 仅为旧版兼容入口。
+2. 跨平台开发执行 `uv sync --frozen`、`uv run python -m backend.cli` 和 `npm run dev`。
 3. 运行 Python 全量测试：`uv run python -m unittest discover -s tests -p "test_*.py" -v`。
-4. 静态、浏览器、启动器和发布门禁的命令见 [测试指南](TESTING.md)。
+4. 静态、浏览器、跨平台运行和发布门禁的命令见 [测试指南](TESTING.md)。
 5. 项目展示页仅用于阅读真实界面和设计说明；业务流程必须在本地应用中体验。
 
 ## 8. 已知限制与后续路线
