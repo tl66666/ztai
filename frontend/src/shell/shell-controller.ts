@@ -1,3 +1,5 @@
+import { notifyPageRendered } from "../shared/browser-events";
+
 type HistoryMode = "push" | "replace" | "none";
 
 interface Route {
@@ -113,6 +115,7 @@ export function createShellController(
     if (title) title.textContent = pageTitles[page] || "JobHunter AI";
     syncAgentContext();
     if (page === "agent") loadAgentCommandCenter();
+    notifyPageRendered(windowObject, page);
     windowObject.scrollTo({ top: 0, behavior: "smooth" });
   }
 

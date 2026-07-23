@@ -9,8 +9,16 @@ class AgentFrontendContractTests(unittest.TestCase):
     def test_agent_has_one_product_identity_and_a_separate_command_dashboard(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
         javascript = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        navigation = (
+            ROOT / "frontend" / "src" / "shell" / "navigation-model.ts"
+        ).read_text(encoding="utf-8")
+        sidebar = (
+            ROOT / "frontend" / "src" / "shell" / "sidebar.tsx"
+        ).read_text(encoding="utf-8")
 
-        self.assertIn('<span>求职指挥台</span>', html)
+        self.assertIn('label: "求职指挥台"', navigation)
+        self.assertIn("<span>{label}</span>", sidebar)
+        self.assertIn('id="reactAppRoot"', html)
         self.assertIn('Agent 运行看板', html)
         self.assertIn('这里不重复聊天', html)
         self.assertIn('打开求职 Agent', html)

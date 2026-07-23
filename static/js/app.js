@@ -104,7 +104,7 @@ const shellController = JobHunterShellController.createShellController({
   windowObject: window,
   documentObject: document,
 });
-const resumeController = JobHunterResumeController.create({
+const resumeController = JobHunterResumeController.createResumeController({
   userId: USER_ID,
   apiBaseUrl: API,
   state,
@@ -125,7 +125,7 @@ const resumeController = JobHunterResumeController.create({
   buildMatchPayload,
   downloadResponse,
 });
-const interviewController = JobHunterInterviewController.create({
+const interviewController = JobHunterInterviewController.createInterviewController({
   userId: USER_ID,
   apiBaseUrl: API,
   state,
@@ -165,7 +165,7 @@ const opportunityHistory = OpportunityHistory.createOpportunityHistoryController
     }
   },
 });
-const opportunityController = JobHunterOpportunityController.create({
+const opportunityController = JobHunterOpportunityController.createOpportunityController({
   userId: USER_ID,
   state,
   request: api,
