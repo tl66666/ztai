@@ -142,6 +142,7 @@ class DomainMigrationTests(unittest.TestCase):
             with connect(db_path) as conn:
                 columns = [row[1] for row in conn.execute('PRAGMA table_info("items")')]
             self.assertEqual(columns.count("note"), 1)
+
     def test_publishes_canonical_application_statuses_and_legacy_map(self):
         self.assertEqual(APPLICATION_STATUSES, EXPECTED_APPLICATION_STATUSES)
         self.assertEqual(LEGACY_STATUS_MAP["面试中"], "一面")
@@ -179,14 +180,13 @@ class DomainMigrationTests(unittest.TestCase):
                 )
 
             import app as app_module
+
             original_path = app_module.DB_PATH
             try:
                 app_module.DB_PATH = db_path
                 app_module.init_db()
                 with connect(db_path) as conn:
-                    local_user = conn.execute(
-                        "SELECT id FROM users WHERE id = 1"
-                    ).fetchone()
+                    local_user = conn.execute("SELECT id FROM users WHERE id = 1").fetchone()
                     conn.execute(
                         "INSERT INTO resumes(user_id,title,content) VALUES (1,'简历','正文')"
                     )
@@ -211,6 +211,7 @@ class DomainMigrationTests(unittest.TestCase):
                 )
 
             import app as app_module
+
             original_path = app_module.DB_PATH
             try:
                 app_module.DB_PATH = db_path
@@ -237,18 +238,14 @@ class DomainMigrationTests(unittest.TestCase):
                 ).fetchone()[0]
                 tables = {
                     row[0]
-                    for row in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'table'"
-                    )
+                    for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
                 }
                 columns = {
-                    table: {
-                        row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')
-                    }
+                    table: {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
                     for table in REQUIRED_COLUMNS
                 }
 
-            self.assertEqual(version, 4)
+            self.assertEqual(version, 5)
             self.assertEqual(status, "一面")
             self.assertTrue(REQUIRED_TABLES.issubset(tables))
             for table, required in REQUIRED_COLUMNS.items():
@@ -256,7 +253,7 @@ class DomainMigrationTests(unittest.TestCase):
             self.assertFalse(os.path.exists(f"{db_path}.backup-v0"))
 
     def test_first_migration_backs_up_a_persistent_database(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory():
             persistent_dir = os.path.join(os.getcwd(), ".migration-test-data")
             os.makedirs(persistent_dir, exist_ok=True)
             db_path = os.path.join(persistent_dir, f"legacy-{uuid.uuid4().hex}.db")
@@ -283,9 +280,7 @@ class DomainMigrationTests(unittest.TestCase):
                     os.rmdir(persistent_dir)
 
     def test_backup_includes_committed_wal_state_while_connection_is_open(self):
-        persistent_dir = os.path.join(
-            os.getcwd(), f".migration-wal-test-{uuid.uuid4().hex}"
-        )
+        persistent_dir = os.path.join(os.getcwd(), f".migration-wal-test-{uuid.uuid4().hex}")
         os.makedirs(persistent_dir)
         db_path = os.path.join(persistent_dir, "legacy.db")
         backup_path = f"{db_path}.backup-v0"
@@ -378,12 +373,10 @@ class DomainMigrationTests(unittest.TestCase):
                 }
                 indexes = {
                     row[0]
-                    for row in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'index'"
-                    )
+                    for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
                 }
 
-            self.assertEqual(version, 4)
+            self.assertEqual(version, 5)
             self.assertIn("source_session_id", interview_columns)
             self.assertTrue(
                 {
@@ -415,16 +408,11 @@ class DomainMigrationTests(unittest.TestCase):
             with connect(db_path) as conn:
                 version = conn.execute("PRAGMA user_version").fetchone()[0]
                 columns = {
-                    row[1]
-                    for row in conn.execute(
-                        'PRAGMA table_info("agent_action_proposals")'
-                    )
+                    row[1] for row in conn.execute('PRAGMA table_info("agent_action_proposals")')
                 }
                 indexes = {
                     row[0]
-                    for row in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'index'"
-                    )
+                    for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
                 }
                 legacy = conn.execute(
                     """
@@ -434,7 +422,7 @@ class DomainMigrationTests(unittest.TestCase):
                     """
                 ).fetchone()
 
-            self.assertEqual(version, 4)
+            self.assertEqual(version, 5)
             self.assertTrue(
                 {
                     "arguments_json",
@@ -473,15 +461,10 @@ class DomainMigrationTests(unittest.TestCase):
 
             with connect(db_path) as conn:
                 version = conn.execute("PRAGMA user_version").fetchone()[0]
-                columns = {
-                    row[1]
-                    for row in conn.execute('PRAGMA table_info("domain_events")')
-                }
+                columns = {row[1] for row in conn.execute('PRAGMA table_info("domain_events")')}
                 indexes = {
                     row[0]
-                    for row in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'index'"
-                    )
+                    for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
                 }
                 event_values = (
                     1,
@@ -511,7 +494,7 @@ class DomainMigrationTests(unittest.TestCase):
                         event_values,
                     )
 
-            self.assertEqual(version, 4)
+            self.assertEqual(version, 5)
             self.assertIn("source", columns)
             self.assertIn("idx_domain_events_agent_source_receipt", indexes)
 

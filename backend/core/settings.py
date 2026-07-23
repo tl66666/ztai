@@ -49,41 +49,29 @@ class Settings:
     cloudflare_access_team_domain: str = ""
     cloudflare_access_audience: str = ""
     allowed_identity_emails: tuple[str, ...] = ()
+    local_user_id: int = 1
 
     @classmethod
     def from_environment(cls) -> Settings:
         default_root = Path(__file__).resolve().parents[2]
-        project_root = Path(
-            os.environ.get("JOBHUNTER_PROJECT_ROOT", default_root)
-        ).expanduser().resolve()
+        project_root = (
+            Path(os.environ.get("JOBHUNTER_PROJECT_ROOT", default_root)).expanduser().resolve()
+        )
         host = os.environ.get("JOBHUNTER_HOST", "127.0.0.1").strip()
         auth_mode = os.environ.get("JOBHUNTER_AUTH_MODE", "local").strip()
         if auth_mode not in {"local", "cloudflare_access"}:
-            raise ValueError(
-                "JOBHUNTER_AUTH_MODE must be local or cloudflare_access"
-            )
-        team_domain = os.environ.get(
-            "JOBHUNTER_CF_ACCESS_TEAM_DOMAIN", ""
-        ).strip()
-        audience = os.environ.get(
-            "JOBHUNTER_CF_ACCESS_AUDIENCE", ""
-        ).strip()
-        allowed_identity_emails = _csv(
-            "JOBHUNTER_ALLOWED_IDENTITY_EMAILS"
-        )
+            raise ValueError("JOBHUNTER_AUTH_MODE must be local or cloudflare_access")
+        team_domain = os.environ.get("JOBHUNTER_CF_ACCESS_TEAM_DOMAIN", "").strip()
+        audience = os.environ.get("JOBHUNTER_CF_ACCESS_AUDIENCE", "").strip()
+        allowed_identity_emails = _csv("JOBHUNTER_ALLOWED_IDENTITY_EMAILS")
         if auth_mode == "cloudflare_access" and (
-            not team_domain
-            or not audience
-            or not allowed_identity_emails
+            not team_domain or not audience or not allowed_identity_emails
         ):
             raise ValueError(
                 "Cloudflare Access authentication requires team domain, "
                 "audience, and at least one allowed identity email"
             )
-        if (
-            host not in {"127.0.0.1", "localhost", "::1"}
-            and auth_mode != "cloudflare_access"
-        ):
+        if host not in {"127.0.0.1", "localhost", "::1"} and auth_mode != "cloudflare_access":
             raise ValueError(
                 "JOBHUNTER_HOST may be public only when Cloudflare Access "
                 "authentication is configured"
@@ -103,6 +91,9 @@ class Settings:
             "JOBHUNTER_ALLOWED_HOSTS",
             ("localhost", "127.0.0.1", "testserver"),
         )
+        local_user_id = int(os.environ.get("JOBHUNTER_AGENT_USER_ID", "1"))
+        if local_user_id <= 0:
+            raise ValueError("JOBHUNTER_AGENT_USER_ID must be positive")
         if auth_mode == "cloudflare_access":
             if (
                 "JOBHUNTER_ALLOWED_ORIGINS" not in os.environ
@@ -139,9 +130,7 @@ class Settings:
             host=host,
             port=port,
             workers=workers,
-            max_upload_bytes=int(
-                os.environ.get("JOBHUNTER_MAX_UPLOAD_BYTES", 20 * 1024 * 1024)
-            ),
+            max_upload_bytes=int(os.environ.get("JOBHUNTER_MAX_UPLOAD_BYTES", 20 * 1024 * 1024)),
             ai_config_path=_path(
                 project_root,
                 os.environ.get(
@@ -153,4 +142,5 @@ class Settings:
             cloudflare_access_team_domain=team_domain,
             cloudflare_access_audience=audience,
             allowed_identity_emails=allowed_identity_emails,
+            local_user_id=local_user_id,
         )

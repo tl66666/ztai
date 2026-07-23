@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any, BinaryIO
 
-from backend.adapters.legacy_training import LegacyTrainingLogic
 from backend.adapters.persistence import TrainingRepository
 from backend.adapters.training_audio import LocalTrainingAudioStorage
+
+from .training_logic import TrainingLogic
 
 
 class TrainingModule:
@@ -15,7 +16,7 @@ class TrainingModule:
         self,
         repository: TrainingRepository,
         audio_storage: LocalTrainingAudioStorage,
-        logic: LegacyTrainingLogic,
+        logic: TrainingLogic,
         *,
         local_user_id: int,
     ):
@@ -57,9 +58,7 @@ class TrainingModule:
             parsed_metrics = {}
         metrics = parsed_metrics if isinstance(parsed_metrics, dict) else {}
         saved_name = (
-            self._audio_storage.store(audio, audio_name)
-            if audio is not None and audio_name
-            else ""
+            self._audio_storage.store(audio, audio_name) if audio is not None and audio_name else ""
         )
         result = self._logic.analyze_voice(
             clean_transcript,
@@ -100,9 +99,7 @@ class TrainingModule:
             }
             for item in base_questions[:5]
         ]
-        questions.extend(
-            self._logic.project_questions(category, job_title, level)
-        )
+        questions.extend(self._logic.project_questions(category, job_title, level))
         profile = self._logic.profiles[profile_key]
         return {
             "success": True,
@@ -156,9 +153,7 @@ class TrainingModule:
             for word in ("首先", "其次", "最后", "背景", "任务", "行动", "结果", "因此")
         )
         score = int(voice["overall_score"])
-        if category in {"test", "python", "frontend", "ai"} or (
-            category in self._logic.profiles
-        ):
+        if category in {"test", "python", "frontend", "ai"} or (category in self._logic.profiles):
             score = min(96, score + min(12, len(technical_terms) * 3))
         if not structure_hit:
             score = max(35, score - 8)
@@ -181,13 +176,9 @@ class TrainingModule:
             "problems": [
                 item
                 for item in (
-                    None
-                    if structure_hit
-                    else "回答缺少清晰结构，建议使用“结论-步骤-结果”。",
+                    None if structure_hit else "回答缺少清晰结构，建议使用“结论-步骤-结果”。",
                     None if len(answer) >= 80 else "回答偏短，需要补充例子或项目经历。",
-                    None
-                    if technical_terms
-                    else "专业关键词较少，建议加入工具、方法或指标。",
+                    None if technical_terms else "专业关键词较少，建议加入工具、方法或指标。",
                 )
                 if item
             ],
@@ -253,9 +244,7 @@ class TrainingModule:
     def _audio_summary(result: dict[str, Any], saved_name: str) -> str:
         metrics = result.get("audio_metrics") or {}
         file_note = (
-            "已保存录音，可用于复盘。"
-            if saved_name
-            else "未保存音频文件，仅使用浏览器侧音频指标。"
+            "已保存录音，可用于复盘。" if saved_name else "未保存音频文件，仅使用浏览器侧音频指标。"
         )
         return (
             f"{file_note} 本次语速为 {result['estimated_speech_rate']} 字/分钟，"

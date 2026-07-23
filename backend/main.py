@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 
-from a2wsgi import WSGIMiddleware
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -14,6 +13,7 @@ from backend.api.career import create_career_router
 from backend.api.career_insights import create_career_insights_router
 from backend.api.interviews import create_interview_router
 from backend.api.opportunities import create_opportunity_router
+from backend.api.platform import create_platform_router
 from backend.api.resume_intelligence import create_resume_intelligence_router
 from backend.api.resumes import create_resume_router
 from backend.api.system import create_system_router
@@ -39,7 +39,7 @@ def create_application(
     container = ApplicationContainer(runtime_settings)
     identity_provider = principal_provider or _principal_provider(
         runtime_settings,
-        local_user_id=container.legacy.local_user_id,
+        local_user_id=container.local_user_id,
     )
 
     @asynccontextmanager
@@ -100,12 +100,17 @@ def create_application(
     application.include_router(create_career_insights_router(lambda: container.career_insights))
     application.include_router(create_interview_router(lambda: container.interviews))
     application.include_router(create_opportunity_router(lambda: container.opportunities))
+    application.include_router(
+        create_platform_router(
+            lambda: container.runtime_config,
+            lambda: container.file_utilities,
+        )
+    )
     application.include_router(create_resume_router(lambda: container.resumes))
     application.include_router(
         create_resume_intelligence_router(lambda: container.resume_intelligence)
     )
     application.include_router(create_training_router(lambda: container.training))
-    application.mount("/", WSGIMiddleware(container.legacy.application))
     return application
 
 

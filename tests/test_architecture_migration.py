@@ -62,6 +62,24 @@ class ArchitectureMigrationTests(unittest.TestCase):
 
         self.assertFalse([path for path in retired_paths if (ROOT / path).exists()])
 
+    def test_asgi_runtime_has_no_wsgi_or_app_module_dependency(self) -> None:
+        backend_sources = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (ROOT / "backend").rglob("*.py")
+        )
+
+        self.assertNotIn("a2wsgi", backend_sources)
+        self.assertNotIn("WSGIMiddleware", backend_sources)
+        self.assertNotIn("legacy_flask", backend_sources)
+        self.assertNotIn("legacy_training", backend_sources)
+        self.assertNotIn("import app", backend_sources)
+        self.assertFalse(
+            (ROOT / "backend" / "adapters" / "legacy_flask.py").exists()
+        )
+        self.assertFalse(
+            (ROOT / "backend" / "adapters" / "legacy_training.py").exists()
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,7 +13,7 @@ from backend.main import create_application
 
 
 class FastAPIRuntimeTests(unittest.TestCase):
-    def test_native_health_and_legacy_routes_share_one_application(self):
+    def test_native_health_and_platform_routes_share_one_application(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             settings = Settings(
@@ -152,7 +152,7 @@ class FastAPIRuntimeTests(unittest.TestCase):
             ("owner@example.com",),
         )
 
-    def test_application_factories_keep_legacy_runtime_state_isolated(self):
+    def test_application_factories_keep_runtime_state_isolated(self):
         with (
             tempfile.TemporaryDirectory() as first_directory,
             tempfile.TemporaryDirectory() as second_directory,
