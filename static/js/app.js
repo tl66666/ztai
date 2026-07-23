@@ -62,7 +62,6 @@ function renderIcons() {
   }
 }
 
-const agentContext = ContextualAgent.createContextStore();
 const agentConversationEpoch = ContextualAgent.createConversationEpoch();
 const agentCommandCenterGate = ContextualAgent.createLatestRequestGate();
 const {
@@ -73,6 +72,38 @@ const {
   buildMatchPayload,
   routeLeavesFlow,
 } = OpportunityHandoffs;
+const PAGE_TITLES = {
+  home: "项目总览",
+  resume: "简历实验室",
+  interview: "面试训练场",
+  tracker: "投递看板",
+  agent: "求职指挥台",
+};
+const agentController = JobHunterAgentController.createAgentController({
+  state,
+  byId: $,
+  contextualAgent: ContextualAgent,
+  escapeHtml,
+  escapeAttr,
+  renderIcons,
+  loadCommandCenter: loadAgentCommandCenter,
+  documentObject: document,
+  windowObject: window,
+});
+const shellController = JobHunterShellController.createShellController({
+  state,
+  byId: $,
+  history: () => opportunityHistory,
+  playTone: playUiTone,
+  syncAgentContext,
+  loadAgentCommandCenter,
+  routeLeavesFlow,
+  clearApplicationHandoff,
+  clearMatchOpportunityLink,
+  pageTitles: PAGE_TITLES,
+  windowObject: window,
+  documentObject: document,
+});
 const resumeController = JobHunterResumeController.create({
   userId: USER_ID,
   apiBaseUrl: API,
@@ -117,13 +148,13 @@ const interviewController = JobHunterInterviewController.create({
 });
 const opportunityHistory = OpportunityHistory.createOpportunityHistoryController({
   window,
-  defaultModule: defaultModuleForPage,
-  onRouteTransition: handleRouteTransition,
-  focusRoute: focusCleanedRoute,
+  defaultModule: shellController.defaultModuleForPage,
+  onRouteTransition: shellController.handleRouteTransition,
+  focusRoute: shellController.focusCleanedRoute,
   showPage: (page) => {
-    if ($(`page-${page}`)) renderPage(page);
+    if ($(`page-${page}`)) shellController.renderPage(page);
   },
-  showModule: renderModule,
+  showModule: shellController.renderModule,
   loadWorkspace: loadOpportunityWorkspace,
   closeWorkspace: resetOpportunityWorkspaceView,
   notifyStale: () => toast("机会详情不存在或已删除，链接已重置。"),
@@ -195,46 +226,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 function bindNavigation() {
-  document.querySelectorAll("[data-page]").forEach((item) => {
-    item.addEventListener("click", () => {
-      playUiTone("jump");
-      navigateToRoute(item.dataset.page);
-    });
-  });
+  return shellController.bindNavigation();
 }
 
 function renderPage(page) {
-  if (state.currentPage !== page) state.currentModule = "";
-  state.currentPage = page;
-  document.querySelectorAll(".page").forEach((item) => item.classList.remove("active"));
-  $(`page-${page}`).classList.add("active");
-  document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.page === page));
-  const titles = {
-    home: "项目总览",
-    resume: "简历实验室",
-    interview: "面试训练场",
-    tracker: "投递看板",
-    agent: "求职指挥台",
-  };
-  $("pageTitle").textContent = titles[page] || "JobHunter AI";
-  syncAgentContext();
-  if (page === "agent") loadAgentCommandCenter();
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  return shellController.renderPage(page);
 }
 
 async function applyInitialRouteFromQuery() {
-  await opportunityHistory.sync();
-  const params = new URLSearchParams(window.location.search);
-  const record = params.get("record");
-  if (record === "audio") {
-    setTimeout(() => {
-      const audioCard = [...document.querySelectorAll(".record-card")].find((card) => card.textContent.includes("语音") || card.textContent.includes("录音") || card.textContent.includes("表达"));
-      audioCard?.querySelector(".record-actions button")?.click();
-    }, 500);
-  }
+  return shellController.applyInitialRoute();
 }
 
 function bindActions() {
+  agentController.bind();
   updateSoundButton();
   $("modelConfigBtn").addEventListener("click", () => {
     playUiTone("tap");
@@ -344,17 +348,6 @@ function bindActions() {
     tab.addEventListener("keydown", handleOpportunityTabKeydown);
   });
   $("salaryBtn").addEventListener("click", evaluateSalary);
-  $("agentLauncher")?.addEventListener("click", openAgentDrawer);
-$("openAgentWorkspace")?.addEventListener("click", openAgentDrawer);
-$("openAgentWorkspaceFromHelper")?.addEventListener("click", openAgentDrawer);
-  $("closeAgentDrawer")?.addEventListener("click", closeAgentDrawer);
-  $("agentDrawerBackdrop")?.addEventListener("click", closeAgentDrawer);
-  $("agentContextChips")?.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-remove-agent-context]");
-    if (!button) return;
-    agentContext.remove(button.dataset.removeAgentContext);
-    renderAgentContextChips();
-  });
   $("chatLog")?.addEventListener("click", handleAgentChatLogClick);
   $("agentResumeUpload")?.addEventListener("click", openResumeUploadFromAgent);
   $("sendAgentBtn").addEventListener("click", () => sendAgentMessage());
@@ -373,10 +366,6 @@ $("openAgentWorkspaceFromHelper")?.addEventListener("click", openAgentDrawer);
     }
   });
   $("resumeFile")?.addEventListener("change", fillResumeTitleFromFile);
-  ["analysisResumeSelect", "exportResumeSelect", "tailorResumeSelect", "skillResumeSelect", "interviewResumeSelect"].forEach((id) => {
-    $(id)?.addEventListener("change", syncAgentContext);
-  });
-  document.addEventListener("keydown", handleAgentDrawerKeydown);
   document.querySelectorAll("[data-prompt]").forEach((button) => {
     button.addEventListener("click", () => {
       $("agentInput").value = button.dataset.prompt;
@@ -605,54 +594,31 @@ function renderProviderLinks(providerId) {
 }
 
 function filterModules(page, module, activeButton) {
-  document.querySelectorAll(`[data-filter-page="${page}"] button`).forEach((button) => {
-    button.classList.toggle("active", button === activeButton);
-  });
-  document.querySelectorAll(`.module-panel[data-module-page="${page}"]`).forEach((panel) => {
-    panel.classList.toggle("is-filtered-out", panel.dataset.module !== module);
-  });
+  return shellController.filterModules(page, module, activeButton);
 }
 
 function renderModule(page, module) {
-  if (page === state.currentPage) state.currentModule = module || "";
-  const button = document.querySelector(`[data-section-filter="${page}:${module}"]`);
-  if (button) filterModules(page, module, button);
-  syncAgentContext();
+  return shellController.renderModule(page, module);
 }
 
 function navigateToRoute(page, module = null, options = {}) {
-  return opportunityHistory.navigate(page, { module, historyMode: options.historyMode || "push" });
+  return shellController.navigate(page, module, options);
 }
 
 function jumpToModule(page, module) {
-  return navigateToRoute(page, module);
+  return shellController.jumpToModule(page, module);
 }
 
 function defaultModuleForPage(page) {
-  return document.querySelector(`[data-filter-page="${page}"] [data-section-filter]`)
-    ?.dataset.sectionFilter.split(":")[1] || null;
+  return shellController.defaultModuleForPage(page);
 }
 
 function handleRouteTransition(previous, next) {
-  if (state.pendingApplicationHandoff && routeLeavesFlow(previous, next, "tracker", "add")) {
-    clearApplicationHandoff();
-  }
-  if (state.matchOpportunityId && routeLeavesFlow(previous, next, "resume", "jd")) {
-    clearMatchOpportunityLink();
-  }
-  if (state.interviewOpportunityHandoff && routeLeavesFlow(previous, next, "interview", "mock")) {
-    state.interviewOpportunityHandoff = null;
-  }
+  return shellController.handleRouteTransition(previous, next);
 }
 
 function focusCleanedRoute(route) {
-  const panel = route.module
-    ? document.querySelector(`.module-panel[data-module-page="${route.page}"][data-module="${route.module}"]:not(.is-filtered-out)`)
-    : null;
-  const target = panel?.querySelector("h2, h3") || $("pageTitle");
-  if (!target) return;
-  target.tabIndex = -1;
-  target.focus({ preventScroll: true });
+  return shellController.focusCleanedRoute(route);
 }
 
 function renderModelOptions(providerId, selectedModel = "") {
@@ -1198,106 +1164,27 @@ function renderNextActions(actions) {
 }
 
 function currentAgentResumeId() {
-  if (state.currentOpportunityWorkspace?.resume?.id) return state.currentOpportunityWorkspace.resume.id;
-  if (state.currentPage === "resume" && state.editingResumeId) return state.editingResumeId;
-  const selectors = {
-    "resume:analysis": "analysisResumeSelect",
-    "resume:export": "exportResumeSelect",
-    "resume:jd": "tailorResumeSelect",
-    "resume:skills": "skillResumeSelect",
-    "interview:mock": "interviewResumeSelect",
-  };
-  const id = selectors[`${state.currentPage}:${state.currentModule}`];
-  return id ? Number($(id)?.value || 0) || null : null;
+  return agentController.currentResumeId();
 }
 
 function syncAgentContext() {
-  if (!window.ContextualAgent) return;
-  agentContext.sync({
-    module: state.currentModule ? `${state.currentPage}:${state.currentModule}` : state.currentPage,
-    opportunityId: state.currentOpportunityId,
-    resumeId: currentAgentResumeId(),
-  });
-  renderAgentContextChips();
+  return agentController.syncContext();
 }
 
 function renderAgentContextChips() {
-  const box = $("agentContextChips");
-  if (!box) return;
-  const context = agentContext.payload();
-  const moduleLabels = {
-    home: "项目总览", resume: "简历实验室", interview: "面试训练场",
-    tracker: "投递看板", agent: "行动指挥台",
-  };
-  const values = [];
-  if (context.module) {
-    const [page, module] = context.module.split(":");
-    const moduleButton = module && document.querySelector(`[data-section-filter="${page}:${module}"]`);
-    values.push(["module", `模块：${moduleButton?.textContent?.trim() || moduleLabels[page] || page}`]);
-  }
-  if (context.opportunity_id) {
-    const opportunity = state.currentOpportunityWorkspace?.opportunity
-      || state.applications.find((item) => Number(item.id) === context.opportunity_id);
-    values.push(["opportunity", `机会：${opportunity ? `${opportunity.company} / ${opportunity.job_title}` : `#${context.opportunity_id}`}`]);
-  }
-  if (context.resume_id) {
-    const resume = state.resumes.find((item) => Number(item.id) === context.resume_id);
-    values.push(["resume", `简历：${resume?.title || `#${context.resume_id}`}`]);
-  }
-  box.innerHTML = values.length ? values.map(([kind, label]) => `
-    <span class="agent-context-chip">${escapeHtml(label)}<button type="button" data-remove-agent-context="${kind}" aria-label="移除${escapeAttr(label)}上下文" title="移除上下文"><i data-lucide="x"></i></button></span>
-  `).join("") : '<span class="agent-context-empty">未附加上下文</span>';
-  renderIcons();
+  return agentController.renderContextChips();
 }
 
 function openAgentDrawer(event) {
-  const drawer = $("agentDrawer");
-  if (!drawer || drawer.getAttribute("aria-hidden") === "false") return;
-  state.agentDrawerOpener = event?.currentTarget || document.activeElement;
-  syncAgentContext();
-  drawer.setAttribute("aria-hidden", "false");
-  $("agentLauncher").setAttribute("aria-expanded", "true");
-  $("agentDrawerBackdrop").classList.remove("hidden");
-  document.body.classList.add("agent-drawer-open");
-  requestAnimationFrame(() => {
-    $("closeAgentDrawer")?.focus({ preventScroll: true });
-  });
-  loadAgentCommandCenter();
+  return agentController.openDrawer(event);
 }
 
 function closeAgentDrawer() {
-  const drawer = $("agentDrawer");
-  if (!drawer || drawer.getAttribute("aria-hidden") === "true") return;
-  drawer.setAttribute("aria-hidden", "true");
-  $("agentLauncher").setAttribute("aria-expanded", "false");
-  $("agentDrawerBackdrop").classList.add("hidden");
-  document.body.classList.remove("agent-drawer-open");
-  const opener = state.agentDrawerOpener?.isConnected ? state.agentDrawerOpener : $("agentLauncher");
-  state.agentDrawerOpener = null;
-  opener?.focus({ preventScroll: true });
+  return agentController.closeDrawer();
 }
 
 function handleAgentDrawerKeydown(event) {
-  const drawer = $("agentDrawer");
-  if (!drawer || drawer.getAttribute("aria-hidden") !== "false") return;
-  if (event.key === "Escape") {
-    event.preventDefault();
-    closeAgentDrawer();
-    return;
-  }
-  if (event.key !== "Tab") return;
-  const focusable = [...drawer.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href]')]
-    .filter((node) => node.offsetParent !== null);
-  if (!focusable.length) return;
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
+  return agentController.handleDrawerKeydown(event);
 }
 
 async function loadAgentCommandCenter() {
@@ -1380,7 +1267,7 @@ async function sendAgentMessage(forcedMessage = "", extraContext = {}) {
   if (!hasForcedMessage) input.value = "";
   const chatRequest = {
     ...ContextualAgent.chatPayload(message, conversationId, {
-      ...agentContext.payload(),
+      ...agentController.contextPayload(),
       ...extraContext,
     }),
     conversation_id: conversationId,

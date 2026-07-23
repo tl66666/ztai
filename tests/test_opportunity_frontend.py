@@ -24,6 +24,7 @@ class OpportunityFrontendContractTests(unittest.TestCase):
             ROOT / "frontend" / "src" / "opportunity" / "opportunity-dashboard.ts",
             ROOT / "frontend" / "src" / "opportunity" / "opportunity-workspace.ts",
             ROOT / "frontend" / "src" / "opportunity" / "opportunity-workspace-renderer.ts",
+            ROOT / "frontend" / "src" / "shell" / "shell-controller.ts",
         ]
         cls.script = "\n".join(path.read_text(encoding="utf-8") for path in sources)
         cls.interview_controller = (
@@ -132,7 +133,7 @@ class OpportunityFrontendContractTests(unittest.TestCase):
         self.assertLess(self.html.index(history_script), self.html.index(app_script))
         self.assertIn("OpportunityHistory.createOpportunityHistoryController", self.script)
         self.assertIn("opportunityHistory.bind()", self.script)
-        self.assertIn("await opportunityHistory.sync()", self.script)
+        self.assertIn("await history().sync()", self.script)
         self.assertIn("return history.open", self.script)
         self.assertIn("history.close", self.script)
         self.assertNotIn('params.get("opportunity")', self.script)

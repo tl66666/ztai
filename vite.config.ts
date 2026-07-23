@@ -2,23 +2,34 @@ import { defineConfig } from "vite";
 import { resolve } from "node:path";
 
 export default defineConfig(({ mode }) => {
-  const target = mode === "interview"
-    ? {
-        entry: "frontend/src/interview/interview-controller.ts",
-        name: "JobHunterInterviewController",
-        file: "interview_controller.js",
-      }
-    : mode === "opportunity"
-      ? {
-          entry: "frontend/src/opportunity/opportunity-controller.ts",
-          name: "JobHunterOpportunityController",
-          file: "opportunity_controller.js",
-        }
-      : {
-          entry: "frontend/src/resume/resume-controller.ts",
-          name: "JobHunterResumeController",
-          file: "resume_controller.js",
-        };
+  const targets = {
+    agent: {
+      entry: "frontend/src/agent/agent-controller.ts",
+      name: "JobHunterAgentController",
+      file: "agent_controller.js",
+    },
+    interview: {
+      entry: "frontend/src/interview/interview-controller.ts",
+      name: "JobHunterInterviewController",
+      file: "interview_controller.js",
+    },
+    opportunity: {
+      entry: "frontend/src/opportunity/opportunity-controller.ts",
+      name: "JobHunterOpportunityController",
+      file: "opportunity_controller.js",
+    },
+    shell: {
+      entry: "frontend/src/shell/shell-controller.ts",
+      name: "JobHunterShellController",
+      file: "shell_controller.js",
+    },
+    resume: {
+      entry: "frontend/src/resume/resume-controller.ts",
+      name: "JobHunterResumeController",
+      file: "resume_controller.js",
+    },
+  } as const;
+  const target = targets[mode as keyof typeof targets] || targets.resume;
   return {
     build: {
       lib: {
