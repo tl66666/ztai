@@ -53,8 +53,8 @@ def build_resume_pdf(
         textColor=colors.HexColor("#33384d"),
         spaceAfter=7,
     )
-    title = escape(str(resume.get("title") or "简历"))
-    content = str(resume.get("content") or "")
+    title = escape(str(_value(resume, "title") or "简历"))
+    content = str(_value(resume, "content") or "")
     story = [Paragraph(title, title_style)]
     for block in re.split(r"\n\s*\n", content):
         lines = "<br/>".join(escape(line) for line in block.splitlines())
@@ -78,7 +78,10 @@ def build_resume_docx(
     normal_font.name = "Arial"
     normal_font.size = Pt(10.5)
     normal_font._element.rPr.rFonts.set(qn("w:eastAsia"), "Noto Sans CJK SC")
-    title = document.add_heading(str(resume.get("title") or "简历"), level=0)
+    title = document.add_heading(
+        str(_value(resume, "title") or "简历"),
+        level=0,
+    )
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for run in title.runs:
         run.font.name = "Arial"
@@ -86,7 +89,10 @@ def build_resume_docx(
         run.font.color.rgb = RGBColor(36, 38, 56)
         run._element.rPr.rFonts.set(qn("w:eastAsia"), "Noto Sans CJK SC")
     document.add_paragraph()
-    for block in re.split(r"\n\s*\n", str(resume.get("content") or "")):
+    for block in re.split(
+        r"\n\s*\n",
+        str(_value(resume, "content") or ""),
+    ):
         paragraph = document.add_paragraph()
         paragraph.paragraph_format.line_spacing = 1.25
         paragraph.paragraph_format.space_after = Pt(6)
@@ -101,3 +107,13 @@ def build_resume_docx(
                 "Noto Sans CJK SC",
             )
     document.save(str(output_path))
+
+
+def _value(resume: Mapping[str, object], key: str) -> object | None:
+    getter = getattr(resume, "get", None)
+    if callable(getter):
+        return getter(key)
+    try:
+        return resume[key]
+    except (IndexError, KeyError):
+        return None

@@ -16,7 +16,7 @@ from werkzeug.security import safe_join
 
 from backend.adapters.storage import LocalBlobStorage
 from backend.application import InterviewModule, OpportunityModule, ResumeModule
-from backend.documents import build_resume_docx, build_resume_pdf
+from backend.documents import build_resume_pdf
 from backend.documents.conversion import (
     convert_pdf_to_word as convert_pdf_document_to_word,
 )
@@ -296,6 +296,7 @@ def get_resume_module() -> ResumeModule:
     return ResumeModule(
         DB_PATH,
         LocalBlobStorage(UPLOAD_FOLDER, max_bytes=app.config["MAX_CONTENT_LENGTH"]),
+        EXPORT_FOLDER,
         local_user_id=AGENT_USER_ID,
     )
 
@@ -833,39 +834,16 @@ def delete_resume(resume_id):
 
 @app.route("/api/resumes/<int:resume_id>/export/<format_type>")
 def export_resume(resume_id, format_type):
-    row = get_resume_or_404(resume_id)
-    if not row:
-        return jsonify({"success": False, "message": "简历不存在"}), 404
-    fmt = format_type.lower()
-    if fmt not in {"pdf", "word", "docx"}:
-        return jsonify({"success": False, "message": "仅支持 PDF 或 Word 导出"}), 400
-
-    extension = "pdf" if fmt == "pdf" else "docx"
-    filename = safe_filename(row["title"], f".{extension}")
-    output_path = os.path.join(EXPORT_FOLDER, f"{uuid.uuid4().hex}_{filename}")
-
-    original_path = row["file_path"]
-    original_type = (row["file_type"] or "").lower()
-    if original_path and os.path.exists(original_path):
-        if extension == "docx" and original_type in {"doc", "docx"}:
-            return send_file(original_path, as_attachment=True, download_name=filename)
-        if extension == "pdf" and original_type == "pdf":
-            return send_file(original_path, as_attachment=True, download_name=filename)
-        if extension == "pdf" and original_type in {"doc", "docx"}:
-            if convert_word_to_pdf_native(original_path, output_path):
-                return send_file(output_path, as_attachment=True, download_name=filename)
-        if extension == "docx" and original_type == "pdf":
-            try:
-                convert_pdf_to_word_file(original_path, output_path)
-                return send_file(output_path, as_attachment=True, download_name=filename)
-            except Exception:
-                pass
-
-    if extension == "pdf":
-        build_resume_pdf(row, output_path)
-    else:
-        build_resume_docx(row, output_path)
-    return send_file(output_path, as_attachment=True, download_name=filename)
+    try:
+        exported = get_resume_module().export(resume_id, format_type)
+    except (PermissionError, LookupError, ValueError) as exc:
+        return career_error_response(exc)
+    return send_file(
+        exported.path,
+        as_attachment=True,
+        download_name=exported.filename,
+        mimetype=exported.media_type,
+    )
 
 
 @app.route("/api/convert/pdf-to-word", methods=["POST"])

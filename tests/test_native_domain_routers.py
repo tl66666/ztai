@@ -123,6 +123,25 @@ class NativeDomainRouterTests(unittest.TestCase):
         update_operation = openapi["paths"]["/api/resumes/{resume_id}"]["put"]
         self.assertIn("requestBody", update_operation)
 
+        exported_pdf = self.client.get(
+            f"/api/resumes/{resume_id}/export/pdf"
+        )
+        exported_docx = self.client.get(
+            f"/api/resumes/{resume_id}/export/word"
+        )
+        invalid_export = self.client.get(
+            f"/api/resumes/{resume_id}/export/html"
+        )
+        self.assertEqual(exported_pdf.status_code, 200)
+        self.assertEqual(exported_pdf.headers["content-type"], "application/pdf")
+        self.assertTrue(exported_pdf.content.startswith(b"%PDF"))
+        self.assertEqual(exported_docx.status_code, 200)
+        self.assertIn(
+            "application/vnd.openxmlformats",
+            exported_docx.headers["content-type"],
+        )
+        self.assertEqual(invalid_export.status_code, 400)
+
         deleted = self.client.delete(f"/api/resumes/{resume_id}")
         self.assertEqual(deleted.status_code, 200)
         self.assertEqual(

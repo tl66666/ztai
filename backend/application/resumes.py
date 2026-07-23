@@ -1,12 +1,31 @@
 from __future__ import annotations
 
 import os
+import re
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from backend.documents import ALLOWED_RESUME_EXTENSIONS, parse_resume_file
+from backend.documents import (
+    ALLOWED_RESUME_EXTENSIONS,
+    build_resume_docx,
+    build_resume_pdf,
+    parse_resume_file,
+)
+from backend.documents.conversion import (
+    convert_pdf_to_word,
+    convert_word_to_pdf,
+)
 from backend.ports import BlobStorage
 from utils.domain.database import connect
+
+
+@dataclass(frozen=True)
+class ResumeExport:
+    path: Path
+    filename: str
+    media_type: str
 
 
 class ResumeModule:
@@ -16,11 +35,13 @@ class ResumeModule:
         self,
         db_path: str | os.PathLike[str],
         storage: BlobStorage,
+        export_folder: str | os.PathLike[str],
         *,
         local_user_id: int,
     ):
         self._db_path = os.fspath(db_path)
         self._storage = storage
+        self._export_folder = Path(export_folder)
         self._local_user_id = int(local_user_id)
 
     def create_text(self, body: dict[str, Any]) -> tuple[dict[str, Any], int]:
@@ -152,6 +173,67 @@ class ResumeModule:
             return {"success": False, "message": "简历不存在"}, 404
         return {"success": True, "message": "简历已删除"}, 200
 
+    def export(self, resume_id: int, format_type: str) -> ResumeExport:
+        row = self._owned_resume(resume_id)
+        if row is None:
+            raise LookupError("简历不存在")
+        normalized = format_type.lower()
+        if normalized not in {"pdf", "word", "docx"}:
+            raise ValueError("仅支持 PDF 或 Word 导出")
+
+        extension = "pdf" if normalized == "pdf" else "docx"
+        filename = self._safe_filename(row["title"], f".{extension}")
+        self._export_folder.mkdir(parents=True, exist_ok=True)
+        output_path = self._export_folder / f"{uuid.uuid4().hex}_{filename}"
+        original = Path(row["file_path"]) if row["file_path"] else None
+        original_type = str(row["file_type"] or "").lower()
+
+        if original and original.is_file():
+            if extension == "docx" and original_type == "docx":
+                return ResumeExport(
+                    original,
+                    filename,
+                    self._media_type(extension),
+                )
+            if extension == "pdf" and original_type == "pdf":
+                return ResumeExport(
+                    original,
+                    filename,
+                    self._media_type(extension),
+                )
+            if (
+                extension == "pdf"
+                and original_type in {"doc", "docx"}
+                and convert_word_to_pdf(original, output_path)
+            ):
+                return ResumeExport(
+                    output_path,
+                    filename,
+                    self._media_type(extension),
+                )
+            if extension == "docx" and original_type == "pdf":
+                try:
+                    convert_pdf_to_word(original, output_path)
+                except Exception:
+                    pass
+                else:
+                    return ResumeExport(
+                        output_path,
+                        filename,
+                        self._media_type(extension),
+                    )
+
+        public_row = dict(row)
+        if extension == "pdf":
+            build_resume_pdf(public_row, output_path)
+        else:
+            build_resume_docx(public_row, output_path)
+        return ResumeExport(
+            output_path,
+            filename,
+            self._media_type(extension),
+        )
+
     def _insert(
         self,
         title: str,
@@ -213,3 +295,21 @@ class ResumeModule:
         resume = dict(row)
         resume["has_original"] = bool(resume.pop("file_path", None))
         return resume
+
+    @staticmethod
+    def _safe_filename(name: str, suffix: str) -> str:
+        stem = (
+            re.sub(r"[^\w\u4e00-\u9fa5.-]+", "_", name or "resume")
+            .strip("._")
+            or "resume"
+        )
+        return f"{stem}{suffix}"
+
+    @staticmethod
+    def _media_type(extension: str) -> str:
+        if extension == "pdf":
+            return "application/pdf"
+        return (
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document"
+        )

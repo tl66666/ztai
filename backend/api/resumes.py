@@ -120,6 +120,22 @@ def create_resume_router(
         except (PermissionError, LookupError, ValueError) as exc:
             return domain_error_response(exc)
 
+    @router.get("/{resume_id}/export/{format_type}", response_class=FileResponse)
+    async def export_resume(resume_id: int, format_type: str):
+        try:
+            exported = await run_in_threadpool(
+                module_provider().export,
+                resume_id,
+                format_type,
+            )
+        except (PermissionError, LookupError, ValueError) as exc:
+            return domain_error_response(exc)
+        return FileResponse(
+            exported.path,
+            filename=exported.filename,
+            media_type=exported.media_type,
+        )
+
     @router.put("/{resume_id}")
     async def update_resume(resume_id: int, body: ResumeUpdateRequest):
         try:

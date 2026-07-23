@@ -53,6 +53,7 @@ class ApplicationContainer:
                     self.settings.upload_folder,
                     max_bytes=self.settings.max_upload_bytes,
                 ),
+                self.settings.export_folder,
                 local_user_id=self.legacy.local_user_id,
             )
         return self._resumes
