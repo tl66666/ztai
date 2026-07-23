@@ -8,7 +8,6 @@ import sqlite3
 import subprocess
 import tempfile
 import uuid
-from html import escape
 from urllib.parse import urlsplit
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
@@ -17,6 +16,13 @@ from werkzeug.security import safe_join
 
 from backend.adapters.storage import LocalBlobStorage
 from backend.application import InterviewModule, OpportunityModule, ResumeModule
+from backend.documents import build_resume_docx, build_resume_pdf
+from backend.documents.conversion import (
+    convert_pdf_to_word as convert_pdf_document_to_word,
+)
+from backend.documents.conversion import (
+    convert_word_to_pdf as convert_word_document_to_pdf,
+)
 from utils.agent_runtime.memory import create_agent_tables, is_browser_event_artifact
 from utils.agent_runtime.resume_draft import model_resume_draft
 from utils.ai_client import extract_keywords, get_ai_client, set_api_key
@@ -365,142 +371,12 @@ def convert_audio_file(source_path: str, target_format: str) -> tuple[str, str]:
     return target_path, target_name
 
 
-def register_chinese_pdf_font() -> str:
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-
-    font_candidates = [
-        r"C:\Windows\Fonts\msyh.ttc",
-        r"C:\Windows\Fonts\simsun.ttc",
-        r"C:\Windows\Fonts\simhei.ttf",
-    ]
-    for font_path in font_candidates:
-        if os.path.exists(font_path):
-            try:
-                pdfmetrics.registerFont(TTFont("JobHunterCN", font_path))
-                return "JobHunterCN"
-            except Exception:
-                continue
-    return "Helvetica"
-
-
-def build_resume_pdf(resume: sqlite3.Row, output_path: str) -> None:
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.lib.units import mm
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
-
-    font_name = register_chinese_pdf_font()
-    doc = SimpleDocTemplate(
-        output_path,
-        pagesize=A4,
-        rightMargin=18 * mm,
-        leftMargin=18 * mm,
-        topMargin=18 * mm,
-        bottomMargin=16 * mm,
-    )
-    title_style = ParagraphStyle(
-        "ResumeTitle",
-        fontName=font_name,
-        fontSize=18,
-        leading=24,
-        textColor=colors.HexColor("#242638"),
-        spaceAfter=12,
-    )
-    body_style = ParagraphStyle(
-        "ResumeBody",
-        fontName=font_name,
-        fontSize=10.5,
-        leading=17,
-        textColor=colors.HexColor("#33384d"),
-        spaceAfter=7,
-    )
-    story = [Paragraph(escape(resume["title"]), title_style)]
-    for block in re.split(r"\n\s*\n", resume["content"] or ""):
-        lines = "<br/>".join(escape(line) for line in block.splitlines())
-        if lines.strip():
-            story.append(Paragraph(lines, body_style))
-            story.append(Spacer(1, 3))
-    doc.build(story)
-
-
-def build_resume_docx(resume: sqlite3.Row, output_path: str) -> None:
-    from docx import Document
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Pt, RGBColor
-
-    document = Document()
-    styles = document.styles
-    styles["Normal"].font.name = "Microsoft YaHei"
-    styles["Normal"].font.size = Pt(10.5)
-    title = document.add_heading(resume["title"], level=0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    for run in title.runs:
-        run.font.name = "Microsoft YaHei"
-        run.font.size = Pt(18)
-        run.font.color.rgb = RGBColor(36, 38, 56)
-    document.add_paragraph()
-    for block in re.split(r"\n\s*\n", resume["content"] or ""):
-        paragraph = document.add_paragraph()
-        paragraph.paragraph_format.line_spacing = 1.25
-        paragraph.paragraph_format.space_after = Pt(6)
-        for index, line in enumerate(block.splitlines()):
-            if index:
-                paragraph.add_run().add_break()
-            run = paragraph.add_run(line)
-            run.font.name = "Microsoft YaHei"
-            run.font.size = Pt(10.5)
-    document.save(output_path)
-
-
 def convert_word_to_pdf_native(source_path: str, target_path: str) -> bool:
-    abs_source = os.path.abspath(source_path)
-    abs_target = os.path.abspath(target_path)
-    try:
-        import pythoncom
-        import win32com.client
-
-        pythoncom.CoInitialize()
-        word = win32com.client.DispatchEx("Word.Application")
-        word.Visible = False
-        doc = word.Documents.Open(abs_source, ReadOnly=True)
-        doc.SaveAs(abs_target, FileFormat=17)
-        doc.Close(False)
-        word.Quit()
-        pythoncom.CoUninitialize()
-        return os.path.exists(abs_target) and os.path.getsize(abs_target) > 0
-    except Exception:
-        try:
-            pythoncom.CoUninitialize()
-        except Exception:
-            pass
-
-    soffice = shutil.which("soffice") or shutil.which("libreoffice")
-    if soffice:
-        out_dir = os.path.dirname(abs_target)
-        result = subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf", "--outdir", out_dir, abs_source],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        generated = os.path.join(out_dir, f"{os.path.splitext(os.path.basename(abs_source))[0]}.pdf")
-        if result.returncode == 0 and os.path.exists(generated):
-            if generated != abs_target:
-                shutil.move(generated, abs_target)
-            return True
-    return False
+    return convert_word_document_to_pdf(source_path, target_path)
 
 
 def convert_pdf_to_word_file(source_path: str, target_path: str) -> None:
-    from pdf2docx import Converter
-
-    converter = Converter(source_path)
-    try:
-        converter.convert(target_path, start=0, end=None)
-    finally:
-        converter.close()
+    convert_pdf_document_to_word(source_path, target_path)
 
 
 def score_resume_against_jd(resume_text: str, jd: str) -> tuple[int, list[str], list[str]]:
