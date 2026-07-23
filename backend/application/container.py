@@ -4,6 +4,7 @@ from backend.adapters.legacy_flask import LegacyFlaskAdapter
 from backend.adapters.storage import LocalBlobStorage
 from backend.core.settings import Settings
 
+from .career import CareerModule
 from .interviews import InterviewModule
 from .opportunities import OpportunityModule
 from .resume_intelligence import ResumeIntelligenceModule
@@ -17,6 +18,7 @@ class ApplicationContainer:
         self.settings = settings
         self.legacy = LegacyFlaskAdapter(settings)
         self._interviews: InterviewModule | None = None
+        self._career: CareerModule | None = None
         self._opportunities: OpportunityModule | None = None
         self._resumes: ResumeModule | None = None
         self._resume_intelligence: ResumeIntelligenceModule | None = None
@@ -26,6 +28,15 @@ class ApplicationContainer:
 
     def database_ready(self) -> bool:
         return self.legacy.database_ready()
+
+    @property
+    def career(self) -> CareerModule:
+        if self._career is None:
+            self._career = CareerModule(
+                self.legacy.career_service,
+                local_user_id=self.legacy.local_user_id,
+            )
+        return self._career
 
     @property
     def interviews(self) -> InterviewModule:

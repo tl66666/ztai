@@ -180,6 +180,52 @@ class NativeDomainRouterTests(unittest.TestCase):
         ):
             self.assertIn(path, openapi["paths"])
 
+    def test_career_compatibility_routes_are_native_and_owner_scoped(self):
+        profile = self.client.put(
+            "/api/profile",
+            json={"target_role": "Platform Engineer"},
+        )
+        application = self.client.post(
+            "/api/applications",
+            json={"company": "Acme", "job_title": "Platform Engineer"},
+        )
+        application_id = application.json()["application_id"]
+        listed = self.client.get("/api/applications/1")
+        advanced = self.client.post(f"/api/applications/{application_id}/advance")
+        action = self.client.post(
+            "/api/action-items",
+            json={
+                "application_id": application_id,
+                "title": "Follow up",
+            },
+        )
+        salary = self.client.post(
+            "/api/salary/evaluate",
+            json={"city": "上海", "experience": "1-3年", "skills_count": 4},
+        )
+        denied = self.client.get("/api/applications/2")
+        openapi = self.client.get("/api/v1/openapi.json").json()
+
+        self.assertEqual(profile.status_code, 200)
+        self.assertEqual(
+            self.client.get("/api/profile").json()["data"]["target_role"],
+            "Platform Engineer",
+        )
+        self.assertEqual(application.status_code, 200)
+        self.assertEqual(listed.json()["data"][0]["id"], application_id)
+        self.assertEqual(advanced.status_code, 200)
+        self.assertEqual(action.status_code, 201)
+        self.assertGreater(salary.json()["range"]["avg"], 0)
+        self.assertEqual(denied.status_code, 403)
+        for path in (
+            "/api/profile",
+            "/api/action-items",
+            "/api/applications",
+            "/api/applications/{application_id}/advance",
+            "/api/salary/evaluate",
+        ):
+            self.assertIn(path, openapi["paths"])
+
     def test_resume_upload_uses_generated_object_key_and_preserves_original(self):
         uploaded = self.client.post(
             "/api/resumes/upload",

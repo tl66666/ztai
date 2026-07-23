@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from backend.api.career import create_career_router
 from backend.api.interviews import create_interview_router
 from backend.api.opportunities import create_opportunity_router
 from backend.api.resume_intelligence import create_resume_intelligence_router
@@ -90,6 +91,7 @@ def create_application(
         create_system_router(container.database_ready),
         prefix="/api/v1",
     )
+    application.include_router(create_career_router(lambda: container.career))
     application.include_router(create_interview_router(lambda: container.interviews))
     application.include_router(create_opportunity_router(lambda: container.opportunities))
     application.include_router(create_resume_router(lambda: container.resumes))
