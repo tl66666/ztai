@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from functools import partial
 
+from backend.adapters.jobs import SqlAlchemyJobQueue
 from backend.adapters.persistence.sqlalchemy import (
     SqlAlchemyInterviewRepository,
     SqlAlchemyUnitOfWork,
 )
-from backend.adapters.storage import LocalBlobStorage
+from backend.adapters.storage import create_blob_storage
 from backend.adapters.training_audio import LocalTrainingAudioStorage
 from backend.core.runtime import RuntimeDatabase
 from backend.core.settings import Settings
@@ -18,6 +19,7 @@ from .agent import AgentModule
 from .career import CareerModule
 from .career_insights import CareerInsightsModule
 from .interviews import InterviewModule
+from .jobs import JobService
 from .opportunities import OpportunityModule
 from .platform import FileUtilityModule, RuntimeConfigModule
 from .resume_analysis import (
@@ -52,6 +54,10 @@ class ApplicationContainer:
             SqlAlchemyUnitOfWork,
             self.runtime_database.database.session_factory,
         )
+        self.blob_storage = create_blob_storage(settings)
+        self.job_queue = SqlAlchemyJobQueue(
+            self.runtime_database.database.session_factory
+        )
         self.training_logic = TrainingLogic()
         self._career_service: CareerService | None = None
         self._interview_service: InterviewService | None = None
@@ -65,6 +71,7 @@ class ApplicationContainer:
         self._training: TrainingModule | None = None
         self._runtime_config: RuntimeConfigModule | None = None
         self._file_utilities: FileUtilityModule | None = None
+        self._jobs: JobService | None = None
 
     def initialize(self) -> None:
         self.runtime_database.initialize()
@@ -189,10 +196,7 @@ class ApplicationContainer:
         if self._resumes is None:
             self._resumes = ResumeModule(
                 self.unit_of_work,
-                LocalBlobStorage(
-                    self.settings.upload_folder,
-                    max_bytes=self.settings.max_upload_bytes,
-                ),
+                self.blob_storage,
                 self.settings.export_folder,
                 local_user_id=self.local_user_id,
             )
@@ -240,3 +244,16 @@ class ApplicationContainer:
                 max_upload_bytes=self.settings.max_upload_bytes,
             )
         return self._file_utilities
+
+    @property
+    def jobs(self) -> JobService:
+        if self._jobs is None:
+            self._jobs = JobService(
+                self.job_queue,
+                self.blob_storage,
+                self.resume_intelligence,
+                self.file_utilities,
+                local_user_id=self.local_user_id,
+                max_attempts=self.settings.job_max_attempts,
+            )
+        return self._jobs

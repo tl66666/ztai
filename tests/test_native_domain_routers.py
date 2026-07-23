@@ -279,17 +279,19 @@ class NativeDomainRouterTests(unittest.TestCase):
         resume_id = uploaded.json()["resume_id"]
 
         with sqlite3.connect(self.settings.db_path) as connection:
-            file_path = Path(
-                connection.execute(
-                    "SELECT file_path FROM resumes WHERE id = ?",
-                    (resume_id,),
-                ).fetchone()[0]
-            )
+            blob_token = connection.execute(
+                "SELECT file_path FROM resumes WHERE id = ?",
+                (resume_id,),
+            ).fetchone()[0]
 
         self.assertEqual(uploaded.status_code, 201)
-        self.assertTrue(file_path.is_file())
-        self.assertEqual(file_path.parent.name, "1")
-        self.assertNotIn("unsafe", file_path.name)
+        reference = self.client.app.state.container.blob_storage.restore(
+            blob_token,
+            owner_id=1,
+        )
+        self.assertTrue(reference.object_key.startswith("owners/1/resumes/"))
+        self.assertNotIn("unsafe", reference.object_key)
+        self.assertNotIn(str(self.settings.upload_folder), blob_token)
         original = self.client.get(f"/api/resumes/{resume_id}/original")
         self.assertEqual(original.status_code, 200)
         self.assertEqual(original.content, b"resume body")
@@ -302,7 +304,8 @@ class NativeDomainRouterTests(unittest.TestCase):
             storage.store(
                 BytesIO(b"12345"),
                 original_name="resume.txt",
-                namespace="resumes/1",
+                namespace="resumes",
+                owner_id=1,
             )
 
         self.assertEqual(list(storage_root.rglob("*.*")), [])

@@ -1,28 +1,21 @@
 from __future__ import annotations
 
-import re
-import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from backend.documents import (
-    ALLOWED_RESUME_EXTENSIONS,
-    build_resume_docx,
-    build_resume_pdf,
-    parse_resume_file,
-)
-from backend.documents.conversion import (
-    convert_pdf_to_word,
-    convert_word_to_pdf,
-)
+from backend.documents import ALLOWED_RESUME_EXTENSIONS
 from backend.ports import BlobStorage
 from backend.ports.persistence import UnitOfWorkFactory
 
+from .resume_blobs import ResumeBlobModule
+from .resume_exports import ResumeExport, ResumeExportModule
+
 
 @dataclass(frozen=True)
-class ResumeExport:
-    path: Path
+class ResumeOriginal:
+    content: bytes
     filename: str
     media_type: str
 
@@ -40,7 +33,8 @@ class ResumeModule:
     ):
         self._unit_of_work = unit_of_work
         self._storage = storage
-        self._export_folder = Path(export_folder)
+        self._blobs = ResumeBlobModule(storage, owner_id=local_user_id)
+        self._exports = ResumeExportModule(self._blobs, export_folder)
         self._local_user_id = int(local_user_id)
 
     def create_text(self, body: dict[str, Any]) -> tuple[dict[str, Any], int]:
@@ -62,18 +56,21 @@ class ResumeModule:
     ) -> tuple[dict[str, Any], int]:
         self._require_local_user(requested_user_id)
         file_type = self._validated_extension(filename)
-        blob = self._storage.store(
+        blob, content = self._blobs.store_and_parse(
             source,
-            original_name=filename,
-            namespace=f"resumes/{self._local_user_id}",
+            filename=filename,
+            file_type=file_type,
         )
-        content = parse_resume_file(blob.local_path, file_type)
-        resume_id = self._insert(
-            (title or filename or "未命名简历").strip(),
-            content,
-            str(blob.local_path),
-            file_type,
-        )
+        try:
+            resume_id = self._insert(
+                (title or filename or "未命名简历").strip(),
+                content,
+                blob.to_token(),
+                file_type,
+            )
+        except Exception:
+            self._storage.delete(blob)
+            raise
         return self._created_payload(resume_id, content), 201
 
     def list(self, requested_user_id: int) -> dict[str, Any]:
@@ -91,15 +88,20 @@ class ResumeModule:
             return {"success": False, "message": "简历不存在"}, 404
         return {"success": True, "data": self._public_resume(row)}, 200
 
-    def original(self, resume_id: int) -> tuple[Path, str]:
+    def original(self, resume_id: int) -> ResumeOriginal:
         row = self._owned_resume(resume_id)
         if row is None:
             raise LookupError("简历不存在")
-        original_path = row["file_path"]
-        if not original_path or not Path(original_path).is_file():
+        reference_token = row["file_path"]
+        if not reference_token:
             raise LookupError("这份简历没有保存原始文件，只能编辑文本内容。")
-        path = Path(original_path)
-        return path, f"{row['title']}{path.suffix.lower()}"
+        content, media_type = self._blobs.read(reference_token)
+        suffix = f".{str(row['file_type'] or '').lower()}"
+        return ResumeOriginal(
+            content=content,
+            filename=f"{row['title']}{suffix}",
+            media_type=media_type,
+        )
 
     def replace_upload(
         self,
@@ -108,23 +110,30 @@ class ResumeModule:
         *,
         filename: str,
     ) -> dict[str, Any]:
-        if self._owned_resume(resume_id) is None:
+        existing = self._owned_resume(resume_id)
+        if existing is None:
             raise LookupError("简历不存在")
         file_type = self._validated_extension(filename)
-        blob = self._storage.store(
+        blob, content = self._blobs.store_and_parse(
             source,
-            original_name=filename,
-            namespace=f"resumes/{self._local_user_id}",
+            filename=filename,
+            file_type=file_type,
         )
-        content = parse_resume_file(blob.local_path, file_type)
-        with self._unit_of_work() as unit_of_work:
-            unit_of_work.resumes.replace_upload(
-                resume_id,
-                self._local_user_id,
-                file_path=str(blob.local_path),
-                file_type=file_type,
-                content=content,
-            )
+        try:
+            with self._unit_of_work() as unit_of_work:
+                unit_of_work.resumes.replace_upload(
+                    resume_id,
+                    self._local_user_id,
+                    file_path=blob.to_token(),
+                    file_type=file_type,
+                    content=content,
+                )
+        except Exception:
+            self._storage.delete(blob)
+            raise
+        if existing.get("file_path"):
+            with suppress(Exception):
+                self._blobs.delete(existing["file_path"])
         return {
             "success": True,
             "message": "原文件已替换并重新解析",
@@ -150,6 +159,7 @@ class ResumeModule:
         return {"success": True, "message": "简历已更新"}, 200
 
     def delete(self, resume_id: int) -> tuple[dict[str, Any], int]:
+        existing = self._owned_resume(resume_id)
         with self._unit_of_work() as unit_of_work:
             deleted = unit_of_work.resumes.delete_owned(
                 resume_id,
@@ -157,68 +167,16 @@ class ResumeModule:
             )
         if not deleted:
             return {"success": False, "message": "简历不存在"}, 404
+        if existing and existing.get("file_path"):
+            with suppress(Exception):
+                self._blobs.delete(existing["file_path"])
         return {"success": True, "message": "简历已删除"}, 200
 
     def export(self, resume_id: int, format_type: str) -> ResumeExport:
         row = self._owned_resume(resume_id)
         if row is None:
             raise LookupError("简历不存在")
-        normalized = format_type.lower()
-        if normalized not in {"pdf", "word", "docx"}:
-            raise ValueError("仅支持 PDF 或 Word 导出")
-
-        extension = "pdf" if normalized == "pdf" else "docx"
-        filename = self._safe_filename(row["title"], f".{extension}")
-        self._export_folder.mkdir(parents=True, exist_ok=True)
-        output_path = self._export_folder / f"{uuid.uuid4().hex}_{filename}"
-        original = Path(row["file_path"]) if row["file_path"] else None
-        original_type = str(row["file_type"] or "").lower()
-
-        if original and original.is_file():
-            if extension == "docx" and original_type == "docx":
-                return ResumeExport(
-                    original,
-                    filename,
-                    self._media_type(extension),
-                )
-            if extension == "pdf" and original_type == "pdf":
-                return ResumeExport(
-                    original,
-                    filename,
-                    self._media_type(extension),
-                )
-            if (
-                extension == "pdf"
-                and original_type in {"doc", "docx"}
-                and convert_word_to_pdf(original, output_path)
-            ):
-                return ResumeExport(
-                    output_path,
-                    filename,
-                    self._media_type(extension),
-                )
-            if extension == "docx" and original_type == "pdf":
-                try:
-                    convert_pdf_to_word(original, output_path)
-                except Exception:
-                    pass
-                else:
-                    return ResumeExport(
-                        output_path,
-                        filename,
-                        self._media_type(extension),
-                    )
-
-        public_row = dict(row)
-        if extension == "pdf":
-            build_resume_pdf(public_row, output_path)
-        else:
-            build_resume_docx(public_row, output_path)
-        return ResumeExport(
-            output_path,
-            filename,
-            self._media_type(extension),
-        )
+        return self._exports.export(dict(row), format_type)
 
     def _insert(
         self,
@@ -271,21 +229,3 @@ class ResumeModule:
         resume = dict(row)
         resume["has_original"] = bool(resume.pop("file_path", None))
         return resume
-
-    @staticmethod
-    def _safe_filename(name: str, suffix: str) -> str:
-        stem = (
-            re.sub(r"[^\w\u4e00-\u9fa5.-]+", "_", name or "resume")
-            .strip("._")
-            or "resume"
-        )
-        return f"{stem}{suffix}"
-
-    @staticmethod
-    def _media_type(extension: str) -> str:
-        if extension == "pdf":
-            return "application/pdf"
-        return (
-            "application/vnd.openxmlformats-officedocument."
-            "wordprocessingml.document"
-        )

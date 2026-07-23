@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from backend.core.database import is_sqlite_url, resolve_database_url
@@ -53,6 +53,16 @@ class Settings:
     cloudflare_access_audience: str = ""
     allowed_identity_emails: tuple[str, ...] = ()
     local_user_id: int = 1
+    blob_storage_backend: str = "local"
+    r2_account_id: str = ""
+    r2_bucket: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = field(default="", repr=False)
+    r2_endpoint_url: str = ""
+    job_lease_seconds: int = 60
+    job_heartbeat_seconds: int = 20
+    job_poll_seconds: float = 1.0
+    job_max_attempts: int = 3
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -105,6 +115,50 @@ class Settings:
         local_user_id = int(os.environ.get("JOBHUNTER_AGENT_USER_ID", "1"))
         if local_user_id <= 0:
             raise ValueError("JOBHUNTER_AGENT_USER_ID must be positive")
+        blob_storage_backend = os.environ.get(
+            "JOBHUNTER_BLOB_STORAGE_BACKEND", "local"
+        ).strip().lower()
+        if blob_storage_backend not in {"local", "r2"}:
+            raise ValueError("JOBHUNTER_BLOB_STORAGE_BACKEND must be local or r2")
+        r2_account_id = os.environ.get("JOBHUNTER_R2_ACCOUNT_ID", "").strip()
+        r2_bucket = os.environ.get("JOBHUNTER_R2_BUCKET", "").strip()
+        r2_access_key_id = os.environ.get("JOBHUNTER_R2_ACCESS_KEY_ID", "").strip()
+        r2_secret_access_key = os.environ.get(
+            "JOBHUNTER_R2_SECRET_ACCESS_KEY", ""
+        ).strip()
+        r2_endpoint_url = os.environ.get("JOBHUNTER_R2_ENDPOINT_URL", "").strip()
+        if blob_storage_backend == "r2":
+            missing = [
+                name
+                for name, value in (
+                    ("JOBHUNTER_R2_ACCOUNT_ID", r2_account_id),
+                    ("JOBHUNTER_R2_BUCKET", r2_bucket),
+                    ("JOBHUNTER_R2_ACCESS_KEY_ID", r2_access_key_id),
+                    ("JOBHUNTER_R2_SECRET_ACCESS_KEY", r2_secret_access_key),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(
+                    "Cloudflare R2 storage requires: " + ", ".join(missing)
+                )
+        job_lease_seconds = int(os.environ.get("JOBHUNTER_JOB_LEASE_SECONDS", "60"))
+        job_heartbeat_seconds = int(
+            os.environ.get("JOBHUNTER_JOB_HEARTBEAT_SECONDS", "20")
+        )
+        job_poll_seconds = float(os.environ.get("JOBHUNTER_JOB_POLL_SECONDS", "1"))
+        job_max_attempts = int(os.environ.get("JOBHUNTER_JOB_MAX_ATTEMPTS", "3"))
+        if (
+            job_lease_seconds < 10
+            or job_heartbeat_seconds <= 0
+            or job_heartbeat_seconds >= job_lease_seconds
+            or job_poll_seconds <= 0
+            or job_max_attempts <= 0
+        ):
+            raise ValueError(
+                "Job settings require lease >= 10, heartbeat between 1 and lease-1, "
+                "positive poll interval, and positive max attempts"
+            )
         if auth_mode == "cloudflare_access":
             if (
                 "JOBHUNTER_ALLOWED_ORIGINS" not in os.environ
@@ -152,4 +206,14 @@ class Settings:
             cloudflare_access_audience=audience,
             allowed_identity_emails=allowed_identity_emails,
             local_user_id=local_user_id,
+            blob_storage_backend=blob_storage_backend,
+            r2_account_id=r2_account_id,
+            r2_bucket=r2_bucket,
+            r2_access_key_id=r2_access_key_id,
+            r2_secret_access_key=r2_secret_access_key,
+            r2_endpoint_url=r2_endpoint_url,
+            job_lease_seconds=job_lease_seconds,
+            job_heartbeat_seconds=job_heartbeat_seconds,
+            job_poll_seconds=job_poll_seconds,
+            job_max_attempts=job_max_attempts,
         )

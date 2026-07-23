@@ -1,5 +1,5 @@
 """Stable infrastructure interfaces used by application modules."""
 
-from .blob_storage import BlobStorage, StoredBlob
+from .blob_storage import BlobRef, BlobStorage
 
-__all__ = ["BlobStorage", "StoredBlob"]
+__all__ = ["BlobRef", "BlobStorage"]

@@ -25,6 +25,13 @@ uv run python -m unittest discover -s tests -p "test_*.py" -v
 
 测试使用临时数据库，不应读取或修改仓库根目录的 `jobhunter.db`。重点分组：
 
+- `tests/test_blob_storage.py`：opaque `BlobRef`、owner 隔离、checksum、Local/R2
+  adapter 契约与 R2 配置门禁。
+- `tests/test_background_jobs.py`：幂等提交、lease、heartbeat、retry、cancel 和
+  worker 重启后的过期 lease 恢复。
+- `tests/test_jobs_fastapi.py`：`202 + task_id`、状态查询、结果下载、AI 分析、
+  文档转换和旧同步接口兼容。
+
 | 范围 | 测试文件 |
 | --- | --- |
 | 本地安全边界与离线依赖 | `test_security_boundaries.py` |

@@ -5,6 +5,7 @@ description = "Browser-first AI career workspace"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "alembic>=1.14,<2",
+    "boto3>=1.35,<2",
     "fastapi>=0.115,<1",
     "pdf2docx>=0.5.6,<1",
     "psycopg[binary]>=3.2,<4",

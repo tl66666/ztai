@@ -12,6 +12,7 @@ from backend.api.agent import create_agent_router
 from backend.api.career import create_career_router
 from backend.api.career_insights import create_career_insights_router
 from backend.api.interviews import create_interview_router
+from backend.api.jobs import create_jobs_router
 from backend.api.opportunities import create_opportunity_router
 from backend.api.platform import create_platform_router
 from backend.api.resume_intelligence import create_resume_intelligence_router
@@ -102,6 +103,7 @@ def create_application(
     application.include_router(create_career_router(lambda: container.career))
     application.include_router(create_career_insights_router(lambda: container.career_insights))
     application.include_router(create_interview_router(lambda: container.interviews))
+    application.include_router(create_jobs_router(lambda: container.jobs))
     application.include_router(create_opportunity_router(lambda: container.opportunities))
     application.include_router(
         create_platform_router(

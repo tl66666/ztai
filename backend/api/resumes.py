@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -94,16 +95,25 @@ def create_resume_router(
         )
         return JSONResponse(payload, status_code=status_code)
 
-    @router.get("/{resume_id}/original", response_class=FileResponse)
+    @router.get("/{resume_id}/original")
     async def resume_original(resume_id: int):
         try:
-            path, filename = await run_in_threadpool(
+            original = await run_in_threadpool(
                 module_provider().original,
                 resume_id,
             )
         except (PermissionError, LookupError, ValueError) as exc:
             return domain_error_response(exc)
-        return FileResponse(path, filename=filename)
+        return Response(
+            original.content,
+            media_type=original.media_type,
+            headers={
+                "Content-Disposition": (
+                    "attachment; filename*=UTF-8''"
+                    f"{quote(original.filename, safe='')}"
+                )
+            },
+        )
 
     @router.post("/{resume_id}/replace-file")
     async def replace_resume_file(

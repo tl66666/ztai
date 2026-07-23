@@ -48,7 +48,7 @@ class SqlAlchemyPersistenceTests(unittest.TestCase):
                 "SELECT version_num FROM alembic_version"
             ).fetchone()[0]
 
-        self.assertEqual(revision, "20260723_01")
+        self.assertEqual(revision, "20260724_02")
         self.assertTrue(
             {
                 "resumes",
@@ -69,6 +69,7 @@ class SqlAlchemyPersistenceTests(unittest.TestCase):
                 "agent_memories",
                 "agent_runs",
                 "agent_memories_fts",
+                "background_jobs",
             }.issubset(tables)
         )
         self.assertTrue(self.database.is_ready())
@@ -256,7 +257,7 @@ class LegacyDatabaseAdoptionTests(unittest.TestCase):
                     connection.execute(
                         "SELECT version_num FROM alembic_version"
                     ).fetchone()[0],
-                    "20260723_01",
+                        "20260724_02",
                 )
 
 

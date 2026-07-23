@@ -5,7 +5,10 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
+from backend.adapters.jobs.models import background_jobs as _background_jobs
 from backend.adapters.persistence.sqlalchemy import metadata
+
+del _background_jobs
 
 config = context.config
 if config.config_file_name is not None:

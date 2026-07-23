@@ -7,8 +7,10 @@
 - 前端：React 19、strict TypeScript、Vite、Vitest、Playwright；静态产物部署到 Cloudflare Pages。
 - 后端：Python 3.11+、FastAPI、Pydantic、Uvicorn；模块化单体部署到 Ubuntu。
 - 数据：SQLAlchemy 2 + Alembic；本地使用 SQLite，生产使用 PostgreSQL。
-- 文件：文件操作通过 storage port；当前 local adapter 可用于单机部署，达到多实例需求后再增加 R2 adapter。
-- 后台任务：短请求同步执行；只有跨代理超时或需要故障恢复的长任务才引入持久任务队列。
+- 文件：`BlobStorage` port 使用 opaque `BlobRef`；local 与 Cloudflare R2 adapter
+  共享 owner、object key、SHA-256 校验和契约。
+- 后台任务：独立 `background_jobs` 队列保存 lease、heartbeat、retry、cancel 与
+  idempotency 状态；API 与 worker 使用同一个 PostgreSQL/SQLAlchemy adapter。
 - 交付：`uv` + `uv.lock` 和 npm + `package-lock.json` 分别是 Python、前端的唯一依赖契约。
 
 Flask、WSGI adapter、PowerShell/批处理启动链和旧浏览器 controller 已移除。所有 HTTP
@@ -64,7 +66,9 @@ backend/
   adapters/
     persistence/
       sqlalchemy/         SQLite/PostgreSQL adapters + unit of work
-    storage/              local adapter; R2 adapter is an optional future implementation
+    storage/              local / Cloudflare R2 adapters
+    jobs/                 PostgreSQL durable queue adapter
+  worker.py               cross-platform background worker entry
   alembic/                versioned schema migrations
 ```
 
@@ -100,7 +104,15 @@ of work interface 接入生产：
 - 连接池、查询超时、唯一约束和幂等键由数据库保障。
 - 备份、恢复演练和回滚脚本属于发布门禁。
 
-R2 保存原始文件与导出物，PostgreSQL 只保存对象 key、owner、类型、大小、校验和与生命周期状态。后台任务保存 durable 状态，浏览器以 `202 + task_id` 轮询或 SSE 获取进度，避免 Cloudflare/反向代理等待长同步请求。
+R2 保存原始文件与导出物，业务表只保存 opaque `BlobRef`，其中包含 adapter 名称、
+对象 key、owner、类型、大小和 SHA-256 校验和，不保存本机绝对路径。local adapter
+用于开发且执行同样的 owner/key/checksum 校验，R2 adapter 额外校验对象 metadata。
+
+`background_jobs` 与 Agent 的 `agent_tasks` 完全独立。API 提交 AI 简历分析或文档转换后
+返回 `202 + task_id`；`GET /api/jobs/{task_id}` 查询状态，`DELETE` 取消，
+文档任务完成后从 `/api/jobs/{task_id}/result` 授权下载。worker 使用数据库 lease 和
+heartbeat 防止并发重复执行，失败按 `max_attempts` 重试，过期 lease 在重启后恢复，
+`Idempotency-Key` 由数据库唯一约束保证。旧同步接口仍保留，前端现有功能不受影响。
 
 ## 7. 前端 module
 
@@ -143,8 +155,23 @@ JOBHUNTER_CF_ACCESS_AUDIENCE=replace-with-access-aud \
 JOBHUNTER_ALLOWED_IDENTITY_EMAILS=owner@example.com \
 JOBHUNTER_ALLOWED_HOSTS=api.example.com \
 JOBHUNTER_ALLOWED_ORIGINS=https://career.example.com \
+JOBHUNTER_DATABASE_URL=postgresql+psycopg://app:secret@127.0.0.1/jobhunter \
+JOBHUNTER_BLOB_STORAGE_BACKEND=r2 \
+JOBHUNTER_R2_ACCOUNT_ID=replace-with-account-id \
+JOBHUNTER_R2_BUCKET=jobhunter \
+JOBHUNTER_R2_ACCESS_KEY_ID=replace-with-access-key \
+JOBHUNTER_R2_SECRET_ACCESS_KEY=replace-with-secret \
 uv run python -m backend.cli
 ```
+
+后台 worker 使用完全相同的环境变量，作为独立普通用户进程运行：
+
+```bash
+uv run python -m backend.worker
+```
+
+本地诊断可使用 `uv run python -m backend.worker --once` 只尝试处理一个任务后退出。
+生产必须使用 PostgreSQL；SQLite 队列仅用于单进程开发和契约测试。
 
 SQLite 模式必须保持 `JOBHUNTER_WORKERS=1`；PostgreSQL 可在完成并发压测后增加
 worker。Cloudflare Access 模式强制要求
@@ -161,6 +188,7 @@ Ubuntu 使用普通非 root 应用用户安装 `uv`，在发布目录中执行�
 ```bash
 uv sync --frozen --no-dev
 uv run python -m backend.cli
+uv run python -m backend.worker
 ```
 
 进程管理器只负责注入环境变量、自动重启、日志轮转和启动上述命令，不复制业务
