@@ -17,13 +17,16 @@ class OpportunityFrontendContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
         sources = [
-            ROOT / "static" / "js" / "app.js",
+            ROOT / "frontend" / "src" / "app" / "runtime.ts",
             ROOT / "frontend" / "src" / "opportunity" / "opportunity-controller.ts",
             ROOT / "frontend" / "src" / "opportunity" / "application-board.ts",
             ROOT / "frontend" / "src" / "opportunity" / "opportunity-dashboard.ts",
+            ROOT / "frontend" / "src" / "opportunity" / "opportunity-handoffs.ts",
+            ROOT / "frontend" / "src" / "opportunity" / "opportunity-history.mjs",
             ROOT / "frontend" / "src" / "opportunity" / "opportunity-workspace.ts",
             ROOT / "frontend" / "src" / "opportunity" / "opportunity-workspace-renderer.ts",
             ROOT / "frontend" / "src" / "shell" / "shell-controller.ts",
+            ROOT / "frontend" / "src" / "shell" / "topbar-controller.ts",
         ]
         cls.script = "\n".join(path.read_text(encoding="utf-8") for path in sources)
         cls.interview_controller = (
@@ -99,8 +102,17 @@ class OpportunityFrontendContractTests(unittest.TestCase):
 
     def test_entity_handoffs_are_immutable_and_one_shot_behaviorally(self):
         result = subprocess.run(
-            ["node", str(ROOT / "tests" / "js" / "test_opportunity_handoffs.js")],
-            cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+            [
+                "npm",
+                "run",
+                "test:unit",
+                "--",
+                "frontend/src/opportunity/opportunity-handoffs.test.ts",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -117,7 +129,11 @@ class OpportunityFrontendContractTests(unittest.TestCase):
         self.assertIn('id="applicationBoardHeading"', self.html)
         self.assertIn('id="matchOpportunityNotice"', self.html)
         self.assertIn('id="clearMatchOpportunityLink"', self.html)
-        self.assertIn('<script src="js/opportunity_handoffs.js"></script>', self.html)
+        self.assertIn(
+            '<script type="module" src="js/react_app.js"></script>',
+            self.html,
+        )
+        self.assertNotIn('src="js/opportunity_handoffs.js"', self.html)
         for token in (
             "interviewOpportunityHandoff", "pendingApplicationHandoff", "matchOpportunityId",
             "buildInterviewStartPayload", "applicationPayloadForJob", "buildMatchPayload",
@@ -130,10 +146,8 @@ class OpportunityFrontendContractTests(unittest.TestCase):
         self.assertNotIn("application_id: state.currentOpportunityId", self.script)
 
     def test_app_uses_the_history_controller_as_its_single_route_sync(self):
-        history_script = '<script src="js/opportunity_history.js"></script>'
-        app_script = '<script src="js/app.js"></script>'
-        self.assertIn(history_script, self.html)
-        self.assertLess(self.html.index(history_script), self.html.index(app_script))
+        self.assertNotIn('src="js/opportunity_history.js"', self.html)
+        self.assertNotIn('src="js/app.js"', self.html)
         self.assertIn("OpportunityHistory.createOpportunityHistoryController", self.script)
         self.assertIn("opportunityHistory.bind()", self.script)
         self.assertIn("await history().sync()", self.script)

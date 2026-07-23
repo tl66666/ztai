@@ -5,7 +5,7 @@ const projectRoot = resolve(import.meta.dirname, "../..");
 const staticDir = resolve(projectRoot, "static");
 const port = Number(process.env.PORT || 5173);
 
-const modes = ["resume", "interview", "opportunity", "shell", "agent", "app"];
+const modes = ["app"];
 const watchers = await Promise.all(modes.map((mode) => build({
   configFile: resolve(projectRoot, "vite.config.ts"),
   mode,

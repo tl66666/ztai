@@ -144,7 +144,7 @@ export function createApplicationBoard(
       ? previousStatus
       : (canonicalStatuses.includes("已投递") ? "已投递" : canonicalStatuses[0] || "");
     if (!apps.length) {
-      list.innerHTML = `<div class="opportunity-empty"><strong>暂无投递</strong><span>添加第一条记录后，这里会按阶段自动成列。</span><button class="primary" onclick="jumpToModule('tracker','add')"><i data-lucide="plus"></i>新增投递</button></div>`;
+      list.innerHTML = `<div class="opportunity-empty"><strong>暂无投递</strong><span>添加第一条记录后，这里会按阶段自动成列。</span><button class="primary" data-route-page="tracker" data-route-module="add"><i data-lucide="plus"></i>新增投递</button></div>`;
       renderAgentCommandOpportunities();
       renderIcons();
       return;
@@ -178,12 +178,12 @@ export function createApplicationBoard(
             <span class="status-text">阶段：${escapeHtml(item.needs_status_review ? `待确认（原状态：${item.status || "未设置"}）` : item.status)}</span>
             <em>${escapeHtml(item.city || "城市未填")}</em>
             <p>${escapeHtml(item.notes || "暂无备注，建议补充投递渠道、面试反馈或待办。")}</p>
-            <button class="primary small details-command" onclick="openOpportunityWorkspace(${item.id})"><i data-lucide="panel-right-open"></i>打开详情</button>
+            <button class="primary small details-command" data-command="opportunity-open" data-opportunity-id="${item.id}"><i data-lucide="panel-right-open"></i>打开详情</button>
             <div class="kanban-card-actions">
-              <button class="ghost small" onclick="coachApplication(${item.id})">跟进建议</button>
-              ${item.needs_status_review ? "" : `<button class="ghost small" onclick="advanceApplication(${item.id})">推进</button>`}
-              <button class="ghost small" onclick="editApplication(${item.id})">编辑</button>
-              <button class="ghost small danger" onclick="deleteApplication(${item.id})">删除</button>
+              <button class="ghost small" data-command="opportunity-coach" data-opportunity-id="${item.id}">跟进建议</button>
+              ${item.needs_status_review ? "" : `<button class="ghost small" data-command="opportunity-advance" data-opportunity-id="${item.id}">推进</button>`}
+              <button class="ghost small" data-command="opportunity-edit" data-opportunity-id="${item.id}">编辑</button>
+              <button class="ghost small danger" data-command="opportunity-delete" data-opportunity-id="${item.id}">删除</button>
             </div>
           </article>
         `).join("") : `<div class="kanban-empty"><span>暂无记录</span></div>`}

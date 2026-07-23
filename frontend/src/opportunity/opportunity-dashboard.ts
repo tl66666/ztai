@@ -47,7 +47,7 @@ export function createOpportunityDashboard(
       .join("");
     required(byId, "weeklyPlan").innerHTML = (pulse.weekly_plan || [])
       .map((item: any, index: number) => `
-        <button class="plan-step" onclick="jumpToModule('${item.page}', '${item.module}')">
+        <button class="plan-step" data-route-page="${escapeHtml(item.page)}" data-route-module="${escapeHtml(item.module)}">
           <b>${index + 1}</b>
           <span>${escapeHtml(item.title)}</span>
           <i data-lucide="arrow-right"></i>
@@ -65,7 +65,7 @@ export function createOpportunityDashboard(
           <b>${escapeHtml(action.title)}</b>
           <small>${escapeHtml(action.description)}</small>
         </div>
-        <button class="ghost small" onclick="jumpToModule('${action.page}', '${action.module}')">${escapeHtml(action.cta || "去处理")}</button>
+        <button class="ghost small" data-route-page="${escapeHtml(action.page)}" data-route-module="${escapeHtml(action.module)}">${escapeHtml(action.cta || "去处理")}</button>
       </article>
     `).join("") : "";
   }

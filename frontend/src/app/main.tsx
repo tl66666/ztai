@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 
 import { JobHunterApp } from "./job-hunter-app";
+import "./runtime";
 
 const rootNode = document.getElementById("reactAppRoot");
 if (!rootNode) throw new Error("Missing React composition root: #reactAppRoot");

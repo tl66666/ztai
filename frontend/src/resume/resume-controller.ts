@@ -141,11 +141,11 @@ export function createResumeController(deps: ResumeControllerDependencies): Resu
           <b>${escapeHtml(resume.title)}</b>
           <small>${new Date(resume.updated_at || resume.created_at || "").toLocaleString()}${resume.file_type ? ` · 原件 ${escapeHtml(resume.file_type.toUpperCase())}` : ""}</small>
           <div class="list-actions">
-            <button class="ghost small" onclick="fillResume(${resume.id})">编辑</button>
-            <button class="ghost small" onclick="openOriginalResume(${resume.id})">打开原件</button>
-            <label class="ghost small file-action">替换原件<input type="file" accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg" onchange="replaceOriginalResume(${resume.id}, this)"></label>
-            <button class="ghost small" onclick="analyzeResume(${resume.id})">诊断</button>
-            <button class="ghost small" onclick="deleteResume(${resume.id})">删除</button>
+            <button class="ghost small" data-command="resume-edit" data-resume-id="${resume.id}">编辑</button>
+            <button class="ghost small" data-command="resume-open-original" data-resume-id="${resume.id}">打开原件</button>
+            <label class="ghost small file-action">替换原件<input type="file" accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg" data-command-change="resume-replace-original" data-resume-id="${resume.id}"></label>
+            <button class="ghost small" data-command="resume-analyze" data-resume-id="${resume.id}">诊断</button>
+            <button class="ghost small" data-command="resume-delete" data-resume-id="${resume.id}">删除</button>
           </div>
         </article>
       `).join("")
@@ -313,10 +313,10 @@ export function createResumeController(deps: ResumeControllerDependencies): Resu
       <div><b>优先修改项</b><br>${(data.actions || []).map((item: unknown) => `• ${escapeHtml(item)}`).join("<br>")}</div>
       <div><b>项目经历建议</b><br>${(data.project_suggestions || []).map((item: unknown) => `• ${escapeHtml(item)}`).join("<br>")}</div>
       <div class="result-actions">
-        <button class="primary" onclick="improveSelectedResume()">生成优化版并保存</button>
-        <button class="ghost" onclick="jumpToModule('resume','jd')">去做 JD 优化</button>
-        <button class="ghost" onclick="jumpToModule('resume','skills')">看技能图谱</button>
-        <button class="ghost" onclick="jumpToModule('interview','mock')">去模拟面试</button>
+        <button class="primary" data-command="resume-improve-selected">生成优化版并保存</button>
+        <button class="ghost" data-route-page="resume" data-route-module="jd">去做 JD 优化</button>
+        <button class="ghost" data-route-page="resume" data-route-module="skills">看技能图谱</button>
+        <button class="ghost" data-route-page="interview" data-route-module="mock">去模拟面试</button>
       </div>
     `;
   }
@@ -400,9 +400,9 @@ export function createResumeController(deps: ResumeControllerDependencies): Resu
       <div><b>改写策略</b><br>${(data.strategy || []).map((item: unknown) => `• ${escapeHtml(item)}`).join("<br>")}</div>
       <h4>优化内容预览</h4>${renderText(data.improved_resume || "")}
       <div class="result-actions">
-        <button class="primary" onclick="jumpToModule('resume','manage')">查看我的简历</button>
-        <button class="ghost" onclick="jumpToModule('resume','export')">导出新版本</button>
-        <button class="ghost" onclick="prepareInterviewFromJd()">带入模拟面试</button>
+        <button class="primary" data-route-page="resume" data-route-module="manage">查看我的简历</button>
+        <button class="ghost" data-route-page="resume" data-route-module="export">导出新版本</button>
+        <button class="ghost" data-command="prepare-interview-from-jd">带入模拟面试</button>
       </div>
     `;
     await load();
@@ -462,9 +462,9 @@ export function createResumeController(deps: ResumeControllerDependencies): Resu
       <div><b>面试讲述要点</b><br>${(data.interview_talking_points || []).map((item: unknown) => `• ${escapeHtml(item)}`).join("<br>")}</div>
       <h4>优化版本</h4>${renderText(data.ai_rewrite || data.tailored_resume)}
       <div class="result-actions">
-        <button class="primary" onclick="prepareInterviewFromJd()">带入模拟面试</button>
-        <button class="ghost" onclick="prepareApplicationFromJd()">新增投递记录</button>
-        <button class="ghost" onclick="jumpToModule('resume','export')">去导出简历</button>
+        <button class="primary" data-command="prepare-interview-from-jd">带入模拟面试</button>
+        <button class="ghost" data-command="prepare-application-from-jd">新增投递记录</button>
+        <button class="ghost" data-route-page="resume" data-route-module="export">去导出简历</button>
       </div>
     `;
   }
@@ -495,8 +495,8 @@ export function createResumeController(deps: ResumeControllerDependencies): Resu
     result.classList.remove("hidden");
     result.innerHTML = `<h4>岗位匹配：${data.match_score}</h4>${renderText(data.analysis)}<br><b>待补齐：</b>${escapeHtml((data.missing_keywords || []).join("、"))}
       <div class="result-actions">
-        <button class="primary" onclick="prepareInterviewFromJd()">带入模拟面试</button>
-        <button class="ghost" onclick="prepareApplicationFromJd()">新增投递记录</button>
+        <button class="primary" data-command="prepare-interview-from-jd">带入模拟面试</button>
+        <button class="ghost" data-command="prepare-application-from-jd">新增投递记录</button>
       </div>`;
     await loadDashboard();
   }
@@ -531,8 +531,8 @@ export function createResumeController(deps: ResumeControllerDependencies): Resu
       <div><b>风险提示</b><br>${(data.risk_flags || []).map((item: unknown) => `• ${escapeHtml(item)}`).join("<br>") || "暂无明显风险词"}</div>
       ${renderText(data.content || "")}
       <div class="result-actions">
-        <button class="primary" onclick="tailorResume()">用这份 JD 优化简历</button>
-        <button class="ghost" onclick="prepareInterviewFromJd()">带入模拟面试</button>
+        <button class="primary" data-command="resume-tailor">用这份 JD 优化简历</button>
+        <button class="ghost" data-command="prepare-interview-from-jd">带入模拟面试</button>
       </div>
     `;
   }
@@ -585,8 +585,8 @@ export function createResumeController(deps: ResumeControllerDependencies): Resu
         建议：${escapeHtml(item.suggestion || "补充真实项目证据，把技能写进项目过程和结果。")}</div>
       `).join("")}
       <div class="result-actions">
-        <button class="primary" onclick="jumpToModule('resume','analysis')">去修改简历</button>
-        <button class="ghost" onclick="jumpToModule('interview','professional')">按短板练专业面试</button>
+        <button class="primary" data-route-page="resume" data-route-module="analysis">去修改简历</button>
+        <button class="ghost" data-route-page="interview" data-route-module="professional">按短板练专业面试</button>
       </div>
     `;
   }

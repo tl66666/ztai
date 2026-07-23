@@ -20,13 +20,13 @@ async function stopChild(child) {
     };
     const onExit = () => finish();
     const timer = setTimeout(() => {
-      finish(new Error("Timed out after 5000ms waiting for isolated Flask service to stop on Windows"));
+      finish(new Error("Timed out after 5000ms waiting for isolated service to stop"));
     }, 5_000);
     child.once("exit", onExit);
     try {
       const signaled = child.kill();
       if (signaled === false && child.exitCode === null) {
-        finish(new Error("Windows could not signal the isolated Flask service to stop"));
+        finish(new Error("The isolated service did not accept a shutdown signal"));
       }
     } catch (error) {
       finish(error);
@@ -90,7 +90,10 @@ async function startIsolatedServer(options) {
     }
     if (errors.length) {
       const details = errors.map((error) => error?.message || String(error)).join("; ");
-      throw new AggregateError(errors, `Isolated Flask cleanup incomplete: ${details} (${tempDirectory})`);
+      throw new AggregateError(
+        errors,
+        `Isolated service cleanup incomplete: ${details} (${tempDirectory})`,
+      );
     }
   }
 

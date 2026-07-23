@@ -1,9 +1,4 @@
-(function exposeBrowserCapabilities(root, factory) {
-  const api = factory();
-  if (typeof module === "object" && module.exports) module.exports = api;
-  if (root) root.BrowserCapabilities = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createBrowserCapabilities() {
-  const RECORDER_FORMATS = Object.freeze([
+const RECORDER_FORMATS = Object.freeze([
     Object.freeze({ mimeType: "audio/webm;codecs=opus", extension: "webm" }),
     Object.freeze({ mimeType: "audio/webm", extension: "webm" }),
     Object.freeze({ mimeType: "audio/ogg;codecs=opus", extension: "ogg" }),
@@ -124,7 +119,7 @@
     }
   }
 
-  return {
+  export {
     RECORDER_FORMATS,
     speechRecognition,
     canRecordAudio,
@@ -136,4 +131,3 @@
     applyCapabilityUI,
     startSpeechSafely,
   };
-});

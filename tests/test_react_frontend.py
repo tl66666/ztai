@@ -1,7 +1,6 @@
-from pathlib import Path
 import json
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -50,18 +49,20 @@ class ReactFrontendArchitectureContracts(unittest.TestCase):
         self.assertIn('entry: "frontend/src/app/main.tsx"', vite)
         self.assertIn('formats: ["es"]', vite)
 
-    def test_legacy_feature_factories_match_the_named_vite_exports(self):
-        app = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    def test_feature_factories_are_direct_es_module_imports(self):
+        app = (
+            ROOT / "frontend" / "src" / "app" / "runtime.ts"
+        ).read_text(encoding="utf-8")
 
         for factory in (
-            "JobHunterResumeController.createResumeController",
-            "JobHunterInterviewController.createInterviewController",
-            "JobHunterOpportunityController.createOpportunityController",
+            'import { createResumeController } from "../resume/resume-controller"',
+            'import { createInterviewController } from "../interview/interview-controller"',
+            'import { createOpportunityController } from "../opportunity/opportunity-controller"',
         ):
             self.assertIn(factory, app)
-        self.assertNotIn("JobHunterResumeController.create({", app)
-        self.assertNotIn("JobHunterInterviewController.create({", app)
-        self.assertNotIn("JobHunterOpportunityController.create({", app)
+        self.assertNotIn("JobHunterResumeController", app)
+        self.assertNotIn("JobHunterInterviewController", app)
+        self.assertNotIn("JobHunterOpportunityController", app)
 
 
 if __name__ == "__main__":

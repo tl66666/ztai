@@ -1,9 +1,4 @@
-(function (root, factory) {
-  const api = factory();
-  if (typeof module !== "undefined" && module.exports) module.exports = api;
-  if (root) root.InterviewMedia = api;
-})(typeof window !== "undefined" ? window : globalThis, function () {
-  const EMPTY_METRICS = Object.freeze({
+const EMPTY_METRICS = Object.freeze({
     duration_seconds: null,
     peak: 0,
     average_volume: 0,
@@ -278,7 +273,7 @@
     };
   }
 
-  return {
+  export {
     computeAudioMetrics,
     decodeAudioBlob,
     bindRecorderSession,
@@ -287,4 +282,3 @@
     createRecordingController,
     createObjectUrlRegistry,
   };
-});

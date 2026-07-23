@@ -1,9 +1,4 @@
-(function (root, factory) {
-  const api = factory();
-  if (typeof module === "object" && module.exports) module.exports = api;
-  if (root) root.ContextualAgent = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
-  "use strict";
+"use strict";
 
   const CONTEXT_FIELDS = {
     module: "module",
@@ -406,7 +401,7 @@
     </article>`;
   }
 
-  return {
+  export {
     chatPayload,
     createContextStore,
     createConversationEpoch,
@@ -432,4 +427,3 @@
     resultLookupState,
     profileResultHtml,
   };
-});

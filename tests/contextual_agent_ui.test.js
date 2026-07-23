@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const AgentUI = require("../static/js/contextual_agent.js");
+const AgentUI = require("../frontend/src/agent/contextual-agent.mjs");
 
 const contexts = AgentUI.createContextStore();
 contexts.sync({ module: "resume:jd", opportunityId: 41, resumeId: 7 });

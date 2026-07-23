@@ -88,7 +88,7 @@ describe("Resume controller", () => {
     expect(document.getElementById("resumeCount")?.textContent).toBe("1");
     expect(document.querySelector("#resumeList b")?.textContent).toBe(`<资深 "测试">`);
     expect(document.querySelector("#resumeList b")?.children).toHaveLength(0);
-    expect(document.getElementById("resumeList")?.innerHTML).toContain("fillResume(7)");
+    expect(document.querySelector('[data-command="resume-edit"][data-resume-id="7"]')).not.toBeNull();
     expect((document.getElementById("analysisResumeSelect") as HTMLSelectElement).options[1].value).toBe("7");
     expect(syncAgentContext).toHaveBeenCalledOnce();
     expect(renderIcons).toHaveBeenCalledOnce();

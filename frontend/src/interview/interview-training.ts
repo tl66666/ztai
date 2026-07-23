@@ -69,8 +69,8 @@ export function createInterviewTrainingController(
           <b>${index + 1}. ${escapeHtml(item.question)}</b>
           <small>${categoryName(item.category)} · 点击“练习”后可输入自己的回答</small>
           <div class="list-actions">
-            <button class="ghost small" onclick="selectQuestion('${escapeAttr(item.question)}', '${escapeAttr(category === "career" ? "career" : item.category)}')">练习</button>
-            <button class="ghost small" onclick="showSampleAnswer('${escapeAttr(item.answer)}')">参考答案</button>
+            <button class="ghost small" data-command="interview-select-question" data-question="${escapeAttr(item.question)}" data-category="${escapeAttr(category === "career" ? "career" : item.category)}">练习</button>
+            <button class="ghost small" data-command="interview-show-sample" data-answer="${escapeAttr(item.answer)}">参考答案</button>
           </div>
         </article>
       `).join("")
@@ -103,8 +103,8 @@ export function createInterviewTrainingController(
           <article class="record-card">
             ${bodyRenderer(item)}
             <div class="record-actions">
-              <button class="ghost small" onclick="viewTrainingRecord('${type}', ${item.id})">查看详情</button>
-              <button class="ghost small danger" onclick="deleteTrainingRecord('${type}', ${item.id})">删除</button>
+              <button class="ghost small" data-command="training-view" data-record-type="${escapeAttr(type)}" data-record-id="${item.id}">查看详情</button>
+              <button class="ghost small danger" data-command="training-delete" data-record-type="${escapeAttr(type)}" data-record-id="${item.id}">删除</button>
             </div>
           </article>
         `).join("") : `<article class="record-card"><b>暂无记录</b><small>完成训练后会自动出现在这里</small></article>`}
@@ -183,9 +183,9 @@ export function createInterviewTrainingController(
         ${item.audio_file ? `
           <audio controls src="${apiBaseUrl}/uploads/${encodeURIComponent(item.audio_file)}"></audio>
           <div class="audio-downloads">
-            <button class="ghost small" onclick="downloadSavedAudio('${escapeAttr(item.audio_file)}', 'wav')">下载 WAV</button>
-            <button class="ghost small" onclick="downloadSavedAudio('${escapeAttr(item.audio_file)}', 'mp3')">下载 MP3</button>
-            <button class="ghost small" onclick="downloadSavedAudio('${escapeAttr(item.audio_file)}', 'original')">下载原始音频</button>
+            <button class="ghost small" data-command="training-audio-download" data-audio-file="${escapeAttr(item.audio_file)}" data-audio-format="wav">下载 WAV</button>
+            <button class="ghost small" data-command="training-audio-download" data-audio-file="${escapeAttr(item.audio_file)}" data-audio-format="mp3">下载 MP3</button>
+            <button class="ghost small" data-command="training-audio-download" data-audio-file="${escapeAttr(item.audio_file)}" data-audio-format="original">下载原始音频</button>
           </div>
           <small>WAV 可由浏览器本地转换；MP3 由后端 ffmpeg 转码生成。</small>
         ` : ""}
@@ -262,8 +262,8 @@ export function createInterviewTrainingController(
         <b>${index + 1}. ${escapeHtml(item.question)}</b>
         <small>${escapeHtml(item.focus)} · ${escapeHtml(item.difficulty)}</small>
         <div class="list-actions">
-          <button class="ghost small" onclick="selectProfessionalQuestion('${escapeAttr(item.question)}')">作答</button>
-          <button class="ghost small" onclick="showProfessionalReference('${escapeAttr(item.reference)}')">参考思路</button>
+          <button class="ghost small" data-command="interview-select-professional" data-question="${escapeAttr(item.question)}">作答</button>
+          <button class="ghost small" data-command="interview-show-professional-reference" data-reference="${escapeAttr(item.reference)}">参考思路</button>
         </div>
       </article>
     `).join("");

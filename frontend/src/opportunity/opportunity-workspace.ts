@@ -108,7 +108,7 @@ export function createOpportunityWorkspace(
     required(byId, "opportunityWorkspaceSubtitle").textContent = "链接已保留，可直接重试。";
     const error = required(byId, "opportunityWorkspaceError");
     error.classList.remove("hidden");
-    error.innerHTML = `${escapeHtml(message)}<button type="button" class="ghost" onclick="retryOpportunityWorkspace(${opportunityId})"><i data-lucide="refresh-cw"></i>重试</button>`;
+    error.innerHTML = `${escapeHtml(message)}<button type="button" class="ghost" data-command="opportunity-retry" data-opportunity-id="${opportunityId}"><i data-lucide="refresh-cw"></i>重试</button>`;
     renderIcons();
   }
 

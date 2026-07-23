@@ -53,7 +53,7 @@ export function createOpportunityWorkspaceRenderer(
         <div><dt>投递时间</dt><dd>${date(opportunity.applied_at || opportunity.created_at)}</dd></div>
       </dl>
       ${opportunity.notes ? `<div class="workspace-note"><b>备注</b><p>${escapeHtml(opportunity.notes)}</p></div>` : ""}
-      <div class="workspace-primary-action"><button type="button" class="primary" onclick="editApplication(${opportunity.id})"><i data-lucide="pencil"></i>编辑机会</button></div>`;
+      <div class="workspace-primary-action"><button type="button" class="primary" data-command="opportunity-edit" data-opportunity-id="${opportunity.id}"><i data-lucide="pencil"></i>编辑机会</button></div>`;
   }
 
   function match(workspace: any): void {
@@ -69,7 +69,7 @@ export function createOpportunityWorkspaceRenderer(
           ${item.analysis ? `<p>${escapeHtml(item.analysis)}</p>` : ""}
           ${Object.keys(item.details || {}).length ? `<pre>${escapeHtml(JSON.stringify(item.details, null, 2))}</pre>` : ""}</div>`).join("")}</div>` : '<div class="opportunity-empty"><b>尚无匹配结果</b><span>使用这份 JD 和关联简历完成一次匹配。</span></div>'}
       </section>
-      <div class="workspace-primary-action"><button type="button" class="primary" onclick="useWorkspaceJd()"><i data-lucide="scan-search"></i>${jd ? "用此 JD 重新匹配" : "前往 JD 匹配"}</button></div>`;
+      <div class="workspace-primary-action"><button type="button" class="primary" data-command="opportunity-use-jd"><i data-lucide="scan-search"></i>${jd ? "用此 JD 重新匹配" : "前往 JD 匹配"}</button></div>`;
   }
 
   function resume(workspace: any): void {
@@ -78,9 +78,9 @@ export function createOpportunityWorkspaceRenderer(
       <div class="workspace-version">
         <i data-lucide="file-text"></i><div><b>${escapeHtml(selected.title || "未命名简历")}</b><span>${escapeHtml(selected.version_label || "已关联版本")} · ${date(selected.updated_at || selected.created_at)}</span><small>${escapeHtml(selected.target_job_title || workspace.opportunity.job_title || "目标岗位")}</small></div>
       </div>
-      <div class="workspace-primary-action"><button type="button" class="primary" onclick="openWorkspaceResume(${selected.id}, ${selected.has_original ? "true" : "false"})"><i data-lucide="external-link"></i>${selected.has_original ? "打开简历原件" : "查看简历版本"}</button></div>` : `
+      <div class="workspace-primary-action"><button type="button" class="primary" data-command="opportunity-open-resume" data-resume-id="${selected.id}" data-has-original="${selected.has_original ? "true" : "false"}"><i data-lucide="external-link"></i>${selected.has_original ? "打开简历原件" : "查看简历版本"}</button></div>` : `
       <div class="opportunity-empty"><b>尚未关联简历版本</b><span>选择一份与该岗位匹配的简历，再从 JD 区新建机会。</span></div>
-      <div class="workspace-primary-action"><button type="button" class="primary" onclick="jumpToModule('resume','input')"><i data-lucide="file-plus-2"></i>准备简历</button></div>`;
+      <div class="workspace-primary-action"><button type="button" class="primary" data-route-page="resume" data-route-module="input"><i data-lucide="file-plus-2"></i>准备简历</button></div>`;
   }
 
   function interview(workspace: any): void {
@@ -95,12 +95,12 @@ export function createOpportunityWorkspaceRenderer(
         ${interviews.length ? `<div class="workspace-list">${interviews.map((item: any) => `
           <div class="workspace-row"><div><b>${escapeHtml(item.job_title || "模拟面试")}</b><span>状态：${escapeHtml(item.status || "未设置")} · 阶段：${escapeHtml(item.current_stage || "未开始")}</span></div>${item.score == null ? "" : `<strong>${escapeHtml(`${item.score} 分`)}</strong>`}
             ${item.feedback ? `<p>${escapeHtml(parseFeedbackSummary(item.feedback) || item.feedback)}</p>` : ""}
-            ${item.status === "active" ? `<button type="button" class="ghost" onclick="continueOpportunityInterview(${item.id})"><i data-lucide="play"></i>继续面试</button>` : ""}</div>`).join("")}</div>` : '<div class="opportunity-empty"><b>尚无面试记录</b><span>从当前机会开始模拟面试，系统会保留机会和简历关联。</span></div>'}
+            ${item.status === "active" ? `<button type="button" class="ghost" data-command="opportunity-continue-interview" data-session-id="${item.id}"><i data-lucide="play"></i>继续面试</button>` : ""}</div>`).join("")}</div>` : '<div class="opportunity-empty"><b>尚无面试记录</b><span>从当前机会开始模拟面试，系统会保留机会和简历关联。</span></div>'}
       </section>
       <section class="workspace-section"><h4>准备行动</h4>
         ${actions.length ? `<div class="workspace-list">${actions.map((item: any) => `<div class="workspace-row"><div><b>${escapeHtml(item.title)}</b><span>${escapeHtml(item.status || "pending")} · ${date(item.due_at, "无截止时间")}</span></div>${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}</div>`).join("")}</div>` : '<div class="opportunity-empty"><b>暂无准备行动</b><span>先开始一轮模拟面试，再根据反馈补充行动。</span></div>'}
       </section>
-      <div class="workspace-primary-action"><button type="button" class="primary" onclick="prepareInterviewFromOpportunity(${action?.id || "null"})"><i data-lucide="messages-square"></i>开始新面试</button></div>`;
+      <div class="workspace-primary-action"><button type="button" class="primary" data-command="opportunity-prepare-interview"${action?.id ? ` data-action-id="${action.id}"` : ""}><i data-lucide="messages-square"></i>开始新面试</button></div>`;
   }
 
   function timeline(workspace: any): void {
@@ -109,7 +109,7 @@ export function createOpportunityWorkspaceRenderer(
       ? `<ol class="workspace-timeline">${events.map((event: any) => `
         <li><i data-lucide="circle-dot"></i><div><b>${escapeHtml(event.event_type || "记录更新")}</b><span>${date(event.occurred_at)} · ${escapeHtml(event.source || "system")}</span></div></li>`).join("")}</ol>`
       : `<div class="opportunity-empty"><b>暂无时间线事件</b><span>编辑阶段、添加行动或开始面试后，事件会显示在这里。</span></div>
-        <div class="workspace-primary-action"><button type="button" class="primary" onclick="openOpportunityWorkspace(${workspace.opportunity.id}, { updateUrl: false })"><i data-lucide="refresh-cw"></i>刷新时间线</button></div>`;
+        <div class="workspace-primary-action"><button type="button" class="primary" data-command="opportunity-refresh" data-opportunity-id="${workspace.opportunity.id}"><i data-lucide="refresh-cw"></i>刷新时间线</button></div>`;
   }
 
   function render(workspace: any): void {

@@ -1,9 +1,4 @@
-(function (root, factory) {
-  const api = factory();
-  if (typeof module !== "undefined" && module.exports) module.exports = api;
-  if (root) root.CareerForm = api;
-})(typeof window !== "undefined" ? window : globalThis, function () {
-  function parseList(value) {
+function parseList(value) {
     const seen = new Set();
     return String(value || "")
       .split(/[,，、;；\n]/)
@@ -106,7 +101,7 @@
     }
   }
 
-  return {
+  export {
     parseList,
     serializeList,
     resolveDirection,
@@ -114,4 +109,3 @@
     loadProfile,
     saveProfile,
   };
-});

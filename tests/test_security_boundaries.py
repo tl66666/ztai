@@ -146,9 +146,11 @@ class PortableRuntimeContractTests(unittest.TestCase):
 
     def test_frontend_dependencies_are_local_and_have_runtime_fallbacks(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        runtime_ui = (
+            ROOT / "frontend" / "src" / "shared" / "runtime-ui.ts"
+        ).read_text(encoding="utf-8")
         resume_controller = (
-            ROOT / "static" / "js" / "resume_controller.js"
+            ROOT / "frontend" / "src" / "resume" / "resume-controller.ts"
         ).read_text(encoding="utf-8")
 
         self.assertNotIn("unpkg.com", html)
@@ -158,8 +160,9 @@ class PortableRuntimeContractTests(unittest.TestCase):
             path = ROOT / "static" / "js" / asset
             self.assertTrue(path.is_file(), asset)
             self.assertGreater(path.stat().st_size, 1000, asset)
-        self.assertIn("function renderIcons", script)
-        self.assertIn("window.Chart", resume_controller)
+        self.assertIn("function renderIcons", runtime_ui)
+        self.assertIn("Chart?: new", resume_controller)
+        self.assertIn("}).Chart", resume_controller)
 
 
 if __name__ == "__main__":

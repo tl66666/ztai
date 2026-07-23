@@ -644,7 +644,8 @@ class InterviewApiPersistenceTests(unittest.TestCase):
 class InterviewFrontendSubmissionTests(unittest.TestCase):
     def test_frontend_sends_one_reusable_submission_identity_and_stage_precondition(self):
         with open(
-            os.path.join(PROJECT_ROOT, "static", "js", "app.js"), encoding="utf-8"
+            os.path.join(PROJECT_ROOT, "frontend", "src", "app", "runtime.ts"),
+            encoding="utf-8",
         ) as file:
             app_script = file.read()
         with open(
@@ -661,9 +662,10 @@ class InterviewFrontendSubmissionTests(unittest.TestCase):
         with open(
             os.path.join(
                 PROJECT_ROOT,
-                "static",
-                "js",
-                "interview_submission.js",
+                "frontend",
+                "src",
+                "interview",
+                "interview-submission.ts",
             ),
             encoding="utf-8",
         ) as file:
@@ -677,11 +679,10 @@ class InterviewFrontendSubmissionTests(unittest.TestCase):
         self.assertIn("submission_id: pending.submissionId", script)
         self.assertIn("expected_stage_index: pending.expectedStageIndex", script)
         self.assertIn("if (state.interviewSubmitting) return", script)
-        with open(
-            os.path.join(PROJECT_ROOT, "static", "index.html"), encoding="utf-8"
-        ) as file:
-            html = file.read()
-        self.assertIn('<script src="js/interview_submission.js"></script>', html)
+        self.assertIn(
+            'import * as InterviewSubmission from "../interview/interview-submission"',
+            app_script,
+        )
 
 
 if __name__ == "__main__":

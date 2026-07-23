@@ -1,9 +1,4 @@
-(function exposeOpportunityHistory(root, factory) {
-  const api = factory();
-  if (typeof module === "object" && module.exports) module.exports = api;
-  root.OpportunityHistory = api;
-}(typeof globalThis !== "undefined" ? globalThis : this, function buildOpportunityHistory() {
-  function readRoute(windowObject) {
+function readRoute(windowObject) {
     const url = new URL(windowObject.location.href);
     const rawOpportunity = url.searchParams.get("opportunity");
     const numericOpportunity = rawOpportunity === null ? null : Number(rawOpportunity);
@@ -188,5 +183,4 @@
     return { bind, close, navigate, open, readRoute: () => readRoute(windowObject), reload, sync };
   }
 
-  return { createOpportunityHistoryController, readRoute };
-}));
+  export { createOpportunityHistoryController, readRoute };

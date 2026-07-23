@@ -66,16 +66,32 @@ function freePort() {
 async function waitForServer(url, child) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`Flask exited before becoming ready (${child.exitCode})`);
+    if (child.exitCode !== null) {
+      throw new Error(`FastAPI exited before becoming ready (${child.exitCode})`);
+    }
     try {
-      const response = await fetch(`${url}/api/config/ai-status`);
+      const response = await fetch(`${url}/api/v1/readyz`);
       if (response.ok) return;
     } catch (_error) {
       // The process may still be importing dependencies or migrating its database.
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
-  throw new Error("Timed out waiting for the isolated Flask service");
+  throw new Error("Timed out waiting for the isolated FastAPI service");
+}
+
+async function waitForFrontend(url) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url);
+      if (response.ok && (await response.text()).includes('id="reactAppRoot"')) return;
+    } catch (_error) {
+      // Vite may still be binding its listener.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("Timed out waiting for the isolated Vite frontend");
 }
 
 function removeIsolatedTempDirectory(directory) {
@@ -93,27 +109,23 @@ function removeIsolatedTempDirectory(directory) {
 
 async function createIsolatedServer(label) {
   fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
-  const port = await freePort();
+  const apiPort = await freePort();
+  const webPort = await freePort();
   const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `jobhunter-e2e-${label}-`));
-  const baseURL = `http://127.0.0.1:${port}`;
-  const python = process.env.PYTHON || "python";
-  const program = [
-    "import app as module",
-    "module.init_db()",
-    `module.app.run(host='127.0.0.1', port=${port}, debug=False, use_reloader=False, threaded=True)`,
-  ].join("; ");
-  return startManagedServer({
+  const apiBaseURL = `http://127.0.0.1:${apiPort}`;
+  const baseURL = `http://127.0.0.1:${webPort}`;
+  const uv = process.env.UV || "uv";
+  const backend = await startManagedServer({
     label,
-    baseURL,
+    baseURL: apiBaseURL,
     tempDirectory,
     dbPath: path.join(tempDirectory, "jobhunter-e2e.db"),
-    program,
-    spawnProcess: () => spawn(python, ["-c", program], {
+    spawnProcess: () => spawn(uv, ["run", "python", "-m", "backend.cli"], {
       cwd: ROOT,
       env: {
         ...process.env,
         JOBHUNTER_DB_PATH: path.join(tempDirectory, "jobhunter-e2e.db"),
-        JOBHUNTER_PORT: String(port),
+        JOBHUNTER_PORT: String(apiPort),
         JOBHUNTER_HOST: "127.0.0.1",
         GLM_API_KEY: "",
         DEEPSEEK_API_KEY: "",
@@ -133,6 +145,33 @@ async function createIsolatedServer(label) {
       assert.equal(fs.existsSync(directory), false, `Temporary database was not removed: ${directory}`);
     },
   });
+  let vite;
+  try {
+    const { createServer } = await import("vite");
+    vite = await createServer({
+      configFile: false,
+      root: path.join(ROOT, "static"),
+      server: {
+        host: "127.0.0.1",
+        port: webPort,
+        strictPort: true,
+        proxy: { "/api": { target: apiBaseURL, changeOrigin: true } },
+      },
+    });
+    await vite.listen();
+    await waitForFrontend(baseURL);
+  } catch (error) {
+    await vite?.close();
+    await backend.close();
+    throw error;
+  }
+  return {
+    baseURL,
+    close: async () => {
+      await vite.close();
+      await backend.close();
+    },
+  };
 }
 
 function browserMatrix() {
