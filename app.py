@@ -16,6 +16,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from werkzeug.security import safe_join
 
+from backend.application import InterviewModule, OpportunityModule
 from utils.ai_client import extract_keywords, get_ai_client, set_api_key
 from utils.agent_runtime.memory import create_agent_tables, is_browser_event_artifact
 from utils.agent_runtime.resume_draft import model_resume_draft
@@ -26,6 +27,8 @@ from utils.domain import (
     InterviewService,
 )
 from utils.domain.database import ensure_column, ensure_local_user, migrate_database
+from utils.domain.interview_flow import InterviewFlow
+from utils.domain.opportunity_coaching import build_followup_plan
 
 
 BASE_DIR = os.path.dirname(__file__)
@@ -47,8 +50,6 @@ CORS(
 )
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(EXPORT_FOLDER, exist_ok=True)
 
 
 _agent_service = None
@@ -156,6 +157,8 @@ def get_db() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    os.makedirs(EXPORT_FOLDER, exist_ok=True)
     with get_db() as conn:
         conn.executescript(
             """
@@ -271,6 +274,18 @@ def get_interview_service() -> InterviewService:
             ),
         )
     return _interview_service
+
+
+def get_interview_module() -> InterviewModule:
+    return InterviewModule(get_interview_service(), local_user_id=AGENT_USER_ID)
+
+
+def get_opportunity_module() -> OpportunityModule:
+    return OpportunityModule(
+        get_career_service(),
+        DB_PATH,
+        local_user_id=AGENT_USER_ID,
+    )
 
 
 def career_error_response(exc: Exception):
@@ -1360,20 +1375,21 @@ def job_match():
     })
 
 
+_interview_flow_policy = InterviewFlow(
+    CAREER_PROFILES,
+    normalize_profile=normalize_career_profile,
+    voice_analyzer=analyze_voice_text,
+)
+
+
+def interview_flow() -> InterviewFlow:
+    return _interview_flow_policy
+
+
 @app.route("/api/interview/sessions", methods=["POST"])
 def start_interview_session():
     try:
-        data = json_object_body()
-        session = get_interview_service().start(
-            AGENT_USER_ID,
-            data.get("resume_id"),
-            data.get("job_title", "目标岗位"),
-            data.get("jd", ""),
-            data.get("mode", "standard"),
-            data.get("career_profile") or data.get("profile"),
-            data.get("application_id"),
-            data.get("action_id"),
-        )
+        session = get_interview_module().start(json_object_body())
     except (InterviewConflictError, PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
     return jsonify(session)
@@ -1382,114 +1398,48 @@ def start_interview_session():
 @app.route("/api/interview/sessions/open", methods=["GET"])
 def list_open_interview_sessions():
     try:
-        sessions = get_interview_service().list_open(AGENT_USER_ID)
+        result = get_interview_module().list_open()
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
-    return jsonify({"success": True, "data": sessions})
+    return jsonify(result)
 
 
 @app.route("/api/interview/sessions/<session_id>", methods=["GET"])
 def get_interview_session(session_id):
     try:
-        session = get_interview_service().get(AGENT_USER_ID, session_id)
+        result, status_code = get_interview_module().get(session_id)
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
-    if session is None:
-        return jsonify({
-            "success": False,
-            "message": "interview session not found",
-            "code": "interview_session_not_found",
-        }), 404
-    if session.get("status") == "recovery_error":
-        return jsonify({
-            **session,
-            "success": False,
-            "message": session["recovery_error"],
-            "code": "interview_session_recovery_error",
-        }), 409
-    return jsonify(session)
+    return jsonify(result), status_code
 
 
 @app.route("/api/interview/sessions/<session_id>/answer", methods=["POST"])
 def answer_interview_session(session_id):
     try:
-        data = json_object_body()
-        result = get_interview_service().answer(
-            AGENT_USER_ID,
-            session_id,
-            data.get("answer"),
-            data.get("duration_seconds"),
-            submission_id=data.get("submission_id"),
-            expected_stage_index=data.get("expected_stage_index"),
-        )
+        result = get_interview_module().answer(session_id, json_object_body())
     except (InterviewConflictError, PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
     return jsonify(result)
 
 
 def build_interview_stages(session: dict) -> list[tuple[str, str]]:
-    job_title = session["job_title"]
-    profile_key = normalize_career_profile(session.get("career_profile"))
-    profile = CAREER_PROFILES[profile_key]
-    ability_names = list(profile["abilities"].keys())
-    if profile_key == "tech":
-        professional_question = f"如果你来测试/建设 {job_title} 相关系统，你会如何设计核心用例和接口验证？"
-    else:
-        professional_question = f"围绕 {job_title}，请讲讲你会如何处理一个典型的{ability_names[0]}任务，并说明判断结果好坏的指标。"
-    return [
-        ("resume_deep_dive", f"我看到你简历里有相关经历。请展开讲一个最能体现你适合{profile['label']}方向的经历，按 STAR 结构回答。"),
-        ("professional", professional_question),
-        ("behavioral", "讲一次你发现问题并推动解决的经历，你做了什么，结果怎样？"),
-        ("candidate_questions", f"现在进入反问环节。面对{profile['interviewer']}，你会问哪两个能体现你认真了解岗位的问题？"),
-        ("finished", "面试结束。系统已生成综合反馈。"),
-    ]
+    return interview_flow().build_stages(session)
 
 
 def build_interview_summary(answer: str, voice: dict, job_title: str) -> str:
-    if len(answer) < 60:
-        return f"回答偏短。面试 {job_title} 时，需要把“做过什么、怎么做、结果如何”讲完整。"
-    if voice["structure_score"] < 2:
-        return "内容有素材，但结构不够明显。建议先给结论，再按背景、行动、结果展开。"
-    if voice["filler_count"] > 2:
-        return "信息量可以，但口头禅偏多。建议用短暂停顿替代“然后、就是、那个”。"
-    return "回答整体可用，已经具备项目证据。下一步重点补充量化指标和岗位关键词。"
+    return interview_flow().answer_summary(answer, voice, job_title)
 
 
 def build_answer_upgrade(answer: str, job_title: str) -> str:
-    return (
-        f"可升级表达：面向 {job_title}，我在项目中不仅参与实现/测试，还围绕核心业务流程设计验证方案。"
-        "例如在 AI 求职辅助系统中，我覆盖了简历上传、JD 匹配、模拟面试和投递看板等流程，"
-        "通过接口测试、异常场景和回归验证保证系统稳定，并把测试结论沉淀成报告。"
-    )
+    return InterviewFlow.answer_upgrade(answer, job_title)
 
 
 def detect_answer_intent(answer: str) -> str:
-    text = re.sub(r"\s+", "", (answer or "").lower())
-    if not text:
-        return "empty"
-    skip_words = ["不知道", "不会", "不清楚", "没想好", "下一题", "跳过", "pass", "next", "不会答"]
-    if any(word in text for word in skip_words):
-        return "skip"
-    if len(text) < 8:
-        return "too_short"
-    return "answer"
+    return InterviewFlow.detect_answer_intent(answer)
 
 
 def skipped_feedback(job_title: str, stage_name_text: str = "本题") -> dict:
-    voice = analyze_voice_text("不知道")
-    voice["overall_score"] = 0
-    voice["dimension_scores"] = {"表达流畅": 0, "结构逻辑": 0, "岗位相关": 0, "信息密度": 0}
-    return {
-        "score": 0,
-        "summary": f"你选择跳过{stage_name_text}。这在练习里可以，但真实面试不能只说不知道。建议先给一个诚实回应，再说你的补救思路。",
-        "voice": voice,
-        "suggestions": [
-            "可用话术：这个点我现在不能完整回答，但我会先确认概念，再结合项目场景补充验证。",
-            "遇到不会的题，至少说出你知道的边界、排查路径或学习计划。",
-            "系统已进入下一题/下一阶段，不会把跳过内容包装成虚假能力。"
-        ],
-        "answer_upgrade": f"保底回答：这个问题我还需要补充学习。面向 {job_title}，我会从岗位要求出发，先查清概念，再用项目里的真实场景做验证和复盘。",
-    }
+    return interview_flow().skipped_feedback(job_title, stage_name_text)
 
 
 def evaluate_interview_answer(
@@ -1498,28 +1448,9 @@ def evaluate_interview_answer(
     duration_seconds: float | None,
     stage: str,
 ) -> tuple[dict, dict, bool]:
-    answer_intent = detect_answer_intent(answer)
-    voice = analyze_voice_text(answer, duration_seconds)
-    skipped = answer_intent in {"skip", "too_short"}
-    if skipped:
-        voice["overall_score"] = 0
-        voice["dimension_scores"] = {
-            "表达流畅": 0,
-            "结构逻辑": 0,
-            "岗位相关": 0,
-            "信息密度": 0,
-        }
-        feedback = skipped_feedback(session["job_title"], stage)
-    else:
-        feedback = {
-            "score": voice["overall_score"],
-            "summary": build_interview_summary(answer, voice, session["job_title"]),
-            "voice": voice,
-            "suggestions": voice["tips"],
-            "answer_upgrade": build_answer_upgrade(answer, session["job_title"]),
-        }
-    candidate = {"role": "candidate", "content": answer, "voice": voice}
-    return candidate, feedback, skipped
+    return interview_flow().evaluate_answer(
+        session, answer, duration_seconds, stage
+    )
 
 
 @app.route("/api/interview/analyze-voice", methods=["POST"])
@@ -2315,138 +2246,45 @@ def career_report_result_api(report_id):
 
 @app.route("/api/opportunities", methods=["GET", "POST"])
 def opportunities_api():
-    service = get_career_service()
+    module = get_opportunity_module()
     try:
         if request.method == "GET":
-            opportunities = service.list_opportunities(AGENT_USER_ID)
-            return jsonify({
-                "success": True,
-                "data": opportunities,
-                "canonical_statuses": APPLICATION_STATUSES,
-            })
-        opportunity = service.create_opportunity(AGENT_USER_ID, json_object_body())
+            return jsonify(module.list())
+        result, status_code = module.create(json_object_body())
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
-    return jsonify({"success": True, "data": opportunity}), 201
+    return jsonify(result), status_code
 
 
 @app.route("/api/opportunities/<int:opportunity_id>", methods=["GET", "PUT"])
 def opportunity_api(opportunity_id):
-    service = get_career_service()
+    module = get_opportunity_module()
     try:
         if request.method == "GET":
-            opportunity = service.get_opportunity(AGENT_USER_ID, opportunity_id)
+            result = module.get(opportunity_id)
         else:
-            opportunity = service.update_opportunity(
-                AGENT_USER_ID, opportunity_id, json_object_body()
-            )
+            result = module.update(opportunity_id, json_object_body())
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
-    return jsonify({"success": True, "data": opportunity})
+    return jsonify(result)
 
 
 @app.route("/api/opportunities/<int:opportunity_id>/timeline")
 def opportunity_timeline_api(opportunity_id):
     try:
-        events = get_career_service().timeline(AGENT_USER_ID, opportunity_id)
+        result = get_opportunity_module().timeline(opportunity_id)
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
-    return jsonify({"success": True, "data": events})
+    return jsonify(result)
 
 
 @app.route("/api/opportunities/<int:opportunity_id>/workspace")
 def opportunity_workspace_api(opportunity_id):
-    """Return the local user's opportunity workspace without resume/contact secrets."""
     try:
-        opportunity = get_career_service().get_opportunity(AGENT_USER_ID, opportunity_id)
-        timeline = get_career_service().timeline(AGENT_USER_ID, opportunity_id)
+        result = get_opportunity_module().workspace(opportunity_id)
     except (PermissionError, LookupError, ValueError) as exc:
         return career_error_response(exc)
-
-    opportunity_fields = (
-        "id", "company", "job_title", "status", "city", "salary_min", "salary_max",
-        "notes", "applied_at", "next_action_at", "interview_at", "priority", "jd_text",
-        "resume_id", "created_at", "updated_at", "needs_status_review",
-    )
-    safe_opportunity = {
-        field: opportunity.get(field) for field in opportunity_fields if field in opportunity
-    }
-
-    with get_db() as conn:
-        resume = None
-        if opportunity.get("resume_id") is not None:
-            row = conn.execute(
-                """SELECT id, title, file_path, file_type, status, version_label,
-                          target_job_title, created_at, updated_at
-                   FROM resumes WHERE id = ? AND user_id = ?""",
-                (opportunity["resume_id"], AGENT_USER_ID),
-            ).fetchone()
-            if row:
-                resume = dict(row)
-                resume["has_original"] = bool(resume.pop("file_path", None))
-
-        match_rows = conn.execute(
-            """SELECT m.id, m.resume_id, m.job_title, m.match_score, m.analysis,
-                      m.details_json, m.created_at, r.title AS resume_title
-               FROM job_matches m
-               JOIN resumes r ON r.id = m.resume_id AND r.user_id = m.user_id
-               WHERE m.user_id = ? AND m.application_id = ?
-               ORDER BY m.created_at DESC, m.id DESC LIMIT 5""",
-            (AGENT_USER_ID, opportunity_id),
-        ).fetchall()
-        matches = []
-        for row in match_rows:
-            item = dict(row)
-            raw_details = item.pop("details_json", None)
-            try:
-                details = json.loads(raw_details or "{}")
-            except (TypeError, json.JSONDecodeError):
-                details = {}
-            item["details"] = details if isinstance(details, dict) else {}
-            matches.append(item)
-
-        interviews = [
-            dict(row)
-            for row in conn.execute(
-                """SELECT id, resume_id, job_title, mode, status, current_stage,
-                          score, feedback, started_at, completed_at, updated_at
-                   FROM interview_sessions
-                   WHERE user_id = ? AND application_id = ?
-                   ORDER BY started_at DESC, id DESC""",
-                (AGENT_USER_ID, opportunity_id),
-            ).fetchall()
-        ]
-        actions = [
-            dict(row)
-            for row in conn.execute(
-                """SELECT id, title, action_type, description, status, priority,
-                          due_at, completed_at, created_at, updated_at
-                   FROM action_items
-                   WHERE user_id = ? AND application_id = ?
-                   ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END,
-                            due_at, id""",
-                (AGENT_USER_ID, opportunity_id),
-            ).fetchall()
-        ]
-
-    safe_timeline = [
-        {
-            "id": event["id"],
-            "event_type": event["event_type"],
-            "source": event.get("source"),
-            "occurred_at": event["occurred_at"],
-        }
-        for event in timeline
-    ]
-    return jsonify({
-        "success": True,
-        "opportunity": safe_opportunity,
-        "resume": resume,
-        "matches": matches,
-        "interviews": interviews,
-        "actions": actions,
-        "timeline": safe_timeline,
-    })
+    return jsonify(result)
 
 
 @app.route("/api/action-items", methods=["GET", "POST"])
@@ -2595,74 +2433,7 @@ def advance_application(application_id):
 
 
 def build_application_followup_plan(app_row: sqlite3.Row, resume_row: sqlite3.Row | None, interview_row: sqlite3.Row | None) -> dict:
-    company = app_row["company"]
-    job = app_row["job_title"]
-    status = app_row["status"]
-    city = app_row["city"] or "目标城市"
-    notes = app_row["notes"] or ""
-    resume_hint = f"最近简历《{resume_row['title']}》" if resume_row else "当前暂无已保存简历"
-    interview_hint = ""
-    if interview_row:
-        interview_hint = f"最近一次 {interview_row['job_title']} 模拟面试得分 {interview_row['score']}，建议把低分维度转成复盘待办。"
-
-    stage_rules = {
-        "已投递": (
-            "投递后 2-3 天检查岗位状态；如果没有反馈，补充一次礼貌跟进，并同步准备该岗位的 2 分钟项目介绍。",
-            "风险是只投不跟进，后续忘记岗位要求；建议在备注里补充投递渠道、JD 关键词和截止时间。",
-        ),
-        "简历筛选": (
-            "围绕 JD 关键词再做一次简历定制，准备一版更贴合该岗位的项目经历表述。",
-            "风险是简历泛化，HR 看不到岗位相关证据；需要把工具、动作、结果写进项目经历。",
-        ),
-        "笔试": (
-            "整理笔试范围，优先准备基础题、接口测试、SQL、Python/前端基础和项目场景题。",
-            "风险是只刷题不复盘；建议记录错题类型，并把知识点转成面试可讲案例。",
-        ),
-        "一面": (
-            "准备自我介绍、项目深挖、技术追问和反问问题；用模拟面试模块跑一轮完整流程。",
-            "风险是项目讲得像流水账；建议用 STAR 结构讲清背景、动作、结果和个人贡献。",
-        ),
-        "二面": (
-            "强化项目决策、问题定位、协作推动和结果量化，准备 2 个能体现成长性的案例。",
-            "风险是回答停留在功能层；需要补充为什么这样设计、如何验证、遇到问题怎么取舍。",
-        ),
-        "HR 面": (
-            "准备求职动机、稳定性、薪资预期和到岗时间；提前查城市和岗位薪资区间。",
-            "风险是薪资表达没依据；建议用城市、经验、技能匹配度和 Offer 进度作为谈薪支撑。",
-        ),
-        "Offer": (
-            "核对薪资结构、试用期、五险一金、工作地点、入职材料和违约条款，再做最终选择。",
-            "风险是只看月薪不看总包和试用期规则；建议整理对比表后再确认。",
-        ),
-        "已拒绝": (
-            "记录拒绝原因，把它转成简历、面试或技能的下一轮改进项。",
-            "风险是只记录失败结果，不沉淀原因；建议复盘筛选、笔试、面试各阶段卡点。",
-        ),
-    }
-    next_action, risk = stage_rules.get(status, stage_rules["已投递"])
-    if notes:
-        risk += f" 当前备注里已有线索：{notes[:120]}"
-    template = (
-        f"您好，我是投递 {company}「{job}」岗位的候选人。想礼貌确认一下目前流程进展。"
-        f"我这边可以结合岗位要求补充 {resume_hint} 中与岗位更相关的项目材料，也可以配合后续笔试/面试安排。谢谢。"
-    )
-    if status in {"一面", "二面", "HR 面"}:
-        template = (
-            f"您好，感谢之前关于 {company}「{job}」岗位的沟通。"
-            f"我已根据面试反馈继续梳理项目经历和岗位匹配点，想确认一下后续流程安排。谢谢。"
-        )
-    return {
-        "title": f"{company} / {job} 跟进策略",
-        "company": company,
-        "job_title": job,
-        "status": status,
-        "city": city,
-        "next_action": next_action,
-        "risk": risk,
-        "message_template": template,
-        "resume_hint": resume_hint,
-        "interview_hint": interview_hint,
-    }
+    return build_followup_plan(app_row, resume_row, interview_row)
 
 
 @app.route("/api/dashboard/<int:user_id>")

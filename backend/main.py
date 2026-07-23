@@ -7,8 +7,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from backend.adapters.legacy_flask import LegacyFlaskAdapter
+from backend.api.interviews import create_interview_router
+from backend.api.opportunities import create_opportunity_router
 from backend.api.system import create_system_router
+from backend.application.container import ApplicationContainer
 from backend.core.settings import Settings
 
 
@@ -16,11 +18,11 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     """Build the complete ASGI application behind one runtime interface."""
 
     runtime_settings = settings or Settings.from_environment()
-    legacy = LegacyFlaskAdapter(runtime_settings)
+    container = ApplicationContainer(runtime_settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        legacy.initialize()
+        container.initialize()
         yield
 
     application = FastAPI(
@@ -47,8 +49,14 @@ def create_application(settings: Settings | None = None) -> FastAPI:
             allowed_hosts=list(runtime_settings.allowed_hosts),
         )
     application.include_router(
-        create_system_router(legacy.database_ready),
+        create_system_router(container.database_ready),
         prefix="/api/v1",
     )
-    application.mount("/", WSGIMiddleware(legacy.application))
+    application.include_router(
+        create_interview_router(lambda: container.interviews)
+    )
+    application.include_router(
+        create_opportunity_router(lambda: container.opportunities)
+    )
+    application.mount("/", WSGIMiddleware(container.legacy.application))
     return application

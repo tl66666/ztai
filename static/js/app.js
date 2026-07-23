@@ -1,4 +1,7 @@
-const API = window.location.protocol === "file:" ? "http://localhost:5000/api" : "/api";
+const API = JobHunterApiClient.resolveBaseUrl({
+  location: window.location,
+  runtimeConfig: window.__JOBHUNTER_CONFIG__,
+});
 const USER_ID = 1;
 const JOBHUNTER_AGENT_CONVERSATION = `jobhunter_agent_conversation_${USER_ID}`;
 const api = JobHunterApiClient.create({ baseUrl: API });
@@ -47,6 +50,28 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+const resumeController = JobHunterResumeController.create({
+  userId: USER_ID,
+  apiBaseUrl: API,
+  state,
+  request: api,
+  byId: $,
+  escapeHtml,
+  renderText,
+  toast,
+  withLoading,
+  renderIcons,
+  syncAgentContext,
+  jumpToModule,
+  closeAgentDrawer,
+  selectedCareerProfile,
+  careerProfileLabel,
+  loadDashboard,
+  clearMatchOpportunityLink,
+  buildMatchPayload,
+  downloadResponse,
+});
 
 function renderIcons() {
   if (!window.lucide || typeof window.lucide.createIcons !== "function") return false;
@@ -668,138 +693,44 @@ function applyTheme(theme) {
 }
 
 async function loadResumes() {
-  const data = await api(`/resumes/${USER_ID}`);
-  state.resumes = data.success ? data.data : [];
-  $("resumeCount").textContent = state.resumes.length;
-  $("resumeList").innerHTML = state.resumes.length
-    ? state.resumes.map((resume) => `
-      <article class="list-item" data-resume-id="${resume.id}" tabindex="-1">
-        <b>${escapeHtml(resume.title)}</b>
-        <small>${new Date(resume.updated_at || resume.created_at).toLocaleString()}${resume.file_type ? ` · 原件 ${escapeHtml(resume.file_type.toUpperCase())}` : ""}</small>
-        <div class="list-actions">
-          <button class="ghost small" onclick="fillResume(${resume.id})">编辑</button>
-          <button class="ghost small" onclick="openOriginalResume(${resume.id})">打开原件</button>
-          <label class="ghost small file-action">替换原件<input type="file" accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg" onchange="replaceOriginalResume(${resume.id}, this)"></label>
-          <button class="ghost small" onclick="analyzeResume(${resume.id})">诊断</button>
-          <button class="ghost small" onclick="deleteResume(${resume.id})">删除</button>
-        </div>
-      </article>
-    `).join("")
-    : `<div class="list-item"><b>暂无简历</b><small>先保存一份简历</small></div>`;
-  updateResumeSelects();
-  syncAgentContext();
-  renderIcons();
+  return resumeController.load();
 }
 
 function updateResumeSelects() {
-  const options = `<option value="">选择简历</option>` + state.resumes.map((resume) => `<option value="${resume.id}">${escapeHtml(resume.title)}</option>`).join("");
-  ["tailorResumeSelect", "interviewResumeSelect", "exportResumeSelect", "analysisResumeSelect", "skillResumeSelect"].forEach((id) => $(id).innerHTML = options);
+  return resumeController.updateSelects();
 }
 
 async function fillResume(id) {
-  const data = await api(`/resumes/detail/${id}`);
-  if (!data.success) return;
-  $("resumeTitle").value = data.data.title;
-  $("resumeContent").value = data.data.content;
-  state.editingResumeId = id;
-  $("saveResumeBtn").innerHTML = `<i data-lucide="save"></i>更新当前简历`;
-  setResumeEditNotice(data.data.title);
-  renderIcons();
-  jumpToModule("resume", "input");
-  $("resumeTitle").focus();
-  $("resumeContent").scrollTop = 0;
-  toast(`正在编辑：${data.data.title}`);
+  return resumeController.fill(id);
 }
 
 function openResumeUploadFromAgent() {
   cancelResumeEdit();
-  closeAgentDrawer();
-  jumpToModule("resume", "input");
-  const fileInput = $("resumeFile");
-  fileInput?.focus({ preventScroll: true });
-  fileInput?.click();
+  return resumeController.openUploadFromAgent();
 }
 
 function fillResumeTitleFromFile() {
-  const file = $("resumeFile")?.files?.[0];
-  const title = $("resumeTitle");
-  if (!file || !title || title.value.trim()) return;
-  title.value = file.name.replace(/\.[^.]+$/, "").slice(0, 300);
+  return resumeController.fillTitleFromFile();
 }
 
 function setResumeEditNotice(title = "") {
-  const notice = $("editingResumeNotice");
-  if (!notice) return;
-  notice.classList.toggle("hidden", !state.editingResumeId);
-  const text = $("editingResumeText");
-  if (text) text.textContent = title ? `当前版本：${title}。修改后点击“更新当前简历”保存。` : "修改后点击“更新当前简历”保存。";
+  return resumeController.setEditNotice(title);
 }
 
 function cancelResumeEdit() {
-  state.editingResumeId = null;
-  $("resumeTitle").value = "";
-  $("resumeContent").value = "";
-  $("resumeFile").value = "";
-  $("saveResumeBtn").innerHTML = `<i data-lucide="save"></i>保存简历`;
-  setResumeEditNotice();
-  renderIcons();
-  toast("已退出简历编辑模式");
+  return resumeController.cancelEdit();
 }
 
 function openOriginalResume(id) {
-  window.open(`${API}/resumes/${id}/original`, "_blank");
+  return resumeController.openOriginal(id);
 }
 
 async function replaceOriginalResume(id, input) {
-  const file = input.files[0];
-  if (!file) return;
-  const form = new FormData();
-  form.append("file", file);
-  const data = await withLoading(
-    () => api(`/resumes/${id}/replace-file`, { method: "POST", body: form }),
-    "正在替换并解析原始简历..."
-  );
-  input.value = "";
-  if (!data.success) return toast(data.message || "替换失败");
-  toast("原文件已替换，文本内容已重新解析");
-  await loadResumes();
-  if (state.editingResumeId === id) {
-    const detail = await api(`/resumes/detail/${id}`);
-    $("resumeContent").value = detail.data.content || "";
-  }
+  return resumeController.replaceOriginal(id, input);
 }
 
 async function saveResume() {
-  const file = $("resumeFile").files[0];
-  const title = $("resumeTitle").value.trim();
-  const content = $("resumeContent").value.trim();
-  if (!title) return toast("请填写简历标题");
-  let data;
-  if (file) {
-    const form = new FormData();
-    form.append("file", file);
-    form.append("user_id", USER_ID);
-    form.append("title", title);
-    data = await api("/resumes/upload", { method: "POST", body: form });
-  } else if (state.editingResumeId) {
-    if (!content) return toast("请粘贴简历内容或上传文件");
-    data = await api(`/resumes/${state.editingResumeId}`, { method: "PUT", body: { title, content } });
-  } else {
-    if (!content) return toast("请粘贴简历内容或上传文件");
-    data = await api("/resumes", { method: "POST", body: { user_id: USER_ID, title, content } });
-  }
-  if (data.success) {
-    toast(state.editingResumeId ? "简历已更新" : "简历已保存");
-    $("resumeFile").value = "";
-    state.editingResumeId = null;
-    $("saveResumeBtn").innerHTML = `<i data-lucide="save"></i>保存简历`;
-    setResumeEditNotice();
-    await loadResumes();
-    await loadDashboard();
-    renderIcons();
-  } else {
-    toast(data.message || "保存失败");
-  }
+  return resumeController.save();
 }
 
 function downloadBlob(blob, filename) {
@@ -902,227 +833,63 @@ async function downloadResponse(response, fallbackName) {
 }
 
 async function exportResume(format) {
-  const resumeId = $("exportResumeSelect").value || selectedResumeId();
-  if (!resumeId) return toast("请先选择要导出的简历");
-  const response = await api.raw(`/resumes/${resumeId}/export/${format}`);
-  await downloadResponse(response, format === "pdf" ? "resume.pdf" : "resume.docx");
+  return resumeController.export(format);
 }
 
 async function convertDocument(route, inputId) {
-  const input = $(inputId);
-  const file = input.files[0];
-  if (!file) return;
-  const form = new FormData();
-  form.append("file", file);
-  const response = await api.raw(`/convert/${route}`, { method: "POST", body: form });
-  await downloadResponse(response, route === "pdf-to-word" ? "converted.docx" : "converted.pdf");
-  input.value = "";
+  return resumeController.convertDocument(route, inputId);
 }
 
 async function generateResume() {
-  const data = await api("/resume-generator", {
-    method: "POST",
-    body: {
-      name: "唐乐",
-      job_target: "软件测试工程师",
-      skills: "Python, Flask, Selenium, Pytest, JMeter, Postman, MySQL",
-    },
-  });
-  $("resumeTitle").value = "唐乐-软件测试工程师-项目版";
-  $("resumeContent").value = data.resume_content;
-  toast("已生成一份可继续修改的示例简历");
+  return resumeController.generate();
 }
 
 function renderResumeAuditResult(data) {
-  $("resumeAuditResult").classList.remove("hidden");
-  $("resumeAuditResult").innerHTML = `
-    <h4>综合评分：${data.score}</h4>
-    <div class="score-grid">
-      ${Object.entries(data.section_scores || {}).map(([key, value]) => `<div><span>${escapeHtml(key)}</span><b>${value}</b></div>`).join("")}
-    </div>
-    <div><b>一句话定位</b><br>${escapeHtml(data.positioning)}</div>
-    <div><b>优势证据</b><br>${(data.strengths || []).map((item) => `• ${escapeHtml(item)}`).join("<br>")}</div>
-    <div><b>客观锐评</b><br>${(data.brutal_comments || []).map((item) => `• ${escapeHtml(item)}`).join("<br>")}</div>
-    <div><b>HR 初筛风险</b><br>${(data.risks || []).map((item) => `• ${escapeHtml(item)}`).join("<br>")}</div>
-    <div><b>证据缺口</b><br>${(data.evidence_gaps || []).map((item) => `• ${escapeHtml(item)}`).join("<br>")}</div>
-    <div><b>优先修改项</b><br>${(data.actions || []).map((item) => `• ${escapeHtml(item)}`).join("<br>")}</div>
-    <div><b>项目经历建议</b><br>${(data.project_suggestions || []).map((item) => `• ${escapeHtml(item)}`).join("<br>")}</div>
-    <div class="result-actions">
-      <button class="primary" onclick="improveSelectedResume()">生成优化版并保存</button>
-      <button class="ghost" onclick="jumpToModule('resume','jd')">去做 JD 优化</button>
-      <button class="ghost" onclick="jumpToModule('resume','skills')">看技能图谱</button>
-      <button class="ghost" onclick="jumpToModule('interview','mock')">去模拟面试</button>
-    </div>
-  `;
+  return resumeController.renderAudit(data);
 }
 
 async function analyzeResume(id) {
-  const data = await withLoading(
-    () => api(`/resumes/${id}/audit`, { method: "POST", body: { job_title: $("analysisJobTitle").value || $("jobTitleInput").value, jd: $("analysisJdInput").value || $("jdInput").value } }),
-    "AI 正在诊断简历表达..."
-  );
-  $("analysisResumeSelect").value = String(id);
-  jumpToModule("resume", "analysis");
-  renderResumeAuditResult(data);
+  return resumeController.analyze(id);
 }
 
 function selectedAnalysisResumeId() {
-  return $("analysisResumeSelect").value || selectedResumeId();
+  return resumeController.selectedAnalysisId();
 }
 
 async function auditSelectedResume() {
-  const resumeId = selectedAnalysisResumeId();
-  if (!resumeId) return toast("请先选择要分析的简历");
-  const data = await withLoading(
-    () => api(`/resumes/${resumeId}/audit`, {
-      method: "POST",
-      body: { job_title: $("analysisJobTitle").value, jd: $("analysisJdInput").value, career_profile: selectedCareerProfile() },
-    }),
-    "AI 正在做简历结构诊断..."
-  );
-  if (!data.success) return toast(data.message || "诊断失败");
-  renderResumeAuditResult(data);
+  return resumeController.auditSelected();
 }
 
 async function improveSelectedResume() {
-  const resumeId = selectedAnalysisResumeId();
-  if (!resumeId) return toast("请先选择要修改的简历");
-  const data = await withLoading(
-    () => api(`/resumes/${resumeId}/improve`, {
-      method: "POST",
-      body: {
-        job_title: $("analysisJobTitle").value || $("jobTitleInput").value,
-        jd: $("analysisJdInput").value || $("jdInput").value,
-        career_profile: selectedCareerProfile(),
-        save: true,
-      },
-    }),
-    "AI 正在生成可投递优化版..."
-  );
-  if (!data.success) return toast(data.message || "优化失败");
-  $("resumeAuditResult").classList.remove("hidden");
-  $("resumeAuditResult").innerHTML = `
-    <h4>已生成优化版：${escapeHtml(data.new_title || "新简历版本")}</h4>
-    <div><b>${data.ai_used ? "AI 深度改写：已通读完整简历并按目标岗位调整表达。" : "本地事实保真版：模型不可用时保留原始事实并完成结构整理。"}</b></div>
-    <div><b>改写策略</b><br>${(data.strategy || []).map((item) => `• ${escapeHtml(item)}`).join("<br>")}</div>
-    <h4>优化内容预览</h4>${renderText(data.improved_resume || "")}
-    <div class="result-actions">
-      <button class="primary" onclick="jumpToModule('resume','manage')">查看我的简历</button>
-      <button class="ghost" onclick="jumpToModule('resume','export')">导出新版本</button>
-      <button class="ghost" onclick="prepareInterviewFromJd()">带入模拟面试</button>
-    </div>
-  `;
-  await loadResumes();
-  await loadDashboard();
+  return resumeController.improveSelected();
 }
 
 async function deleteResume(id) {
-  await api(`/resumes/${id}`, { method: "DELETE" });
-  toast("简历已删除");
-  loadResumes();
-  loadDashboard();
+  return resumeController.remove(id);
 }
 
 function selectedResumeId() {
-  return state.resumes[0]?.id;
+  return resumeController.selectedResumeId();
 }
 
 function selectedTailorResumeId() {
-  return $("tailorResumeSelect").value || state.resumes[0]?.id;
+  return resumeController.selectedTailorId();
 }
 
 function selectedSkillResumeId() {
-  return $("skillResumeSelect").value || state.resumes[0]?.id;
+  return resumeController.selectedSkillId();
 }
 
 async function tailorResume() {
-  const resumeId = selectedTailorResumeId();
-  if (!resumeId) return toast("请先选择简历");
-  const data = await withLoading(
-    () => api(`/resumes/${resumeId}/tailor`, {
-      method: "POST",
-      body: { job_title: $("jobTitleInput").value, jd: $("jdInput").value, career_profile: selectedCareerProfile() },
-    }),
-    "AI 正在按 JD 优化简历..."
-  );
-  $("tailorResult").classList.remove("hidden");
-  const focus = data.jd_focus || {};
-  $("tailorResult").innerHTML = `
-    <h4>匹配分：${data.match_score}</h4>
-    <div class="score-grid">
-      ${Object.entries(data.score_detail || {}).map(([key, value]) => `<div><span>${escapeHtml(key)}</span><b>${value}</b></div>`).join("")}
-    </div>
-    <div><b>候选人定位</b><br>${escapeHtml(data.positioning)}</div>
-    <div><b>客观锐评</b><br>${(data.brutal_comments || []).map((item) => `• ${escapeHtml(item)}`).join("<br>")}</div>
-    <div><b>JD 聚焦</b><br>
-      硬技能：${escapeHtml((focus["硬技能"] || []).join("、") || "未明显出现")}<br>
-      测试能力：${escapeHtml((focus["测试能力"] || []).join("、") || "未明显出现")}<br>
-      AI 能力：${escapeHtml((focus["AI 能力"] || []).join("、") || "未明显出现")}
-    </div>
-    <div><b>已命中</b><br>${escapeHtml((data.matched_keywords || []).join("、") || "暂无")}</div>
-    <div><b>待补齐</b><br>${escapeHtml((data.keyword_gaps || []).join("、") || "暂无")}</div>
-    <div><b>面试讲述要点</b><br>${(data.interview_talking_points || []).map((item) => `• ${escapeHtml(item)}`).join("<br>")}</div>
-    <h4>优化版本</h4>${renderText(data.ai_rewrite || data.tailored_resume)}
-    <div class="result-actions">
-      <button class="primary" onclick="prepareInterviewFromJd()">带入模拟面试</button>
-      <button class="ghost" onclick="prepareApplicationFromJd()">新增投递记录</button>
-      <button class="ghost" onclick="jumpToModule('resume','export')">去导出简历</button>
-    </div>
-  `;
+  return resumeController.tailor();
 }
 
 async function matchResume() {
-  const resumeId = selectedTailorResumeId();
-  if (!resumeId) return toast("请先选择简历");
-  const linkedOpportunityId = state.matchOpportunityId;
-  const matchBody = buildMatchPayload({
-    resume_id: Number(resumeId),
-    job_title: $("jobTitleInput").value,
-    jd: $("jdInput").value,
-    job_requirements: $("jdInput").value,
-    career_profile: selectedCareerProfile(),
-  }, linkedOpportunityId);
-  const data = await withLoading(
-    () => api("/job-match", {
-      method: "POST",
-      body: matchBody,
-    }),
-    "AI 正在计算岗位匹配度..."
-  );
-  if (!data.success) return toast(data.message || "岗位匹配失败");
-  clearMatchOpportunityLink();
-  $("tailorResult").classList.remove("hidden");
-  $("tailorResult").innerHTML = `<h4>岗位匹配：${data.match_score}</h4>${renderText(data.analysis)}<br><b>待补齐：</b>${escapeHtml((data.missing_keywords || []).join("、"))}
-    <div class="result-actions">
-      <button class="primary" onclick="prepareInterviewFromJd()">带入模拟面试</button>
-      <button class="ghost" onclick="prepareApplicationFromJd()">新增投递记录</button>
-    </div>`;
-  await loadDashboard();
+  return resumeController.match();
 }
 
 async function analyzeJdOnly() {
-  const jd = $("jdInput").value.trim();
-  if (!jd) return toast("请先粘贴岗位 JD");
-  const data = await withLoading(
-    () => api("/ai/analyze-jd", { method: "POST", body: { jd_content: jd, job_title: $("jobTitleInput").value, career_profile: selectedCareerProfile() } }),
-    "AI 正在拆解 JD..."
-  );
-  $("tailorResult").classList.remove("hidden");
-  const focus = data.focus || {};
-  $("tailorResult").innerHTML = `
-    <h4>JD 岗位画像</h4>
-    <div><b>求职方向</b><br>${escapeHtml(data.profile?.label || careerProfileLabel())}</div>
-    <div><b>核心关键词</b><br>${escapeHtml((data.keywords || []).join("、") || "暂无")}</div>
-    <div><b>能力聚焦</b><br>
-      ${Object.entries(focus).map(([key, value]) => `${escapeHtml(key)}：${escapeHtml((value || []).join("、") || "未明显出现")}`).join("<br>")}
-    </div>
-    <div><b>风险提示</b><br>${(data.risk_flags || []).map((item) => `• ${escapeHtml(item)}`).join("<br>") || "暂无明显风险词"}</div>
-    ${renderText(data.content || "")}
-    <div class="result-actions">
-      <button class="primary" onclick="tailorResume()">用这份 JD 优化简历</button>
-      <button class="ghost" onclick="prepareInterviewFromJd()">带入模拟面试</button>
-    </div>
-  `;
+  return resumeController.analyzeJd();
 }
 
 function prepareInterviewFromJd() {
@@ -1175,38 +942,7 @@ function renderMatchOpportunityNotice() {
 }
 
 async function renderSkills() {
-  const resumeId = selectedSkillResumeId();
-  if (!resumeId) return toast("请先选择简历");
-  const data = await api("/skills/radar", { method: "POST", body: { resume_id: Number(resumeId), career_profile: selectedCareerProfile(), job_title: $("analysisJobTitle").value || $("jobTitleInput").value } });
-  const ctx = $("skillChart");
-  if (state.skillChart) state.skillChart.destroy();
-  state.skillChart = typeof window.Chart === "function" ? new window.Chart(ctx, {
-    type: "radar",
-    data: {
-      labels: data.radar_data.map((item) => item.category),
-      datasets: [{
-        label: "能力值",
-        data: data.radar_data.map((item) => item.score),
-        backgroundColor: "rgba(255,122,182,0.18)",
-        borderColor: "#ff7ab6",
-        pointBackgroundColor: "#66dbc2",
-      }],
-    },
-    options: { scales: { r: { min: 0, max: 10 } }, plugins: { legend: { display: false } } },
-  }) : null;
-  $("skillResult").classList.remove("hidden");
-  $("skillResult").innerHTML = `
-    <h4>技能图谱解读</h4>
-    ${(data.radar_data || []).map((item) => `
-      <div><b>${escapeHtml(item.category)}：${item.score}/10</b><br>
-      已命中：${escapeHtml((item.matched || []).join("、") || "暂无")}<br>
-      建议：${escapeHtml(item.suggestion || "补充真实项目证据，把技能写进项目过程和结果。")}</div>
-    `).join("")}
-    <div class="result-actions">
-      <button class="primary" onclick="jumpToModule('resume','analysis')">去修改简历</button>
-      <button class="ghost" onclick="jumpToModule('interview','professional')">按短板练专业面试</button>
-    </div>
-  `;
+  return resumeController.renderSkills();
 }
 
 async function startInterview() {

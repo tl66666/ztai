@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from io import BytesIO
 import os
-from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from io import BytesIO
+from pathlib import Path
 
 import app as app_module
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -103,8 +102,15 @@ class LocalSecurityBoundaryTests(unittest.TestCase):
             response.close()
 
         with sqlite3.connect(app_module.DB_PATH) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM resumes WHERE id = ?", (resume_id,)).fetchone()[0], 1)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM practice_records WHERE id = ?", (practice_id,)).fetchone()[0], 1)
+            resume_count = conn.execute(
+                "SELECT COUNT(*) FROM resumes WHERE id = ?", (resume_id,)
+            ).fetchone()[0]
+            practice_count = conn.execute(
+                "SELECT COUNT(*) FROM practice_records WHERE id = ?",
+                (practice_id,),
+            ).fetchone()[0]
+            self.assertEqual(resume_count, 1)
+            self.assertEqual(practice_count, 1)
 
 
 class PortableRuntimeContractTests(unittest.TestCase):
@@ -122,6 +128,9 @@ class PortableRuntimeContractTests(unittest.TestCase):
     def test_frontend_dependencies_are_local_and_have_runtime_fallbacks(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        resume_controller = (
+            ROOT / "static" / "js" / "resume_controller.js"
+        ).read_text(encoding="utf-8")
 
         self.assertNotIn("unpkg.com", html)
         self.assertNotIn("cdn.jsdelivr.net", html)
@@ -131,7 +140,7 @@ class PortableRuntimeContractTests(unittest.TestCase):
             self.assertTrue(path.is_file(), asset)
             self.assertGreater(path.stat().st_size, 1000, asset)
         self.assertIn("function renderIcons", script)
-        self.assertIn("window.Chart", script)
+        self.assertIn("window.Chart", resume_controller)
 
 
 if __name__ == "__main__":

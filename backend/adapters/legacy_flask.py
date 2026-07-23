@@ -21,6 +21,18 @@ class LegacyFlaskAdapter:
     def application(self):
         return self._legacy.app
 
+    @property
+    def local_user_id(self) -> int:
+        return int(self._legacy.AGENT_USER_ID)
+
+    @property
+    def career_service(self):
+        return self._legacy.get_career_service()
+
+    @property
+    def interview_service(self):
+        return self._legacy.get_interview_service()
+
     def initialize(self) -> None:
         self.settings.upload_folder.mkdir(parents=True, exist_ok=True)
         self.settings.export_folder.mkdir(parents=True, exist_ok=True)

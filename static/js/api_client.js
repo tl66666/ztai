@@ -5,6 +5,13 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
+  function resolveBaseUrl(options = {}) {
+    const location = options.location || {};
+    const configured = String(options.runtimeConfig?.apiBaseUrl || "").replace(/\/+$/, "");
+    if (configured) return configured.endsWith("/api") ? configured : `${configured}/api`;
+    return location.protocol === "file:" ? "http://localhost:5000/api" : "/api";
+  }
+
   function create(options = {}) {
     const baseUrl = String(options.baseUrl || "").replace(/\/+$/, "");
     const transport = options.fetch
@@ -82,5 +89,5 @@
     return request;
   }
 
-  return { create };
+  return { create, resolveBaseUrl };
 });

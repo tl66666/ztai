@@ -3,6 +3,21 @@ const test = require("node:test");
 
 const ApiClient = require("../../static/js/api_client.js");
 
+test("API client resolves one cross-platform backend origin for local and Cloudflare hosting", () => {
+  assert.equal(ApiClient.resolveBaseUrl({
+    location: { protocol: "https:" },
+    runtimeConfig: { apiBaseUrl: "https://api.example.com/" },
+  }), "https://api.example.com/api");
+  assert.equal(ApiClient.resolveBaseUrl({
+    location: { protocol: "https:" },
+    runtimeConfig: {},
+  }), "/api");
+  assert.equal(ApiClient.resolveBaseUrl({
+    location: { protocol: "file:" },
+    runtimeConfig: {},
+  }), "http://localhost:5000/api");
+});
+
 
 test("API client serializes JSON and preserves structured HTTP errors", async () => {
   const calls = [];
