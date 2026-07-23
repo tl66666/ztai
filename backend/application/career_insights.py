@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from typing import Any
 
-from utils.domain.database import connect
+from backend.ports.persistence import UnitOfWorkFactory
 from utils.domain.opportunity_coaching import build_followup_plan
 
 
@@ -14,56 +13,33 @@ class CareerInsightsModule:
 
     def __init__(
         self,
-        db_path: str | os.PathLike[str],
+        unit_of_work: UnitOfWorkFactory,
         career_service: Any,
         ai_client_provider: Callable[[], Any],
         *,
         local_user_id: int,
     ):
-        self._db_path = os.fspath(db_path)
+        self._unit_of_work = unit_of_work
         self._career_service = career_service
         self._ai_client_provider = ai_client_provider
         self._local_user_id = int(local_user_id)
 
     def dashboard(self, requested_user_id: int) -> dict[str, Any]:
         self._require_local_user(requested_user_id)
-        with connect(self._db_path) as connection:
-            resume_count = connection.execute(
-                "SELECT COUNT(*) FROM resumes WHERE user_id = ?",
-                (self._local_user_id,),
-            ).fetchone()[0]
-            interviews = connection.execute(
-                """SELECT score, created_at FROM interviews
-                   WHERE user_id = ? ORDER BY created_at""",
-                (self._local_user_id,),
-            ).fetchall()
-            matches = connection.execute(
-                """SELECT match_score, created_at FROM job_matches
-                   WHERE user_id = ? ORDER BY created_at""",
-                (self._local_user_id,),
-            ).fetchall()
-            applications = connection.execute(
-                """SELECT status, company, job_title, updated_at
-                   FROM job_applications
-                   WHERE user_id = ? AND deleted_at IS NULL
-                   ORDER BY updated_at DESC""",
-                (self._local_user_id,),
-            ).fetchall()
-            practice_count = connection.execute(
-                "SELECT COUNT(*) FROM practice_records WHERE user_id = ?",
-                (self._local_user_id,),
-            ).fetchone()[0]
-            audio_count = connection.execute(
-                "SELECT COUNT(*) FROM audio_records WHERE user_id = ?",
-                (self._local_user_id,),
-            ).fetchone()[0]
+        with self._unit_of_work() as unit_of_work:
+            evidence = unit_of_work.career_insights.dashboard_evidence(
+                self._local_user_id
+            )
+        interviews = evidence["interviews"]
+        matches = evidence["matches"]
+        applications = evidence["applications"]
         stats = {
-            "resumes": resume_count,
+            "resumes": evidence["resume_count"],
             "interviews": len(interviews),
             "matches": len(matches),
             "applications": len(applications),
-            "practices": practice_count,
-            "audios": audio_count,
+            "practices": evidence["practice_count"],
+            "audios": evidence["audio_count"],
         }
         return {
             "success": True,
@@ -77,31 +53,16 @@ class CareerInsightsModule:
 
     def report(self, requested_user_id: int) -> dict[str, Any]:
         self._require_local_user(requested_user_id)
-        with connect(self._db_path) as connection:
-            resumes = connection.execute(
-                """SELECT title, content, updated_at FROM resumes
-                   WHERE user_id = ? ORDER BY updated_at DESC LIMIT 3""",
-                (self._local_user_id,),
-            ).fetchall()
-            matches = connection.execute(
-                """SELECT job_title, match_score, created_at FROM job_matches
-                   WHERE user_id = ? ORDER BY created_at DESC LIMIT 5""",
-                (self._local_user_id,),
-            ).fetchall()
-            interviews = connection.execute(
-                """SELECT job_title, score, feedback, created_at
-                   FROM interviews WHERE user_id = ?
-                   ORDER BY created_at DESC LIMIT 5""",
-                (self._local_user_id,),
-            ).fetchall()
-            applications = connection.execute(
-                """SELECT company, job_title, status, city, notes
-                   FROM job_applications
-                   WHERE user_id = ? AND deleted_at IS NULL
-                   ORDER BY updated_at DESC LIMIT 8""",
-                (self._local_user_id,),
-            ).fetchall()
-        report = self._local_report(resumes, matches, interviews, applications)
+        with self._unit_of_work() as unit_of_work:
+            evidence = unit_of_work.career_insights.report_evidence(
+                self._local_user_id
+            )
+        report = self._local_report(
+            evidence["resumes"],
+            evidence["matches"],
+            evidence["interviews"],
+            evidence["applications"],
+        )
         client = self._ai_client_provider()
         if client.api_key:
             result = client.chat(
@@ -124,17 +85,12 @@ class CareerInsightsModule:
 
     def coach(self, application_id: int) -> dict[str, Any]:
         application = self._career_service.get_opportunity(self._local_user_id, application_id)
-        with connect(self._db_path) as connection:
-            resume = connection.execute(
-                """SELECT title, content FROM resumes WHERE user_id = ?
-                   ORDER BY updated_at DESC LIMIT 1""",
-                (self._local_user_id,),
-            ).fetchone()
-            interview = connection.execute(
-                """SELECT job_title, score, feedback FROM interviews
-                   WHERE user_id = ? ORDER BY created_at DESC LIMIT 1""",
-                (self._local_user_id,),
-            ).fetchone()
+        with self._unit_of_work() as unit_of_work:
+            evidence = unit_of_work.career_insights.coaching_evidence(
+                self._local_user_id
+            )
+        resume = evidence["resume"]
+        interview = evidence["interview"]
         plan = build_followup_plan(application, resume, interview)
         ai_note = ""
         client = self._ai_client_provider()

@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from backend.core.database import is_sqlite_url, resolve_database_url
+
 
 def _csv(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
     value = os.environ.get(name)
@@ -37,6 +39,7 @@ class Settings:
     db_path: Path
     upload_folder: Path
     export_folder: Path
+    database_url: str | None = None
     allowed_origins: tuple[str, ...] = ()
     allowed_hosts: tuple[str, ...] = ("localhost", "127.0.0.1", "testserver")
     api_docs_enabled: bool = True
@@ -77,10 +80,18 @@ class Settings:
                 "authentication is configured"
             )
         port = int(os.environ.get("JOBHUNTER_PORT", "5000"))
+        db_path = _path(
+            project_root,
+            os.environ.get("JOBHUNTER_DB_PATH", "jobhunter.db"),
+        )
+        database_url = resolve_database_url(
+            os.environ.get("JOBHUNTER_DATABASE_URL"),
+            db_path,
+        )
         workers = int(os.environ.get("JOBHUNTER_WORKERS", "1"))
-        if workers != 1:
+        if workers != 1 and is_sqlite_url(database_url):
             raise ValueError(
-                "JOBHUNTER_WORKERS must remain 1 while the compatibility runtime uses SQLite"
+                "JOBHUNTER_WORKERS must remain 1 while SQLite is configured"
             )
         local_origins = (
             f"http://localhost:{port}",
@@ -109,10 +120,7 @@ class Settings:
                 )
         return cls(
             environment=os.environ.get("JOBHUNTER_ENV", "development"),
-            db_path=_path(
-                project_root,
-                os.environ.get("JOBHUNTER_DB_PATH", "jobhunter.db"),
-            ),
+            db_path=db_path,
             upload_folder=_path(
                 project_root,
                 os.environ.get("JOBHUNTER_UPLOAD_FOLDER", "uploads"),
@@ -121,6 +129,7 @@ class Settings:
                 project_root,
                 os.environ.get("JOBHUNTER_EXPORT_FOLDER", "exports"),
             ),
+            database_url=database_url,
             allowed_origins=allowed_origins,
             allowed_hosts=allowed_hosts,
             api_docs_enabled=_boolean(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from backend.adapters.persistence import AgentRepository, TrainingRepository
+from functools import partial
+
+from backend.adapters.persistence.sqlalchemy import SqlAlchemyUnitOfWork
 from backend.adapters.storage import LocalBlobStorage
 from backend.adapters.training_audio import LocalTrainingAudioStorage
 from backend.core.runtime import RuntimeDatabase
@@ -41,6 +43,11 @@ class ApplicationContainer:
             upload_folder=settings.upload_folder,
             export_folder=settings.export_folder,
             local_user_id=self.local_user_id,
+            database_url=settings.database_url,
+        )
+        self.unit_of_work = partial(
+            SqlAlchemyUnitOfWork,
+            self.runtime_database.database.session_factory,
         )
         self.training_logic = TrainingLogic()
         self._career_service: CareerService | None = None
@@ -61,6 +68,9 @@ class ApplicationContainer:
 
     def database_ready(self) -> bool:
         return self.runtime_database.ready()
+
+    def close(self) -> None:
+        self.runtime_database.close()
 
     @property
     def career_service(self) -> CareerService:
@@ -122,7 +132,7 @@ class ApplicationContainer:
                     career_service=self.career_service,
                     local_user_id=local_user_id,
                 ),
-                AgentRepository(self.settings.db_path),
+                self.unit_of_work,
                 local_user_id=local_user_id,
                 allowed_origins=self.settings.allowed_origins,
             )
@@ -141,7 +151,7 @@ class ApplicationContainer:
     def career_insights(self) -> CareerInsightsModule:
         if self._career_insights is None:
             self._career_insights = CareerInsightsModule(
-                self.settings.db_path,
+                self.unit_of_work,
                 self.career_service,
                 self.ai_clients.get_ai_client,
                 local_user_id=self.local_user_id,
@@ -162,7 +172,7 @@ class ApplicationContainer:
         if self._opportunities is None:
             self._opportunities = OpportunityModule(
                 self.career_service,
-                self.settings.db_path,
+                self.unit_of_work,
                 local_user_id=self.local_user_id,
             )
         return self._opportunities
@@ -171,7 +181,7 @@ class ApplicationContainer:
     def resumes(self) -> ResumeModule:
         if self._resumes is None:
             self._resumes = ResumeModule(
-                self.settings.db_path,
+                self.unit_of_work,
                 LocalBlobStorage(
                     self.settings.upload_folder,
                     max_bytes=self.settings.max_upload_bytes,
@@ -185,7 +195,7 @@ class ApplicationContainer:
     def resume_intelligence(self) -> ResumeIntelligenceModule:
         if self._resume_intelligence is None:
             self._resume_intelligence = ResumeIntelligenceModule(
-                self.settings.db_path,
+                self.unit_of_work,
                 self.ai_clients.get_ai_client,
                 local_user_id=self.local_user_id,
             )
@@ -195,7 +205,7 @@ class ApplicationContainer:
     def training(self) -> TrainingModule:
         if self._training is None:
             self._training = TrainingModule(
-                TrainingRepository(self.settings.db_path),
+                self.unit_of_work,
                 LocalTrainingAudioStorage(
                     self.settings.upload_folder,
                     max_bytes=self.settings.max_upload_bytes,

@@ -45,7 +45,10 @@ def create_application(
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         container.initialize()
-        yield
+        try:
+            yield
+        finally:
+            container.close()
 
     application = FastAPI(
         title="JobHunter API",

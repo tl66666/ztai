@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
-from backend.adapters.persistence.agent import AgentRepository
+from backend.ports.persistence import UnitOfWorkFactory
 from utils.agent_runtime.actions import (
     ActionProposalError,
     ActionProposalService,
@@ -43,14 +43,14 @@ class AgentModule:
         self,
         service: AgentService,
         action_service: ActionProposalService,
-        repository: AgentRepository,
+        unit_of_work: UnitOfWorkFactory,
         *,
         local_user_id: int,
         allowed_origins: tuple[str, ...],
     ):
         self.service = service
         self.action_service = action_service
-        self._repository = repository
+        self._unit_of_work = unit_of_work
         self._local_user_id = int(local_user_id)
         self._allowed_origins = frozenset(allowed_origins)
 
@@ -211,11 +211,13 @@ class AgentModule:
         context_error = self._validate_context(context)
         if context_error:
             return {"success": False, "message": context_error}, 400
-        if not self._repository.context_entities_exist(
-            principal_user_id,
-            resume_id=context.get("resume_id"),
-            opportunity_id=context.get("opportunity_id"),
-        ):
+        with self._unit_of_work() as unit_of_work:
+            context_exists = unit_of_work.agent_context.context_entities_exist(
+                principal_user_id,
+                resume_id=context.get("resume_id"),
+                opportunity_id=context.get("opportunity_id"),
+            )
+        if not context_exists:
             return {"success": False, "message": "上下文实体不存在"}, 404
         try:
             result = self.service.chat(

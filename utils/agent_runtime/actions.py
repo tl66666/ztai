@@ -5,8 +5,8 @@ import math
 import os
 import threading
 import uuid
-from copy import deepcopy
 from collections.abc import Callable
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -17,7 +17,7 @@ from utils.domain.career import (
     RESUME_STATUSES,
     CareerService,
 )
-from utils.domain.database import APPLICATION_STATUSES, connect, migrate_database
+from utils.domain.database import APPLICATION_STATUSES, connect
 
 
 ALLOWED_ACTION_TYPES = frozenset(
@@ -310,7 +310,6 @@ class ActionProposalService:
     ):
         self.db_path = os.fspath(db_path)
         self.local_user_id = int(local_user_id)
-        migrate_database(self.db_path)
         self.career_service = career_service or CareerService(
             self.db_path, local_user_id=self.local_user_id
         )

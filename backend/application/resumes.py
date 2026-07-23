@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import uuid
 from dataclasses import dataclass
@@ -18,7 +17,7 @@ from backend.documents.conversion import (
     convert_word_to_pdf,
 )
 from backend.ports import BlobStorage
-from utils.domain.database import connect
+from backend.ports.persistence import UnitOfWorkFactory
 
 
 @dataclass(frozen=True)
@@ -33,13 +32,13 @@ class ResumeModule:
 
     def __init__(
         self,
-        db_path: str | os.PathLike[str],
+        unit_of_work: UnitOfWorkFactory,
         storage: BlobStorage,
-        export_folder: str | os.PathLike[str],
+        export_folder: str | Path,
         *,
         local_user_id: int,
     ):
-        self._db_path = os.fspath(db_path)
+        self._unit_of_work = unit_of_work
         self._storage = storage
         self._export_folder = Path(export_folder)
         self._local_user_id = int(local_user_id)
@@ -79,11 +78,8 @@ class ResumeModule:
 
     def list(self, requested_user_id: int) -> dict[str, Any]:
         self._require_local_user(requested_user_id)
-        with connect(self._db_path) as connection:
-            rows = connection.execute(
-                "SELECT * FROM resumes WHERE user_id = ? ORDER BY updated_at DESC",
-                (self._local_user_id,),
-            ).fetchall()
+        with self._unit_of_work() as unit_of_work:
+            rows = unit_of_work.resumes.list_owned(self._local_user_id)
         return {
             "success": True,
             "data": [self._public_resume(row) for row in rows],
@@ -121,21 +117,13 @@ class ResumeModule:
             namespace=f"resumes/{self._local_user_id}",
         )
         content = parse_resume_file(blob.local_path, file_type)
-        with connect(self._db_path) as connection:
-            connection.execute(
-                """
-                UPDATE resumes
-                SET file_path = ?, file_type = ?, content = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND user_id = ?
-                """,
-                (
-                    str(blob.local_path),
-                    file_type,
-                    content,
-                    resume_id,
-                    self._local_user_id,
-                ),
+        with self._unit_of_work() as unit_of_work:
+            unit_of_work.resumes.replace_upload(
+                resume_id,
+                self._local_user_id,
+                file_path=str(blob.local_path),
+                file_type=file_type,
+                content=content,
             )
         return {
             "success": True,
@@ -150,26 +138,24 @@ class ResumeModule:
         content = str(body.get("content") or "").strip()
         if not title or not content:
             raise ValueError("标题和内容不能为空")
-        with connect(self._db_path) as connection:
-            cursor = connection.execute(
-                """
-                UPDATE resumes
-                SET title = ?, content = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND user_id = ?
-                """,
-                (title, content, resume_id, self._local_user_id),
+        with self._unit_of_work() as unit_of_work:
+            updated = unit_of_work.resumes.update_text(
+                resume_id,
+                self._local_user_id,
+                title=title,
+                content=content,
             )
-        if cursor.rowcount == 0:
+        if not updated:
             return {"success": False, "message": "简历不存在"}, 404
         return {"success": True, "message": "简历已更新"}, 200
 
     def delete(self, resume_id: int) -> tuple[dict[str, Any], int]:
-        with connect(self._db_path) as connection:
-            cursor = connection.execute(
-                "DELETE FROM resumes WHERE id = ? AND user_id = ?",
-                (resume_id, self._local_user_id),
+        with self._unit_of_work() as unit_of_work:
+            deleted = unit_of_work.resumes.delete_owned(
+                resume_id,
+                self._local_user_id,
             )
-        if cursor.rowcount == 0:
+        if not deleted:
             return {"success": False, "message": "简历不存在"}, 404
         return {"success": True, "message": "简历已删除"}, 200
 
@@ -241,28 +227,18 @@ class ResumeModule:
         file_path: str | None,
         file_type: str | None,
     ) -> int:
-        with connect(self._db_path) as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO resumes (user_id, title, content, file_path, file_type)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    self._local_user_id,
-                    title,
-                    content,
-                    file_path,
-                    file_type,
-                ),
+        with self._unit_of_work() as unit_of_work:
+            return unit_of_work.resumes.add(
+                self._local_user_id,
+                title=title,
+                content=content,
+                file_path=file_path,
+                file_type=file_type,
             )
-            return int(cursor.lastrowid)
 
     def _owned_resume(self, resume_id: int):
-        with connect(self._db_path) as connection:
-            return connection.execute(
-                "SELECT * FROM resumes WHERE id = ? AND user_id = ?",
-                (resume_id, self._local_user_id),
-            ).fetchone()
+        with self._unit_of_work() as unit_of_work:
+            return unit_of_work.resumes.get_owned(resume_id, self._local_user_id)
 
     def _require_local_user(self, requested_user_id: int | str | None) -> None:
         if requested_user_id in (None, ""):

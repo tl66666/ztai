@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, BinaryIO
 
-from backend.adapters.persistence import TrainingRepository
 from backend.adapters.training_audio import LocalTrainingAudioStorage
+from backend.ports.persistence import UnitOfWorkFactory
 
 from .training_logic import TrainingLogic
 
@@ -14,13 +14,13 @@ class TrainingModule:
 
     def __init__(
         self,
-        repository: TrainingRepository,
+        unit_of_work: UnitOfWorkFactory,
         audio_storage: LocalTrainingAudioStorage,
         logic: TrainingLogic,
         *,
         local_user_id: int,
     ):
-        self._repository = repository
+        self._unit_of_work = unit_of_work
         self._audio_storage = audio_storage
         self._logic = logic
         self._local_user_id = int(local_user_id)
@@ -66,14 +66,15 @@ class TrainingModule:
             metrics,
         )
         result["summary"] = self._audio_summary(result, saved_name)
-        self._repository.save_audio(
-            self._local_user_id,
-            transcript=clean_transcript,
-            audio_file=saved_name,
-            score=int(result.get("overall_score") or 0),
-            metrics=metrics,
-            feedback=result,
-        )
+        with self._unit_of_work() as unit_of_work:
+            unit_of_work.training.save_audio(
+                self._local_user_id,
+                transcript=clean_transcript,
+                audio_file=saved_name,
+                score=int(result.get("overall_score") or 0),
+                metrics=metrics,
+                feedback=result,
+            )
         return {"success": True, "audio_file": saved_name, **result}
 
     def professional_pack(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -194,30 +195,37 @@ class TrainingModule:
 
     def list_records(self, user_id: int) -> dict[str, Any]:
         self._require_local_user(user_id)
-        return {"success": True, **self._repository.list_all(user_id)}
+        with self._unit_of_work() as unit_of_work:
+            records = unit_of_work.training.list_all(user_id)
+        return {"success": True, **records}
 
     def delete_record(self, record_type: str, record_id: int) -> dict[str, Any]:
-        row = self._repository.get_record(
-            record_type,
-            record_id,
-            self._local_user_id,
-        )
+        with self._unit_of_work() as unit_of_work:
+            row = unit_of_work.training.get_record(
+                record_type,
+                record_id,
+                self._local_user_id,
+            )
         if row is None:
             raise LookupError("记录不存在")
         if record_type == "audio" and row.get("audio_file"):
             self._audio_storage.delete(str(row["audio_file"]))
-        self._repository.delete_record(
-            record_type,
-            record_id,
-            self._local_user_id,
-        )
+        with self._unit_of_work() as unit_of_work:
+            unit_of_work.training.delete_record(
+                record_type,
+                record_id,
+                self._local_user_id,
+            )
         return {"success": True, "message": "记录已删除"}
 
     def clear_records(self, user_id: int) -> dict[str, Any]:
         self._require_local_user(user_id)
-        for audio_file in self._repository.audio_files(user_id):
+        with self._unit_of_work() as unit_of_work:
+            audio_files = unit_of_work.training.audio_files(user_id)
+        for audio_file in audio_files:
             self._audio_storage.delete(audio_file)
-        self._repository.clear(user_id)
+        with self._unit_of_work() as unit_of_work:
+            unit_of_work.training.clear(user_id)
         return {"success": True, "message": "训练记录已清空"}
 
     def _save_practice(
@@ -227,14 +235,15 @@ class TrainingModule:
         answer: str,
         result: dict[str, Any],
     ) -> None:
-        self._repository.save_practice(
-            self._local_user_id,
-            category=category,
-            question=question,
-            answer=answer,
-            score=int(result.get("score") or 0),
-            feedback=result,
-        )
+        with self._unit_of_work() as unit_of_work:
+            unit_of_work.training.save_practice(
+                self._local_user_id,
+                category=category,
+                question=question,
+                answer=answer,
+                score=int(result.get("score") or 0),
+                feedback=result,
+            )
 
     def _require_local_user(self, value: object) -> None:
         if value is not None and int(value) != self._local_user_id:

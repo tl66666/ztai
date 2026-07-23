@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from typing import Any
 
+from backend.ports.persistence import UnitOfWorkFactory
 from utils.agent_runtime.resume_draft import model_resume_draft
 from utils.ai_client import extract_keywords
-from utils.domain.database import connect
 
 from .resume_analysis import (
     CAREER_PROFILES,
@@ -26,12 +25,12 @@ class ResumeIntelligenceModule:
 
     def __init__(
         self,
-        db_path: str | os.PathLike[str],
+        unit_of_work: UnitOfWorkFactory,
         ai_client_provider: Callable[[], Any],
         *,
         local_user_id: int,
     ):
-        self._db_path = os.fspath(db_path)
+        self._unit_of_work = unit_of_work
         self._ai_client_provider = ai_client_provider
         self._local_user_id = int(local_user_id)
 
@@ -43,10 +42,11 @@ class ResumeIntelligenceModule:
             row["content"], body.get("job_title", "")
         )
         analysis = result["content"]
-        with connect(self._db_path) as connection:
-            connection.execute(
-                "UPDATE resumes SET analysis_result = ? WHERE id = ? AND user_id = ?",
-                (analysis, resume_id, self._local_user_id),
+        with self._unit_of_work() as unit_of_work:
+            unit_of_work.resumes.set_analysis(
+                resume_id,
+                self._local_user_id,
+                analysis,
             )
         return {
             "success": True,
@@ -74,20 +74,14 @@ class ResumeIntelligenceModule:
         new_title = f"{row['title']}-优化版"
         new_id = None
         if body.get("save", True):
-            with connect(self._db_path) as connection:
-                cursor = connection.execute(
-                    """INSERT INTO resumes
-                       (user_id, title, content, analysis_result, tailored_result)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (
-                        self._local_user_id,
-                        new_title,
-                        improved["improved_resume"],
-                        json.dumps(improved["audit"], ensure_ascii=False),
-                        json.dumps(improved, ensure_ascii=False),
-                    ),
+            with self._unit_of_work() as unit_of_work:
+                new_id = unit_of_work.resumes.add(
+                    self._local_user_id,
+                    title=new_title,
+                    content=improved["improved_resume"],
+                    analysis_result=json.dumps(improved["audit"], ensure_ascii=False),
+                    tailored_result=json.dumps(improved, ensure_ascii=False),
                 )
-                new_id = int(cursor.lastrowid)
         return {
             "success": True,
             "new_resume_id": new_id,
@@ -123,15 +117,11 @@ class ResumeIntelligenceModule:
         )
         if draft and draft.mode == "model":
             tailored["ai_rewrite"] = draft.content
-        with connect(self._db_path) as connection:
-            connection.execute(
-                """UPDATE resumes SET tailored_result = ?
-                   WHERE id = ? AND user_id = ?""",
-                (
-                    json.dumps(tailored, ensure_ascii=False),
-                    resume_id,
-                    self._local_user_id,
-                ),
+        with self._unit_of_work() as unit_of_work:
+            unit_of_work.resumes.set_tailored(
+                resume_id,
+                self._local_user_id,
+                json.dumps(tailored, ensure_ascii=False),
             )
         return {
             "success": True,
@@ -148,13 +138,12 @@ class ResumeIntelligenceModule:
         if row is None:
             return {"success": False, "message": "resume not found"}, 404
         if application_id is not None:
-            with connect(self._db_path) as connection:
-                application = connection.execute(
-                    """SELECT id FROM job_applications
-                       WHERE id = ? AND user_id = ? AND deleted_at IS NULL""",
-                    (application_id, self._local_user_id),
-                ).fetchone()
-            if application is None:
+            with self._unit_of_work() as unit_of_work:
+                application_exists = unit_of_work.opportunities.owned_active_exists(
+                    application_id,
+                    self._local_user_id,
+                )
+            if not application_exists:
                 return {"success": False, "message": "opportunity not found"}, 404
         job_title = str(body.get("job_title") or "目标岗位").strip()[:300]
         jd = str(body.get("job_requirements") or body.get("jd") or "")
@@ -168,22 +157,16 @@ class ResumeIntelligenceModule:
             "model": ai.get("model"),
             "ai_used": bool(ai.get("success")),
         }
-        with connect(self._db_path) as connection:
-            connection.execute(
-                """INSERT INTO job_matches
-                   (user_id, resume_id, job_title, match_score, analysis,
-                    jd_text, details_json, application_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    self._local_user_id,
-                    resume_id,
-                    job_title,
-                    score,
-                    analysis,
-                    jd,
-                    json.dumps(details, ensure_ascii=False),
-                    application_id,
-                ),
+        with self._unit_of_work() as unit_of_work:
+            unit_of_work.opportunities.add_match(
+                self._local_user_id,
+                resume_id=resume_id,
+                job_title=job_title,
+                match_score=score,
+                analysis=analysis,
+                jd_text=jd,
+                details_json=json.dumps(details, ensure_ascii=False),
+                application_id=application_id,
             )
         return {
             "success": True,
@@ -333,11 +316,8 @@ class ResumeIntelligenceModule:
         }
 
     def _resume(self, resume_id: int):
-        with connect(self._db_path) as connection:
-            return connection.execute(
-                "SELECT * FROM resumes WHERE id = ? AND user_id = ?",
-                (resume_id, self._local_user_id),
-            ).fetchone()
+        with self._unit_of_work() as unit_of_work:
+            return unit_of_work.resumes.get_owned(resume_id, self._local_user_id)
 
     @staticmethod
     def _positive_integer(value: Any, name: str, *, required: bool) -> int | None:

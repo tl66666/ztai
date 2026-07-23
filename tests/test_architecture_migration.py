@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import unittest
 from pathlib import Path
 
@@ -79,6 +80,87 @@ class ArchitectureMigrationTests(unittest.TestCase):
         )
         self.assertFalse(
             (ROOT / "backend" / "adapters" / "legacy_training.py").exists()
+        )
+
+    def test_application_modules_do_not_own_sql(self) -> None:
+        application_root = ROOT / "backend" / "application"
+        violations = []
+        sql_statement = re.compile(
+            r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|PRAGMA)\b",
+            re.IGNORECASE,
+        )
+        for path in application_root.glob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    if sql_statement.match(node.value):
+                        violations.append(f"{path.name}:{node.lineno}:SQL")
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    modules = (
+                        [alias.name for alias in node.names]
+                        if isinstance(node, ast.Import)
+                        else [node.module or ""]
+                    )
+                    if any(
+                        module == "sqlite3"
+                        or module == "utils.domain.database"
+                        for module in modules
+                    ):
+                        violations.append(f"{path.name}:{node.lineno}:database-import")
+
+        self.assertEqual(violations, [])
+
+    def test_runtime_does_not_invoke_the_offline_sqlite_migrator(self) -> None:
+        runtime_sources = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                ROOT / "backend" / "core" / "runtime.py",
+                ROOT / "backend" / "application" / "container.py",
+                ROOT / "utils" / "agent_runtime" / "actions.py",
+            )
+        )
+
+        self.assertNotIn("migrate_database(", runtime_sources)
+        self.assertNotIn("create_agent_tables(", runtime_sources)
+
+    def test_remaining_career_constructor_schema_guards_are_frozen(self) -> None:
+        """Keep the next domain-persistence batch explicit instead of growing debt."""
+        source = (ROOT / "utils" / "domain" / "career.py").read_text(
+            encoding="utf-8"
+        )
+        tree = ast.parse(source)
+        career_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "CareerService"
+        )
+        constructor = next(
+            node
+            for node in career_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+        )
+        guards = []
+        for node in ast.walk(constructor):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "ensure_column"
+                and len(node.args) >= 3
+                and all(
+                    isinstance(argument, ast.Constant)
+                    for argument in node.args[1:3]
+                )
+            ):
+                guards.append((node.args[1].value, node.args[2].value))
+
+        self.assertEqual(
+            guards,
+            [
+                ("action_items", "action_type"),
+                ("action_items", "completion_evidence"),
+                ("job_applications", "deleted_at"),
+            ],
         )
 
 

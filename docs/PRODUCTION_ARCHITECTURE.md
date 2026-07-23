@@ -4,15 +4,16 @@
 
 项目采用“浏览器 SaaS + 模块化单体”的渐进重构路线：
 
-- 前端：Vanilla TypeScript、Vite、Vitest、Playwright，静态产物部署到 Cloudflare。
-- 后端：Python 3.11+、FastAPI、Pydantic、Uvicorn，部署到 Ubuntu。
-- 数据：开发/兼容期使用 SQLite；生产迁移到 PostgreSQL。
-- 文件：本地开发使用文件系统 adapter；生产使用 Cloudflare R2 adapter。
-- 后台任务：短请求同步执行；模型分析、文档转换等长任务最终通过持久任务队列执行。
-- 交付：`uv` 是 Python 依赖与运行命令的唯一权威来源，前端后续以 npm lockfile 固定依赖。
+- 前端：React 19、strict TypeScript、Vite、Vitest、Playwright；静态产物部署到 Cloudflare Pages。
+- 后端：Python 3.11+、FastAPI、Pydantic、Uvicorn；模块化单体部署到 Ubuntu。
+- 数据：SQLAlchemy 2 + Alembic；本地使用 SQLite，生产使用 PostgreSQL。
+- 文件：文件操作通过 storage port；当前 local adapter 可用于单机部署，达到多实例需求后再增加 R2 adapter。
+- 后台任务：短请求同步执行；只有跨代理超时或需要故障恢复的长任务才引入持久任务队列。
+- 交付：`uv` + `uv.lock` 和 npm + `package-lock.json` 分别是 Python、前端的唯一依赖契约。
 
-当前 FastAPI 通过 WSGI adapter 承载旧 Flask 路由。这是保持功能的迁移机制，不是最终形态。
-在认证、用户隔离和 PostgreSQL 完成前，现有单用户运行时不得直接暴露到公网。
+Flask、WSGI adapter、PowerShell/批处理启动链和旧浏览器 controller 已移除。所有 HTTP
+路由由 FastAPI 原生实现，前端运行在单一 ESM module graph 中。生产公开访问仍必须通过
+Cloudflare Access 或等价可信身份层；不得以 `local` 认证模式直接绑定公网地址。
 
 ## 2. 为什么选择 FastAPI
 
@@ -58,32 +59,25 @@ backend/
   api/
     system.py             health/readiness
     v1/                   target: domain routers
-  domains/
-    opportunities/        target: use cases + domain rules
-    interviews/
-    resumes/
-    agent/
+  application/            use cases + domain rules
+  ports/                  persistence / storage interfaces
   adapters/
-    legacy_flask.py       temporary WSGI compatibility adapter
-    persistence/          target: SQLite/PostgreSQL adapters
-    storage/              target: local/R2 adapters
+    persistence/
+      sqlalchemy/         SQLite/PostgreSQL adapters + unit of work
+    storage/              local adapter; R2 adapter is an optional future implementation
+  alembic/                versioned schema migrations
 ```
 
-路由只负责协议转换。业务不变量、事务和幂等性属于 domain module；SQL、R2 和模型供应商是 adapter。测试与调用方通过同一个 public interface 验证行为，不跨 module 读取内部表或全局变量。
-
-迁移顺序是 Opportunity → Interview → Resume → Agent：
-
-1. Opportunity 和 Interview 已有较清晰的领域实现与行为测试，先建立原生 FastAPI 模板。
-2. Resume 先把文件、转换、AI 分析和持久化拆成用例，再迁路由。
-3. Agent 最后迁移，因为它依赖身份、长任务、记忆、提案确认和多个业务域。
-
-每次迁移只允许一个写入路径；FastAPI 与 Flask 不做双写。一个域的契约测试通过后，删除对应 Flask route，最终删除 WSGI adapter 和 `app.py`。
+路由只负责协议转换。业务不变量、事务和幂等性属于 application module；SQL、文件系统
+和模型供应商属于 adapter。测试与调用方通过同一个 public interface 验证行为，不跨
+module 读取内部表或进程全局状态。只有存在第二种真实实现时才增加新的 port，避免制造
+浅层转发 module。
 
 ## 5. 身份与安全
 
-当前已建立最外层 Principal seam：本地模式生成固定开发身份；Ubuntu
-可验证 Cloudflare Access JWT，并通过受众与邮箱 allowlist 映射到当前兼容用户。
-这使单用户在线部署具备可信入口，但 PostgreSQL 多租户 owner 映射仍未完成：
+最外层 Principal seam 支持两种 adapter：本地开发固定身份；Ubuntu 验证 Cloudflare
+Access JWT，并通过受众与邮箱 allowlist 映射到授权用户。当前在线部署按单租户设计；
+若未来开放多人使用，必须先完成账号与 tenant 映射：
 
 - 浏览器获得短期 session/token；服务端从可信凭据生成 `Principal`。
 - 业务代码只接受可信 principal，不接受浏览器提交的 `user_id`。
@@ -93,12 +87,13 @@ backend/
 - 上传校验 MIME、扩展名、大小、文件名和对象 owner；下载使用短时签名 URL 或授权流。
 - 反向代理设置请求体上限、超时、速率限制和安全响应头。
 
-认证 middleware 位于最外层 ASGI seam，原生 FastAPI router 与临时 WSGI
-adapter 均受保护；只有 `/api/v1/healthz` 和 CORS preflight 免认证。
+认证 middleware 位于最外层 ASGI seam；只有 `/api/v1/healthz` 和 CORS preflight
+免认证。
 
 ## 6. 数据、文件与后台任务
 
-SQLite 保留为单机开发 adapter，固定单 worker。生产使用 PostgreSQL：
+SQLite 保留为单机开发 adapter，固定单 worker。PostgreSQL 通过相同 repository / unit
+of work interface 接入生产：
 
 - Alembic 迁移由部署步骤单独执行，应用 worker 启动时只检查 schema 版本。
 - 每个业务用例拥有明确事务；领域事件和业务写入在同一事务提交。
@@ -109,30 +104,21 @@ R2 保存原始文件与导出物，PostgreSQL 只保存对象 key、owner、类
 
 ## 7. 前端 module
 
-当前经典脚本按以下顺序渐进迁移，避免同时改变业务归属、事件机制和构建系统：
-
 ```text
-src/
+frontend/src/
   app/                    composition root, routing, shared shell
-  platform/
-    api-client.ts         HTTP/error/auth/timeout
-    browser.ts            media/download/capability adapters
-  features/
-    resume/
-    interview/
-    opportunity/
-    agent/
-  shared/
-    ui/
-    types/
+  shell/                  navigation and topbar
+  shared/                 HTTP/error UI/browser event interfaces
+  resume/                 resume workflow
+  interview/              interview and media workflow
+  opportunity/            application and opportunity workflow
+  agent/                  conversation, proposal and command-center workflow
 ```
 
-第一阶段已把所有 JSON 请求以及下载请求的 transport 收进 `ApiClient`。后续按 Resume → Interview → Opportunity → Agent 迁移 controller；每个 controller 只拥有本域状态，通过不可变 handoff 或显式 interface 与其他域协作。
-
-四个域稳定后，再完成两项机械迁移：
-
-1. 把内联 `onclick` 改为 `data-action` 事件委托，消除全局函数依赖。
-2. 切换到 TypeScript/Vite ESM，开启 `strict`、ESLint、Vitest 和构建产物 hash。
+所有 JSON、文件上传和下载 transport 统一通过 `ApiClient`。动态操作使用
+`data-command` 事件委托；页面不依赖全局函数名。各 workflow 只拥有本域状态，通过
+显式 handoff interface 协作。React 只作为 composition root 和可独立演进的视图入口，
+现有 DOM class/id 与页面视觉保持不变。
 
 Cloudflare 只接收 Vite 的 `dist/`，不托管 Python、SQLite 或用户上传。
 
@@ -160,7 +146,8 @@ JOBHUNTER_ALLOWED_ORIGINS=https://career.example.com \
 uv run python -m backend.cli
 ```
 
-兼容期必须保持 `JOBHUNTER_WORKERS=1`。Cloudflare Access 模式强制要求
+SQLite 模式必须保持 `JOBHUNTER_WORKERS=1`；PostgreSQL 可在完成并发压测后增加
+worker。Cloudflare Access 模式强制要求
 `JOBHUNTER_ALLOWED_HOSTS` 与 `JOBHUNTER_ALLOWED_ORIGINS` 为显式非通配符；
 生产默认关闭 OpenAPI UI。反向代理必须保留
 `Cf-Access-Jwt-Assertion` 请求头。
