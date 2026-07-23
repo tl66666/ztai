@@ -38,9 +38,7 @@ class NativeDomainRouterTests(unittest.TestCase):
         opportunity_id = created.json()["data"]["id"]
 
         listed = self.client.get("/api/opportunities")
-        workspace = self.client.get(
-            f"/api/opportunities/{opportunity_id}/workspace"
-        )
+        workspace = self.client.get(f"/api/opportunities/{opportunity_id}/workspace")
         openapi = self.client.get("/api/v1/openapi.json").json()
 
         self.assertEqual(created.status_code, 201)
@@ -66,12 +64,8 @@ class NativeDomainRouterTests(unittest.TestCase):
             "expected_stage_index": 0,
         }
 
-        first = self.client.post(
-            f"/api/interview/sessions/{session_id}/answer", json=answer
-        )
-        duplicate = self.client.post(
-            f"/api/interview/sessions/{session_id}/answer", json=answer
-        )
+        first = self.client.post(f"/api/interview/sessions/{session_id}/answer", json=answer)
+        duplicate = self.client.post(f"/api/interview/sessions/{session_id}/answer", json=answer)
         openapi = self.client.get("/api/v1/openapi.json").json()
 
         self.assertEqual(started.status_code, 200)
@@ -123,15 +117,9 @@ class NativeDomainRouterTests(unittest.TestCase):
         update_operation = openapi["paths"]["/api/resumes/{resume_id}"]["put"]
         self.assertIn("requestBody", update_operation)
 
-        exported_pdf = self.client.get(
-            f"/api/resumes/{resume_id}/export/pdf"
-        )
-        exported_docx = self.client.get(
-            f"/api/resumes/{resume_id}/export/word"
-        )
-        invalid_export = self.client.get(
-            f"/api/resumes/{resume_id}/export/html"
-        )
+        exported_pdf = self.client.get(f"/api/resumes/{resume_id}/export/pdf")
+        exported_docx = self.client.get(f"/api/resumes/{resume_id}/export/word")
+        invalid_export = self.client.get(f"/api/resumes/{resume_id}/export/html")
         self.assertEqual(exported_pdf.status_code, 200)
         self.assertEqual(exported_pdf.headers["content-type"], "application/pdf")
         self.assertTrue(exported_pdf.content.startswith(b"%PDF"))
@@ -148,6 +136,49 @@ class NativeDomainRouterTests(unittest.TestCase):
             self.client.get(f"/api/resumes/detail/{resume_id}").status_code,
             404,
         )
+
+    def test_resume_intelligence_routes_are_native_and_preserve_evidence(self):
+        created = self.client.post(
+            "/api/resumes",
+            json={
+                "title": "Platform",
+                "content": "Python FastAPI 项目，负责接口测试并输出报告。",
+            },
+        )
+        resume_id = created.json()["resume_id"]
+        audited = self.client.post(
+            f"/api/resumes/{resume_id}/audit",
+            json={"job_title": "Backend Engineer", "jd": "Python FastAPI"},
+        )
+        matched = self.client.post(
+            "/api/job-match",
+            json={
+                "resume_id": resume_id,
+                "job_title": "Backend Engineer",
+                "jd": "Python FastAPI",
+            },
+        )
+        analyzed_jd = self.client.post(
+            "/api/ai/analyze-jd",
+            json={"jd_content": "Python FastAPI 接口测试"},
+        )
+        openapi = self.client.get("/api/v1/openapi.json").json()
+
+        self.assertEqual(audited.status_code, 200)
+        self.assertIn("section_scores", audited.json())
+        self.assertEqual(matched.status_code, 200)
+        self.assertIn("match_score", matched.json())
+        self.assertEqual(analyzed_jd.status_code, 200)
+        self.assertIn("keywords", analyzed_jd.json())
+        for path in (
+            "/api/resumes/{resume_id}/audit",
+            "/api/resumes/{resume_id}/improve",
+            "/api/job-match",
+            "/api/skills/radar",
+            "/api/ai/analyze-jd",
+            "/api/resume-templates",
+        ):
+            self.assertIn(path, openapi["paths"])
 
     def test_resume_upload_uses_generated_object_key_and_preserves_original(self):
         uploaded = self.client.post(

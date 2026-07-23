@@ -6,6 +6,7 @@ from backend.core.settings import Settings
 
 from .interviews import InterviewModule
 from .opportunities import OpportunityModule
+from .resume_intelligence import ResumeIntelligenceModule
 from .resumes import ResumeModule
 
 
@@ -18,6 +19,7 @@ class ApplicationContainer:
         self._interviews: InterviewModule | None = None
         self._opportunities: OpportunityModule | None = None
         self._resumes: ResumeModule | None = None
+        self._resume_intelligence: ResumeIntelligenceModule | None = None
 
     def initialize(self) -> None:
         self.legacy.initialize()
@@ -57,3 +59,13 @@ class ApplicationContainer:
                 local_user_id=self.legacy.local_user_id,
             )
         return self._resumes
+
+    @property
+    def resume_intelligence(self) -> ResumeIntelligenceModule:
+        if self._resume_intelligence is None:
+            self._resume_intelligence = ResumeIntelligenceModule(
+                self.settings.db_path,
+                self.legacy.ai_client_manager.get_ai_client,
+                local_user_id=self.legacy.local_user_id,
+            )
+        return self._resume_intelligence

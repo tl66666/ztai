@@ -11,6 +11,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from backend.api.interviews import create_interview_router
 from backend.api.opportunities import create_opportunity_router
+from backend.api.resume_intelligence import create_resume_intelligence_router
 from backend.api.resumes import create_resume_router
 from backend.api.system import create_system_router
 from backend.application.container import ApplicationContainer
@@ -48,9 +49,7 @@ def create_application(
         lifespan=lifespan,
         docs_url="/api/v1/docs" if runtime_settings.api_docs_enabled else None,
         redoc_url=None,
-        openapi_url=(
-            "/api/v1/openapi.json" if runtime_settings.api_docs_enabled else None
-        ),
+        openapi_url=("/api/v1/openapi.json" if runtime_settings.api_docs_enabled else None),
     )
 
     @application.middleware("http")
@@ -62,9 +61,7 @@ def create_application(
         ):
             return await call_next(request)
         try:
-            request.state.principal = identity_provider.authenticate(
-                request.headers
-            )
+            request.state.principal = identity_provider.authenticate(request.headers)
         except AuthenticationError as exc:
             return JSONResponse(
                 {
@@ -75,6 +72,7 @@ def create_application(
                 status_code=401,
             )
         return await call_next(request)
+
     if runtime_settings.allowed_origins:
         application.add_middleware(
             CORSMiddleware,
@@ -92,13 +90,12 @@ def create_application(
         create_system_router(container.database_ready),
         prefix="/api/v1",
     )
-    application.include_router(
-        create_interview_router(lambda: container.interviews)
-    )
-    application.include_router(
-        create_opportunity_router(lambda: container.opportunities)
-    )
+    application.include_router(create_interview_router(lambda: container.interviews))
+    application.include_router(create_opportunity_router(lambda: container.opportunities))
     application.include_router(create_resume_router(lambda: container.resumes))
+    application.include_router(
+        create_resume_intelligence_router(lambda: container.resume_intelligence)
+    )
     application.mount("/", WSGIMiddleware(container.legacy.application))
     return application
 
