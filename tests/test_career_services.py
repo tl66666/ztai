@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from tests.agent_api_client import create_agent_test_runtime
 from utils.domain.database import APPLICATION_STATUSES, connect, migrate_database
 
 
@@ -387,17 +388,14 @@ class CareerApiTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.temp_dir.name, "api.db")
-        os.environ["JOBHUNTER_DB_PATH"] = self.db_path
-        import importlib
-        import app as app_module
-
-        self.app_module = importlib.reload(app_module)
-        self.app_module.app.config["TESTING"] = True
-        self.app_module.init_db()
-        self.client = self.app_module.app.test_client()
+        self.client_context, self.client = create_agent_test_runtime(
+            self.temp_dir.name
+        )
+        self.client_context.__enter__()
+        self.container = self.client_context.app.state.container
 
     def tearDown(self):
-        os.environ.pop("JOBHUNTER_DB_PATH", None)
+        self.client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
 
     def test_profile_opportunity_and_action_api_basics(self):
@@ -488,7 +486,11 @@ class CareerApiTests(unittest.TestCase):
                 captured["messages"] = messages
                 return {"success": True, "content": "local advice"}
 
-        with patch.object(self.app_module, "get_ai_client", return_value=FakeAIClient()):
+        with patch.object(
+            self.container.ai_clients,
+            "get_ai_client",
+            return_value=FakeAIClient(),
+        ):
             response = self.client.post(
                 f"/api/applications/{opportunity['id']}/coach", json={"user_id": 2}
             )
@@ -509,7 +511,12 @@ class CareerApiTests(unittest.TestCase):
 
         dashboard = self.client.get("/api/dashboard/1").get_json()
         report = self.client.post("/api/career/report/1").get_json()["report"]
-        context = self.app_module.build_agent_runtime_context(1)
+        conversation = self.container.agent.service.create_conversation(1)
+        context = self.container.agent.service.context_builder.build(
+            1,
+            conversation["id"],
+            "求职进度",
+        ).as_prompt()
 
         self.assertEqual(dashboard["stats"]["applications"], 0)
         self.assertNotIn("Deleted Co", json.dumps(dashboard, ensure_ascii=False))

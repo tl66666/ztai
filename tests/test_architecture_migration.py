@@ -6,9 +6,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# These ceilings must only move down while the compatibility application is retired.
-MAX_LEGACY_ROUTE_DECORATORS = 55
-MAX_LEGACY_ROUTE_OPERATIONS = 59
+MAX_LEGACY_ROUTE_DECORATORS = 0
+MAX_LEGACY_ROUTE_OPERATIONS = 0
 
 
 def _legacy_route_counts() -> tuple[int, int]:
@@ -46,11 +45,12 @@ def _legacy_route_counts() -> tuple[int, int]:
 
 
 class ArchitectureMigrationTests(unittest.TestCase):
-    def test_legacy_route_surface_cannot_grow(self) -> None:
+    def test_flask_route_surface_is_removed(self) -> None:
         decorators, operations = _legacy_route_counts()
 
-        self.assertLessEqual(decorators, MAX_LEGACY_ROUTE_DECORATORS)
-        self.assertLessEqual(operations, MAX_LEGACY_ROUTE_OPERATIONS)
+        self.assertEqual(decorators, MAX_LEGACY_ROUTE_DECORATORS)
+        self.assertEqual(operations, MAX_LEGACY_ROUTE_OPERATIONS)
+        self.assertFalse((ROOT / "app.py").exists())
 
     def test_container_delivery_layer_stays_out_of_current_architecture(self) -> None:
         retired_paths = (
@@ -73,6 +73,7 @@ class ArchitectureMigrationTests(unittest.TestCase):
         self.assertNotIn("legacy_flask", backend_sources)
         self.assertNotIn("legacy_training", backend_sources)
         self.assertNotIn("import app", backend_sources)
+        self.assertNotIn("from app", backend_sources)
         self.assertFalse(
             (ROOT / "backend" / "adapters" / "legacy_flask.py").exists()
         )

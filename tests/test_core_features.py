@@ -1,8 +1,11 @@
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+
+from tests.agent_api_client import create_agent_test_runtime
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 if PROJECT_ROOT not in sys.path:
@@ -36,15 +39,13 @@ class ProviderRegistryTests(unittest.TestCase):
 class BackendFeatureTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        os.environ["JOBHUNTER_DB_PATH"] = os.path.join(self.temp_dir.name, "test.db")
-
-        import importlib
-        import app as app_module
-
-        self.app_module = importlib.reload(app_module)
-        self.app_module.app.config["TESTING"] = True
-        self.app_module.init_db()
-        self.client = self.app_module.app.test_client()
+        self.db_path = os.path.join(self.temp_dir.name, "test.db")
+        self.client_context, self.client = create_agent_test_runtime(
+            self.temp_dir.name,
+            db_name="test.db",
+        )
+        self.client_context.__enter__()
+        self.container = self.client_context.app.state.container
 
         response = self.client.post(
             "/api/resumes",
@@ -57,8 +58,8 @@ class BackendFeatureTests(unittest.TestCase):
         self.resume_id = response.get_json()["resume_id"]
 
     def tearDown(self):
+        self.client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
-        os.environ.pop("JOBHUNTER_DB_PATH", None)
 
     def test_tailor_resume_for_jd_returns_structured_sections(self):
         response = self.client.post(
@@ -84,7 +85,7 @@ class BackendFeatureTests(unittest.TestCase):
             "专业技能\\nPython、Postman、SQL\\n"
             "完整结尾事实"
         )
-        with self.app_module.get_db() as conn:
+        with sqlite3.connect(self.db_path) as conn:
             conn.execute("UPDATE resumes SET content = ? WHERE id = ?", (source, self.resume_id))
 
         rewritten = (
@@ -100,7 +101,11 @@ class BackendFeatureTests(unittest.TestCase):
             def chat(self, *args, **kwargs):
                 return {"success": True, "content": rewritten}
 
-        with patch.object(self.app_module, "get_ai_client", return_value=ConnectedClient()):
+        with patch.object(
+            self.container.ai_clients,
+            "get_ai_client",
+            return_value=ConnectedClient(),
+        ):
             response = self.client.post(
                 f"/api/resumes/{self.resume_id}/improve",
                 json={"job_title": "测试工程师", "save": True},
@@ -178,29 +183,14 @@ class BackendFeatureTests(unittest.TestCase):
         self.assertTrue(questions["success"])
         self.assertGreaterEqual(len(questions["data"]), 5)
 
-        from pathlib import Path
-
-        from fastapi.testclient import TestClient
-
-        from backend.core.settings import Settings
-        from backend.main import create_application
-
-        root = Path(self.temp_dir.name)
-        settings = Settings(
-            environment="test",
-            db_path=Path(os.environ["JOBHUNTER_DB_PATH"]),
-            upload_folder=root / "uploads",
-            export_folder=root / "exports",
-        )
-        with TestClient(create_application(settings)) as client:
-            pack = client.post(
-                "/api/interview/professional-pack",
-                json={
-                    "category": "career",
-                    "career_profile": "education",
-                    "job_title": "小学语文教师",
-                },
-            ).json()
+        pack = self.client.post(
+            "/api/interview/professional-pack",
+            json={
+                "category": "career",
+                "career_profile": "education",
+                "job_title": "小学语文教师",
+            },
+        ).get_json()
 
         self.assertTrue(pack["success"])
         self.assertEqual(pack["profile"]["id"], "education")

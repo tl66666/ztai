@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable
 from typing import Any
 
@@ -25,21 +26,37 @@ def create_career_router(
         except (PermissionError, LookupError, ValueError) as exc:
             return domain_error_response(exc)
 
+    async def body_call(method: str, request: Request, *args: Any):
+        try:
+            payload = await body(request)
+        except ValueError as exc:
+            return domain_error_response(exc)
+        return await call(method, *args, payload)
+
+    async def result_call(method: str, result_id: int):
+        try:
+            return await call(method, result_id)
+        except sqlite3.Error:
+            return JSONResponse(
+                {"success": False, "message": "结果暂时无法读取"},
+                status_code=500,
+            )
+
     @router.get("/api/profile")
     async def profile():
         return await call("profile")
 
     @router.put("/api/profile")
     async def update_profile(request: Request):
-        return await call("update_profile", await body(request))
+        return await body_call("update_profile", request)
 
     @router.get("/api/profile/{profile_id}")
     async def profile_result(profile_id: int):
-        return await call("profile_result", profile_id)
+        return await result_call("profile_result", profile_id)
 
     @router.get("/api/career-reports/{report_id}")
     async def report_result(report_id: int):
-        return await call("report_result", report_id)
+        return await result_call("report_result", report_id)
 
     @router.get("/api/action-items")
     async def action_items():
@@ -55,11 +72,11 @@ def create_career_router(
 
     @router.post("/api/action-items/{action_id}/complete")
     async def complete_action_item(action_id: int, request: Request):
-        return await call("complete_action_item", action_id, await body(request))
+        return await body_call("complete_action_item", request, action_id)
 
     @router.post("/api/applications")
     async def create_application(request: Request):
-        result = await call("create_application", await body(request))
+        result = await body_call("create_application", request)
         if isinstance(result, JSONResponse):
             return result
         payload, status_code = result
@@ -75,7 +92,7 @@ def create_career_router(
 
     @router.put("/api/applications/{application_id}")
     async def update_application(application_id: int, request: Request):
-        return await call("update_application", application_id, await body(request))
+        return await body_call("update_application", request, application_id)
 
     @router.delete("/api/applications/{application_id}")
     async def delete_application(application_id: int):
@@ -87,6 +104,6 @@ def create_career_router(
 
     @router.post("/api/salary/evaluate")
     async def salary(request: Request):
-        return await call("salary", await body(request))
+        return await body_call("salary", request)
 
     return router

@@ -6,12 +6,10 @@ import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
-import app as app_module
 from backend.core.settings import Settings
-from backend.main import create_application
+from tests.agent_api_client import create_agent_test_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,33 +17,17 @@ ROOT = Path(__file__).resolve().parents[1]
 class LocalSecurityBoundaryTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-        self.original_db_path = app_module.DB_PATH
-        self.original_upload_folder = app_module.UPLOAD_FOLDER
-        app_module.DB_PATH = os.path.join(self.temp_dir.name, "jobhunter.db")
-        app_module.UPLOAD_FOLDER = os.path.join(self.temp_dir.name, "uploads")
-        os.makedirs(app_module.UPLOAD_FOLDER, exist_ok=True)
-        app_module.app.config["TESTING"] = True
-        app_module.app.config["UPLOAD_FOLDER"] = app_module.UPLOAD_FOLDER
-        app_module.init_db()
-        self.client = app_module.app.test_client()
         root = Path(self.temp_dir.name)
-        self.asgi_client = TestClient(
-            create_application(
-                Settings(
-                    environment="test",
-                    db_path=Path(app_module.DB_PATH),
-                    upload_folder=Path(app_module.UPLOAD_FOLDER),
-                    export_folder=root / "exports",
-                )
-            )
+        self.db_path = root / "jobhunter.db"
+        self.upload_folder = root / "uploads"
+        self.client_context, self.client = create_agent_test_runtime(
+            root,
+            db_name="jobhunter.db",
         )
-        self.asgi_client.__enter__()
+        self.client_context.__enter__()
 
     def tearDown(self):
-        self.asgi_client.__exit__(None, None, None)
-        app_module.DB_PATH = self.original_db_path
-        app_module.UPLOAD_FOLDER = self.original_upload_folder
-        app_module.app.config["UPLOAD_FOLDER"] = self.original_upload_folder
+        self.client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
 
     def test_audio_download_cannot_escape_upload_directory(self):
@@ -67,11 +49,11 @@ class LocalSecurityBoundaryTests(unittest.TestCase):
             json={"user_id": 2, "title": "foreign", "content": "content"},
         )
         training_responses = (
-            self.asgi_client.post(
+            self.client.post(
                 "/api/interview/practice-feedback",
                 json={"user_id": 2, "question": "q", "answer": "long enough answer"},
             ),
-            self.asgi_client.post(
+            self.client.post(
                 "/api/interview/analyze-audio",
                 files={"audio": ("answer.wav", BytesIO(b"RIFF"), "audio/wav")},
                 data={
@@ -88,12 +70,12 @@ class LocalSecurityBoundaryTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 403)
             response.close()
 
-        with sqlite3.connect(app_module.DB_PATH) as conn:
+        with sqlite3.connect(self.db_path) as conn:
             for table in ("resumes", "practice_records", "audio_records"):
                 self.assertEqual(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
 
     def test_legacy_reads_and_deletes_cannot_access_foreign_records(self):
-        with sqlite3.connect(app_module.DB_PATH) as conn:
+        with sqlite3.connect(self.db_path) as conn:
             resume_id = conn.execute(
                 "INSERT INTO resumes(user_id, title, content) VALUES (2, 'foreign', 'secret')"
             ).lastrowid
@@ -111,15 +93,15 @@ class LocalSecurityBoundaryTests(unittest.TestCase):
             self.client.get("/api/applications/2"),
         )
         training_requests = (
-            self.asgi_client.get("/api/training-records/2"),
-            self.asgi_client.delete(
+            self.client.get("/api/training-records/2"),
+            self.client.delete(
                 f"/api/training-records/practice/{practice_id}"
             ),
-            self.asgi_client.delete("/api/training-records/2/clear"),
+            self.client.delete("/api/training-records/2/clear"),
         )
 
         for response in legacy_requests:
-            with self.subTest(path=response.request.path):
+            with self.subTest(path=response.request.url.path):
                 self.assertIn(response.status_code, {403, 404})
             response.close()
         for response in training_requests:
@@ -127,7 +109,7 @@ class LocalSecurityBoundaryTests(unittest.TestCase):
                 self.assertIn(response.status_code, {403, 404})
             response.close()
 
-        with sqlite3.connect(app_module.DB_PATH) as conn:
+        with sqlite3.connect(self.db_path) as conn:
             resume_count = conn.execute(
                 "SELECT COUNT(*) FROM resumes WHERE id = ?", (resume_id,)
             ).fetchone()[0]
@@ -140,16 +122,27 @@ class LocalSecurityBoundaryTests(unittest.TestCase):
 
 
 class PortableRuntimeContractTests(unittest.TestCase):
-    def test_manual_server_rejects_non_loopback_and_never_enables_debugger(self):
-        source = (ROOT / "app.py").read_text(encoding="utf-8")
-        self.assertIn("def validate_server_host", source)
-        self.assertRegex(source, r"app\.run\(debug=False, host=host, port=LOCAL_PORT\)")
+    def test_public_bind_requires_authenticated_cloudflare_access_mode(self):
+        with patch.dict(
+            os.environ,
+            {
+                "JOBHUNTER_HOST": "127.0.0.1",
+                "JOBHUNTER_AUTH_MODE": "local",
+            },
+            clear=True,
+        ):
+            self.assertEqual(Settings.from_environment().host, "127.0.0.1")
 
-        validator = getattr(app_module, "validate_server_host", None)
-        self.assertIsNotNone(validator)
-        self.assertEqual(validator("127.0.0.1"), "127.0.0.1")
         with self.assertRaises(ValueError):
-            validator("0.0.0.0")
+            with patch.dict(
+                os.environ,
+                {
+                    "JOBHUNTER_HOST": "0.0.0.0",
+                    "JOBHUNTER_AUTH_MODE": "local",
+                },
+                clear=True,
+            ):
+                Settings.from_environment()
 
     def test_frontend_dependencies_are_local_and_have_runtime_fallbacks(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")

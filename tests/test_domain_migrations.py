@@ -6,7 +6,9 @@ import threading
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
+from backend.core.runtime import RuntimeDatabase
 from utils.domain.database import (
     APPLICATION_STATUSES,
     LEGACY_STATUS_MAP,
@@ -14,6 +16,16 @@ from utils.domain.database import (
     ensure_column,
     migrate_database,
 )
+
+
+def initialize_runtime_database(db_path: str) -> None:
+    root = Path(db_path).parent
+    RuntimeDatabase(
+        db_path,
+        upload_folder=root / "uploads",
+        export_folder=root / "exports",
+        local_user_id=1,
+    ).initialize()
 
 
 class _BarrierCursor:
@@ -179,20 +191,13 @@ class DomainMigrationTests(unittest.TestCase):
                     """
                 )
 
-            import app as app_module
-
-            original_path = app_module.DB_PATH
-            try:
-                app_module.DB_PATH = db_path
-                app_module.init_db()
-                with connect(db_path) as conn:
-                    local_user = conn.execute("SELECT id FROM users WHERE id = 1").fetchone()
-                    conn.execute(
-                        "INSERT INTO resumes(user_id,title,content) VALUES (1,'简历','正文')"
-                    )
-                self.assertIsNotNone(local_user)
-            finally:
-                app_module.DB_PATH = original_path
+            initialize_runtime_database(db_path)
+            with connect(db_path) as conn:
+                local_user = conn.execute("SELECT id FROM users WHERE id = 1").fetchone()
+                conn.execute(
+                    "INSERT INTO resumes(user_id,title,content) VALUES (1,'简历','正文')"
+                )
+            self.assertIsNotNone(local_user)
 
     def test_initialization_repairs_local_user_when_the_default_name_is_taken(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -210,18 +215,11 @@ class DomainMigrationTests(unittest.TestCase):
                     """
                 )
 
-            import app as app_module
-
-            original_path = app_module.DB_PATH
-            try:
-                app_module.DB_PATH = db_path
-                app_module.init_db()
-                with connect(db_path) as conn:
-                    self.assertIsNotNone(
-                        conn.execute("SELECT id FROM users WHERE id = 1").fetchone()
-                    )
-            finally:
-                app_module.DB_PATH = original_path
+            initialize_runtime_database(db_path)
+            with connect(db_path) as conn:
+                self.assertIsNotNone(
+                    conn.execute("SELECT id FROM users WHERE id = 1").fetchone()
+                )
 
     def test_migrates_legacy_schema_and_data_idempotently(self):
         with tempfile.TemporaryDirectory() as temp_dir:

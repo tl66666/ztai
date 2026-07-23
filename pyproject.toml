@@ -4,10 +4,7 @@ version = "0.1.0"
 description = "Browser-first AI career workspace"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "a2wsgi>=1.10,<2",
     "fastapi>=0.115,<1",
-    "flask>=2,<4",
-    "flask-cors>=4,<7",
     "pdf2docx>=0.5.6,<1",
     "pyjwt[crypto]>=2.10,<3",
     "pypdf2>=3,<4",

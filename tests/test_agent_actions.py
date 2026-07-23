@@ -7,7 +7,6 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-import app as app_module
 from tests.agent_api_client import create_agent_test_runtime
 from utils.agent_runtime.actions import ActionProposalError
 from utils.domain.database import APPLICATION_STATUSES, connect, migrate_database
@@ -1112,8 +1111,7 @@ class AgentActionServiceTests(unittest.TestCase):
 class AgentActionAPITests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.original_db_path = app_module.DB_PATH
-        app_module.DB_PATH = os.path.join(self.temp_dir.name, "api-actions.db")
+        self.db_path = os.path.join(self.temp_dir.name, "api-actions.db")
         self.client_context, self.client = create_agent_test_runtime(
             self.temp_dir.name,
             db_name="api-actions.db",
@@ -1139,7 +1137,6 @@ class AgentActionAPITests(unittest.TestCase):
 
     def tearDown(self):
         self.client_context.__exit__(None, None, None)
-        app_module.DB_PATH = self.original_db_path
         self.temp_dir.cleanup()
 
     def test_api_lists_gets_edits_confirms_and_cancels(self):
@@ -1191,7 +1188,7 @@ class AgentActionAPITests(unittest.TestCase):
 
     def test_action_api_uses_server_identity_and_cannot_read_foreign_proposal(self):
         own = self.service.propose(1, "create_action_item", {"title": "Own"})
-        with connect(app_module.DB_PATH) as conn:
+        with connect(self.db_path) as conn:
             foreign_id = conn.execute(
                 """
                 INSERT INTO agent_action_proposals
@@ -1327,7 +1324,7 @@ class AgentActionAPITests(unittest.TestCase):
             f"/api/agent/actions/{proposal['id']}/confirm", json={}
         )
         self.assertEqual(recovered.status_code, 200)
-        with connect(app_module.DB_PATH) as conn:
+        with connect(self.db_path) as conn:
             count = conn.execute(
                 "SELECT COUNT(*) FROM action_items WHERE title = 'once'"
             ).fetchone()[0]

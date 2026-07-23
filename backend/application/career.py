@@ -95,7 +95,13 @@ class CareerModule:
         return {"success": True, "message": "投递记录已更新"}
 
     def delete_application(self, application_id: int) -> dict[str, Any]:
-        self._career_service.delete_opportunity(self._local_user_id, application_id)
+        try:
+            self._career_service.delete_opportunity(
+                self._local_user_id,
+                application_id,
+            )
+        except LookupError as exc:
+            raise LookupError("投递记录不存在") from exc
         return {"success": True, "message": "投递记录已删除"}
 
     def advance_application(self, application_id: int) -> dict[str, Any]:
