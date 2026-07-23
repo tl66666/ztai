@@ -17,7 +17,15 @@ class OpportunityFrontendContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-        cls.script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        sources = [
+            ROOT / "static" / "js" / "app.js",
+            ROOT / "frontend" / "src" / "opportunity" / "opportunity-controller.ts",
+            ROOT / "frontend" / "src" / "opportunity" / "application-board.ts",
+            ROOT / "frontend" / "src" / "opportunity" / "opportunity-dashboard.ts",
+            ROOT / "frontend" / "src" / "opportunity" / "opportunity-workspace.ts",
+            ROOT / "frontend" / "src" / "opportunity" / "opportunity-workspace-renderer.ts",
+        ]
+        cls.script = "\n".join(path.read_text(encoding="utf-8") for path in sources)
         cls.interview_controller = (
             ROOT
             / "frontend"
@@ -56,7 +64,7 @@ class OpportunityFrontendContractTests(unittest.TestCase):
 
     def test_entity_ids_drive_deep_links_and_cross_feature_handoffs(self):
         self.assertIn("currentOpportunityId", self.script)
-        self.assertIn("opportunityHistory.open", self.script)
+        self.assertIn("return history.open", self.script)
         self.assertIn("applicationPayloadForJob(state.pendingApplicationHandoff", self.script)
         self.assertIn("buildInterviewStartPayload({", self.interview_controller)
         self.assertIn("}, handoff)", self.interview_controller)
@@ -111,7 +119,7 @@ class OpportunityFrontendContractTests(unittest.TestCase):
             "buildInterviewStartPayload", "applicationPayloadForJob", "buildMatchPayload",
             "retryOpportunityWorkspace", "opportunityWorkspaceError", "opportunityOpener",
             "focus({ preventScroll: true })", "navigateToRoute", "onRouteTransition",
-            "routeLeavesFlow", "opportunityLoadGeneration", "request.isCurrent",
+            "routeLeavesFlow", "opportunityLoadGeneration", "requestState.isCurrent",
             "focusCleanedRoute", "focusRoute:", "tabIndex = -1",
         ):
             self.assertIn(token, self.script)
@@ -125,8 +133,8 @@ class OpportunityFrontendContractTests(unittest.TestCase):
         self.assertIn("OpportunityHistory.createOpportunityHistoryController", self.script)
         self.assertIn("opportunityHistory.bind()", self.script)
         self.assertIn("await opportunityHistory.sync()", self.script)
-        self.assertIn("return opportunityHistory.open", self.script)
-        self.assertIn("opportunityHistory.close", self.script)
+        self.assertIn("return history.open", self.script)
+        self.assertIn("history.close", self.script)
         self.assertNotIn('params.get("opportunity")', self.script)
         self.assertNotIn("function opportunityWorkspaceUrl", self.script)
 

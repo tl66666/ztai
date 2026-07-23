@@ -134,6 +134,32 @@ const opportunityHistory = OpportunityHistory.createOpportunityHistoryController
     }
   },
 });
+const opportunityController = JobHunterOpportunityController.create({
+  userId: USER_ID,
+  state,
+  request: api,
+  byId: $,
+  escapeHtml,
+  renderText,
+  toast,
+  withLoading,
+  renderIcons,
+  syncAgentContext,
+  jumpToModule,
+  filterModules,
+  renderAgentCommandOpportunities,
+  applicationPayloadForJob,
+  buildInterviewHandoff,
+  renderApplicationHandoffNotice,
+  clearApplicationHandoff,
+  renderMatchOpportunityNotice,
+  openOriginalResume,
+  fillResume,
+  openInterviewRoom,
+  parseFeedbackSummary,
+  confirmAction: (message) => window.confirm(message),
+  history: opportunityHistory,
+});
 const PROVIDER_LINKS = {
   glm: [
     ["智谱开放平台", "https://open.bigmodel.cn/"],
@@ -1056,448 +1082,119 @@ function toggleVoiceInput() {
 }
 
 async function saveApplication() {
-  const company = $("appCompany").value.trim();
-  const job = $("appJob").value.trim();
-  if (!company || !job) return toast("请填写公司和岗位");
-  const payload = {
-    user_id: USER_ID,
-    company,
-    job_title: job,
-    status: $("appStatus").value,
-    city: $("appCity").value,
-    notes: $("appNotes").value,
-    ...applicationPayloadForJob(state.pendingApplicationHandoff, job),
-  };
-  if (state.editingAppId) {
-    delete payload.jd_text;
-    delete payload.resume_id;
-  }
-  Object.keys(payload).forEach((key) => payload[key] === undefined && delete payload[key]);
-  const editingId = state.editingAppId;
-  const data = await api(state.editingAppId ? `/applications/${state.editingAppId}` : "/applications", {
-    method: state.editingAppId ? "PUT" : "POST",
-    body: payload,
-  });
-  if (data.success) {
-    const savedId = editingId || Number(data.application_id);
-    toast(editingId ? "投递记录已更新" : "投递记录已添加");
-    state.editingAppId = null;
-    clearApplicationHandoff();
-    $("saveAppBtn").innerHTML = `<i data-lucide="plus"></i>添加记录`;
-    ["appCompany", "appJob", "appCity", "appNotes"].forEach((id) => $(id).value = "");
-    await Promise.all([loadApplications(), loadDashboard()]);
-    if (Number.isInteger(savedId) && savedId > 0) await openOpportunityWorkspace(savedId);
-    renderIcons();
-  }
+  return opportunityController.saveApplication();
 }
 
 async function editApplication(id) {
-  const data = await api(`/applications/detail/${id}`);
-  if (!data.success) return toast(data.message || "投递记录不存在");
-  const item = data.data;
-  clearApplicationHandoff();
-  state.editingAppId = id;
-  $("appCompany").value = item.company || "";
-  $("appJob").value = item.job_title || "";
-  if (![...$("appStatus").options].some((option) => option.value === item.status)) {
-    $("appStatus").add(new Option(`待确认：${item.status || "未设置"}`, item.status, true, true));
-  }
-  $("appStatus").value = item.status || "已投递";
-  $("appCity").value = item.city || "";
-  $("appNotes").value = item.notes || "";
-  $("saveAppBtn").innerHTML = `<i data-lucide="save"></i>更新记录`;
-  jumpToModule("tracker", "add");
-  renderIcons();
+  return opportunityController.editApplication(id);
 }
 
 async function deleteApplication(id) {
-  if (!confirm("确定删除这条投递记录吗？")) return;
-  const data = await api(`/applications/${id}`, { method: "DELETE" });
-  if (!data.success) return toast(data.message || "删除失败");
-  toast("投递记录已删除");
-  if (state.currentOpportunityId === id) closeOpportunityWorkspace();
-  await loadApplications();
-  await loadDashboard();
+  return opportunityController.deleteApplication(id);
 }
 
 async function loadApplications() {
-  const data = await api(`/applications/${USER_ID}`);
-  if (!data.success) {
-    $("applicationList").innerHTML = `<div class="workspace-message" role="alert">投递记录加载失败，请稍后重试。</div>`;
-    return;
-  }
-  const apps = data.success ? data.data : [];
-  state.applications = apps;
-  const canonicalStatuses = Array.isArray(data.canonical_statuses) ? data.canonical_statuses : [];
-  state.applicationStatuses = canonicalStatuses;
-  const previousStatus = $("appStatus").value;
-  $("appStatus").innerHTML = canonicalStatuses.map((status) => (
-    `<option value="${escapeHtml(status)}">${escapeHtml(status)}</option>`
-  )).join("");
-  $("appStatus").value = canonicalStatuses.includes(previousStatus)
-    ? previousStatus
-    : (canonicalStatuses.includes("已投递") ? "已投递" : canonicalStatuses[0] || "");
-  if (!apps.length) {
-    $("applicationList").innerHTML = `<div class="opportunity-empty"><strong>暂无投递</strong><span>添加第一条记录后，这里会按阶段自动成列。</span><button class="primary" onclick="jumpToModule('tracker','add')"><i data-lucide="plus"></i>新增投递</button></div>`;
-    renderAgentCommandOpportunities();
-    renderIcons();
-    return;
-  }
-  const canonicalSet = new Set(canonicalStatuses);
-  const unknownItems = apps.filter((item) => item.needs_status_review || !canonicalSet.has(item.status));
-  const anchorIndexes = new Set([0, 2, 3]);
-  const grouped = canonicalStatuses.map((stage, index) => ({
-    stage,
-    items: apps.filter((item) => item.status === stage),
-    anchor: anchorIndexes.has(index) || stage === "Offer",
-  })).filter((group) => group.items.length || group.anchor);
-  if (unknownItems.length) grouped.unshift({ stage: "待确认", items: unknownItems, warning: true });
-  $("applicationList").innerHTML = grouped.map((group) => `
-    <section class="kanban-column${group.warning ? " needs-review" : ""}">
-      <h4>${group.warning ? '<i data-lucide="triangle-alert" aria-hidden="true"></i>' : ""}${escapeHtml(group.stage)}<span>${group.items.length}</span></h4>
-      ${group.warning ? '<p class="status-warning"><i data-lucide="triangle-alert" aria-hidden="true"></i>旧状态需要确认，请编辑后选择当前阶段。</p>' : ""}
-      ${group.items.length ? group.items.map((item) => `
-        <article class="kanban-card">
-          <strong>${escapeHtml(item.company)}</strong>
-          <span>${escapeHtml(item.job_title)}</span>
-          <span class="status-text">阶段：${escapeHtml(item.needs_status_review ? `待确认（原状态：${item.status || "未设置"}）` : item.status)}</span>
-          <em>${escapeHtml(item.city || "城市未填")}</em>
-          <p>${escapeHtml(item.notes || "暂无备注，建议补充投递渠道、面试反馈或待办。")}</p>
-          <button class="primary small details-command" onclick="openOpportunityWorkspace(${item.id})"><i data-lucide="panel-right-open"></i>打开详情</button>
-          <div class="kanban-card-actions">
-            <button class="ghost small" onclick="coachApplication(${item.id})">跟进建议</button>
-            ${item.needs_status_review ? "" : `<button class="ghost small" onclick="advanceApplication(${item.id})">推进</button>`}
-            <button class="ghost small" onclick="editApplication(${item.id})">编辑</button>
-            <button class="ghost small danger" onclick="deleteApplication(${item.id})">删除</button>
-          </div>
-        </article>
-      `).join("") : `<div class="kanban-empty"><span>暂无记录</span></div>`}
-    </section>
-  `).join("");
-  renderAgentCommandOpportunities();
-  renderIcons();
+  return opportunityController.loadApplications();
 }
 
 async function openOpportunityWorkspace(id, options = {}) {
-  if (options.updateUrl !== false && document.activeElement instanceof HTMLElement) {
-    state.opportunityOpener = document.activeElement;
-  }
-  const historyMode = options.historyMode || (options.updateUrl === false ? "none" : "push");
-  return opportunityHistory.open(id, { historyMode });
+  return opportunityController.openWorkspace(id, options);
 }
 
 async function loadOpportunityWorkspace(id, request = {}) {
-  const opportunityId = Number(id);
-  if (!Number.isInteger(opportunityId) || opportunityId <= 0) return false;
-  const generation = ++state.opportunityLoadGeneration;
-  const isCurrent = () => generation === state.opportunityLoadGeneration
-    && state.currentOpportunityId === opportunityId
-    && (!request.isCurrent || request.isCurrent());
-  state.currentOpportunityId = opportunityId;
-  const boardButton = document.querySelector('[data-section-filter="tracker:board"]');
-  if (boardButton) filterModules("tracker", "board", boardButton);
-  $("opportunityWorkspace").classList.remove("hidden");
-  $("opportunityWorkspaceError").classList.add("hidden");
-  $("opportunityWorkspaceTitle").textContent = "正在加载机会详情";
-  $("opportunityWorkspaceSubtitle").textContent = "正在读取本地关联记录...";
-
-  let workspace;
-  try {
-    workspace = await api(`/opportunities/${opportunityId}/workspace`);
-  } catch (_error) {
-    if (!isCurrent()) return { status: "superseded" };
-    showOpportunityWorkspaceError(opportunityId, "网络连接失败，请检查连接后重试。");
-    return { status: "retryable" };
-  }
-  if (!isCurrent()) return { status: "superseded" };
-  if (!workspace.success) {
-    if ([404, 410].includes(workspace.http_status)) return { status: "stale" };
-    if (workspace.http_status === 403) return { status: "forbidden" };
-    showOpportunityWorkspaceError(opportunityId, "机会详情暂时无法加载，请稍后重试。");
-    return { status: "retryable" };
-  }
-
-  state.currentOpportunityWorkspace = workspace;
-  renderOpportunityWorkspace(workspace);
-  syncAgentContext();
-  selectOpportunityTab($("opportunity-tab-overview"), false);
-  $("opportunityWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
-  return { status: "ok" };
+  return opportunityController.loadWorkspace(id, request);
 }
 
 function showOpportunityWorkspaceError(opportunityId, message) {
-  $("opportunityWorkspaceTitle").textContent = "机会详情暂时不可用";
-  $("opportunityWorkspaceSubtitle").textContent = "链接已保留，可直接重试。";
-  const error = $("opportunityWorkspaceError");
-  error.classList.remove("hidden");
-  error.innerHTML = `${escapeHtml(message)}<button type="button" class="ghost" onclick="retryOpportunityWorkspace(${opportunityId})"><i data-lucide="refresh-cw"></i>重试</button>`;
-  renderIcons();
+  return opportunityController.showWorkspaceError(opportunityId, message);
 }
 
 function retryOpportunityWorkspace(opportunityId) {
-  $("opportunityWorkspaceError").classList.add("hidden");
-  return opportunityHistory.reload(opportunityId);
+  return opportunityController.retryWorkspace(opportunityId);
 }
 
 function resetOpportunityWorkspaceView(context = {}) {
-  const wasOpen = state.currentOpportunityId !== null || !$("opportunityWorkspace").classList.contains("hidden");
-  state.opportunityLoadGeneration += 1;
-  state.currentOpportunityId = null;
-  state.currentOpportunityWorkspace = null;
-  syncAgentContext();
-  $("opportunityWorkspace").classList.add("hidden");
-  $("opportunityWorkspaceError").classList.add("hidden");
-  if (!wasOpen) return;
-  const opener = context.restoreFocus && state.opportunityOpener?.isConnected
-    ? state.opportunityOpener
-    : (context.page === "tracker" ? $("applicationBoardHeading") : $("pageTitle"));
-  state.opportunityOpener = null;
-  opener?.focus({ preventScroll: true });
+  return opportunityController.resetWorkspace(context);
 }
 
 function closeOpportunityWorkspace() {
-  return opportunityHistory.close({ historyMode: "push", restoreFocus: true });
+  return opportunityController.closeWorkspace();
 }
 
 function selectOpportunityTab(selectedTab, moveFocus = true) {
-  if (!selectedTab) return;
-  document.querySelectorAll('.opportunity-tabs [role="tab"]').forEach((tab) => {
-    const selected = tab === selectedTab;
-    tab.setAttribute("aria-selected", String(selected));
-    tab.tabIndex = selected ? 0 : -1;
-    $(tab.getAttribute("aria-controls"))?.classList.toggle("hidden", !selected);
-  });
-  if (moveFocus) selectedTab.focus();
+  return opportunityController.selectTab(selectedTab, moveFocus);
 }
 
 function handleOpportunityTabKeydown(event) {
-  if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
-  event.preventDefault();
-  const tabs = [...document.querySelectorAll('.opportunity-tabs [role="tab"]')];
-  const current = tabs.indexOf(event.currentTarget);
-  let next = current;
-  if (event.key === "ArrowRight") next = (current + 1) % tabs.length;
-  if (event.key === "ArrowLeft") next = (current - 1 + tabs.length) % tabs.length;
-  if (event.key === "Home") next = 0;
-  if (event.key === "End") next = tabs.length - 1;
-  selectOpportunityTab(tabs[next]);
+  return opportunityController.handleTabKeydown(event);
 }
 
 function renderOpportunityWorkspace(workspace) {
-  const opportunity = workspace.opportunity || {};
-  $("opportunityWorkspaceError").classList.add("hidden");
-  $("opportunityWorkspaceTitle").textContent = `${opportunity.company || "未命名公司"} / ${opportunity.job_title || "目标岗位"}`;
-  $("opportunityWorkspaceSubtitle").textContent = `当前阶段：${opportunity.needs_status_review ? "待确认" : opportunity.status || "未设置"}`;
-  renderOpportunityOverview(workspace);
-  renderOpportunityMatch(workspace);
-  renderOpportunityResume(workspace);
-  renderOpportunityInterview(workspace);
-  renderOpportunityTimeline(workspace);
-  syncAgentContext();
-  renderIcons();
+  return opportunityController.renderWorkspace(workspace);
 }
 
 function workspaceDate(value, fallback = "未设置") {
-  return escapeHtml(value ? formatDate(value) : fallback);
+  return opportunityController.workspaceDate(value, fallback);
 }
 
 function renderOpportunityOverview(workspace) {
-  const opportunity = workspace.opportunity || {};
-  const status = opportunity.needs_status_review
-    ? `待确认（原状态：${opportunity.status || "未设置"}）`
-    : opportunity.status || "未设置";
-  $("opportunity-overview").innerHTML = `
-    ${opportunity.needs_status_review ? '<p class="status-warning"><i data-lucide="triangle-alert"></i>这是旧版状态，请编辑并选择当前标准阶段。</p>' : ""}
-    <dl class="opportunity-facts">
-      <div><dt>公司</dt><dd>${escapeHtml(opportunity.company || "未填写")}</dd></div>
-      <div><dt>岗位</dt><dd>${escapeHtml(opportunity.job_title || "未填写")}</dd></div>
-      <div><dt>阶段</dt><dd>${escapeHtml(status)}</dd></div>
-      <div><dt>城市</dt><dd>${escapeHtml(opportunity.city || "未填写")}</dd></div>
-      <div><dt>优先级</dt><dd>${escapeHtml(opportunity.priority == null ? "未设置" : String(opportunity.priority))}</dd></div>
-      <div><dt>下一步</dt><dd>${workspaceDate(opportunity.next_action_at)}</dd></div>
-      <div><dt>面试时间</dt><dd>${workspaceDate(opportunity.interview_at)}</dd></div>
-      <div><dt>投递时间</dt><dd>${workspaceDate(opportunity.applied_at || opportunity.created_at)}</dd></div>
-    </dl>
-    ${opportunity.notes ? `<div class="workspace-note"><b>备注</b><p>${escapeHtml(opportunity.notes)}</p></div>` : ""}
-    <div class="workspace-primary-action"><button type="button" class="primary" onclick="editApplication(${opportunity.id})"><i data-lucide="pencil"></i>编辑机会</button></div>`;
+  return opportunityController.renderOverview(workspace);
 }
 
 function renderOpportunityMatch(workspace) {
-  const matches = workspace.matches || [];
-  const jd = workspace.opportunity?.jd_text || "";
-  $("opportunity-match").innerHTML = `
-    <section class="workspace-section"><h4>岗位 JD</h4>
-      ${jd ? `<div class="workspace-long-text">${escapeHtml(workspace.opportunity.jd_text)}</div>` : '<div class="opportunity-empty"><b>尚未保存 JD</b><span>回到 JD 匹配区粘贴岗位描述，再生成匹配结果。</span></div>'}
-    </section>
-    <section class="workspace-section"><h4>最近匹配</h4>
-      ${matches.length ? `<div class="workspace-list">${matches.map((match) => `
-        <div class="workspace-row"><div><b>${escapeHtml(match.job_title || "目标岗位")}</b><span>${escapeHtml(match.resume_title || "关联简历")} · ${workspaceDate(match.created_at)}</span></div><strong>${escapeHtml(match.match_score == null ? "未评分" : `${match.match_score} 分`)}</strong>
-        ${match.analysis ? `<p>${escapeHtml(match.analysis)}</p>` : ""}
-        ${Object.keys(match.details || {}).length ? `<pre>${escapeHtml(JSON.stringify(match.details, null, 2))}</pre>` : ""}</div>`).join("")}</div>` : '<div class="opportunity-empty"><b>尚无匹配结果</b><span>使用这份 JD 和关联简历完成一次匹配。</span></div>'}
-    </section>
-    <div class="workspace-primary-action"><button type="button" class="primary" onclick="useWorkspaceJd()"><i data-lucide="scan-search"></i>${jd ? "用此 JD 重新匹配" : "前往 JD 匹配"}</button></div>`;
+  return opportunityController.renderMatch(workspace);
 }
 
 function useWorkspaceJd() {
-  const opportunity = state.currentOpportunityWorkspace?.opportunity;
-  if (!opportunity) return;
-  state.matchOpportunityId = opportunity.id;
-  renderMatchOpportunityNotice();
-  $("jobTitleInput").value = opportunity.job_title || "";
-  $("jdInput").value = opportunity.jd_text || "";
-  if (opportunity.resume_id) $("tailorResumeSelect").value = String(opportunity.resume_id);
-  jumpToModule("resume", "jd");
+  return opportunityController.useWorkspaceJd();
 }
 
 function renderOpportunityResume(workspace) {
-  const resume = workspace.resume;
-  $("opportunity-resume").innerHTML = resume ? `
-    <div class="workspace-version">
-      <i data-lucide="file-text"></i><div><b>${escapeHtml(resume.title || "未命名简历")}</b><span>${escapeHtml(resume.version_label || "已关联版本")} · ${workspaceDate(resume.updated_at || resume.created_at)}</span><small>${escapeHtml(resume.target_job_title || workspace.opportunity.job_title || "目标岗位")}</small></div>
-    </div>
-    <div class="workspace-primary-action"><button type="button" class="primary" onclick="openWorkspaceResume(${resume.id}, ${resume.has_original ? "true" : "false"})"><i data-lucide="external-link"></i>${resume.has_original ? "打开简历原件" : "查看简历版本"}</button></div>` : `
-    <div class="opportunity-empty"><b>尚未关联简历版本</b><span>选择一份与该岗位匹配的简历，再从 JD 区新建机会。</span></div>
-    <div class="workspace-primary-action"><button type="button" class="primary" onclick="jumpToModule('resume','input')"><i data-lucide="file-plus-2"></i>准备简历</button></div>`;
+  return opportunityController.renderResume(workspace);
 }
 
 function openWorkspaceResume(resumeId, hasOriginal) {
-  if (hasOriginal) return openOriginalResume(resumeId);
-  jumpToModule("resume", "input");
-  fillResume(resumeId);
+  return opportunityController.openWorkspaceResume(resumeId, hasOriginal);
 }
 
 function renderOpportunityInterview(workspace) {
-  const interviews = workspace.interviews || [];
-  const actions = workspace.actions || [];
-  const interviewAction = actions.find((action) => ["interview", "interview_plan", "mock_interview"].includes(action.action_type) && ["pending", "in_progress"].includes(action.status));
-  $("opportunity-interview").innerHTML = `
-    <section class="workspace-section"><h4>面试记录</h4>
-      ${interviews.length ? `<div class="workspace-list">${interviews.map((interview) => `
-        <div class="workspace-row"><div><b>${escapeHtml(interview.job_title || "模拟面试")}</b><span>状态：${escapeHtml(interview.status || "未设置")} · 阶段：${escapeHtml(interview.current_stage || "未开始")}</span></div>${interview.score == null ? "" : `<strong>${escapeHtml(`${interview.score} 分`)}</strong>`}
-          ${interview.feedback ? `<p>${escapeHtml(parseFeedbackSummary(interview.feedback) || interview.feedback)}</p>` : ""}
-          ${interview.status === "active" ? `<button type="button" class="ghost" onclick="continueOpportunityInterview(${interview.id})"><i data-lucide="play"></i>继续面试</button>` : ""}</div>`).join("")}</div>` : '<div class="opportunity-empty"><b>尚无面试记录</b><span>从当前机会开始模拟面试，系统会保留机会和简历关联。</span></div>'}
-    </section>
-    <section class="workspace-section"><h4>准备行动</h4>
-      ${actions.length ? `<div class="workspace-list">${actions.map((action) => `<div class="workspace-row"><div><b>${escapeHtml(action.title)}</b><span>${escapeHtml(action.status || "pending")} · ${workspaceDate(action.due_at, "无截止时间")}</span></div>${action.description ? `<p>${escapeHtml(action.description)}</p>` : ""}</div>`).join("")}</div>` : '<div class="opportunity-empty"><b>暂无准备行动</b><span>先开始一轮模拟面试，再根据反馈补充行动。</span></div>'}
-    </section>
-    <div class="workspace-primary-action"><button type="button" class="primary" onclick="prepareInterviewFromOpportunity(${interviewAction?.id || "null"})"><i data-lucide="messages-square"></i>开始新面试</button></div>`;
+  return opportunityController.renderInterview(workspace);
 }
 
 function prepareInterviewFromOpportunity(actionId = null) {
-  const workspace = state.currentOpportunityWorkspace;
-  if (!workspace?.opportunity) return;
-  state.interviewOpportunityHandoff = buildInterviewHandoff({
-    opportunityId: workspace.opportunity.id,
-    resumeId: workspace.resume?.id,
-    actionId,
-    jobTitle: workspace.opportunity.job_title,
-    jd: workspace.opportunity.jd_text,
-  });
-  if (!state.interviewOpportunityHandoff) return toast("请先为该机会关联简历");
-  $("interviewJobTitle").value = workspace.opportunity.job_title || "";
-  $("interviewJd").value = workspace.opportunity.jd_text || "";
-  if (workspace.resume?.id) $("interviewResumeSelect").value = String(workspace.resume.id);
-  jumpToModule("interview", "mock");
-  toast("已关联机会和简历，可开始模拟面试");
+  return opportunityController.prepareInterview(actionId);
 }
 
 async function continueOpportunityInterview(sessionId) {
-  const data = await api(`/interview/sessions/${sessionId}`);
-  if (!data.success) return toast(data.message || "面试记录无法继续");
-  state.activeInterview = String(sessionId);
-  state.pendingInterviewSubmission = null;
-  state.interviewSubmitting = false;
-  jumpToModule("interview", "mock");
-  openInterviewRoom(data);
+  return opportunityController.continueInterview(sessionId);
 }
 
 function renderOpportunityTimeline(workspace) {
-  const events = workspace.timeline || [];
-  $("opportunity-timeline").innerHTML = events.length ? `<ol class="workspace-timeline">${events.map((event) => `
-    <li><i data-lucide="circle-dot"></i><div><b>${escapeHtml(event.event_type || "记录更新")}</b><span>${workspaceDate(event.occurred_at)} · ${escapeHtml(event.source || "system")}</span></div></li>`).join("")}</ol>` : `
-    <div class="opportunity-empty"><b>暂无时间线事件</b><span>编辑阶段、添加行动或开始面试后，事件会显示在这里。</span></div>
-    <div class="workspace-primary-action"><button type="button" class="primary" onclick="openOpportunityWorkspace(${workspace.opportunity.id}, { updateUrl: false })"><i data-lucide="refresh-cw"></i>刷新时间线</button></div>`;
+  return opportunityController.renderTimeline(workspace);
 }
 
 async function advanceApplication(id) {
-  const data = await api(`/applications/${id}/advance`, { method: "POST", body: { user_id: USER_ID } });
-  if (!data.success) return toast(data.message || "推进失败");
-  toast(`已推进到：${data.status}`);
-  await loadApplications();
-  await loadDashboard();
+  return opportunityController.advanceApplication(id);
 }
 
 async function coachApplication(id) {
-  const data = await withLoading(
-    () => api(`/applications/${id}/coach`, { method: "POST", body: { user_id: USER_ID } }),
-    "AI 正在整理投递跟进策略..."
-  );
-  jumpToModule("tracker", "board");
-  const result = $("applicationCoachResult");
-  result.classList.remove("hidden");
-  result.innerHTML = `
-    <h4>${escapeHtml(data.title || "投递跟进建议")}</h4>
-    <div><b>下一步：</b>${escapeHtml(data.next_action || "")}</div>
-    <div><b>风险点：</b>${escapeHtml(data.risk || "")}</div>
-    <div><b>可发送话术：</b><br>${escapeHtml(data.message_template || "")}</div>
-    ${data.ai_note ? `<div><b>AI 补充：</b><br>${renderText(data.ai_note)}</div>` : ""}
-  `;
-  result.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  return opportunityController.coachApplication(id);
 }
 
 async function evaluateSalary() {
-  const data = await api("/salary/evaluate", {
-    method: "POST",
-    body: {
-      job_type: $("salaryJob").value,
-      experience: $("salaryExp").value,
-      city: $("salaryCity").value,
-      skills_count: Number($("salarySkills").value || 0),
-    },
-  });
-  $("salaryResult").classList.remove("hidden");
-  $("salaryResult").innerHTML = `<h4>${data.range.min} - ${data.range.max} / 月</h4><div>参考中位：${data.range.avg} / 月</div><div>${escapeHtml(data.advice)}</div>`;
+  return opportunityController.evaluateSalary();
 }
 
 async function loadDashboard() {
-  const data = await api(`/dashboard/${USER_ID}`);
-  if (!data.success) return;
-  $("statResumes").textContent = data.stats.resumes;
-  $("statInterviews").textContent = data.stats.interviews;
-  $("statMatches").textContent = data.stats.matches;
-  $("statApps").textContent = data.stats.applications;
-  renderNextActions(data.next_actions || []);
-  renderCareerPulse(data.career_pulse || {});
+  return opportunityController.loadDashboard();
 }
 
 function renderCareerPulse(pulse) {
-  if (!$("careerPulse")) return;
-  $("readinessScore").textContent = pulse.score ?? 0;
-  $("readinessLabel").textContent = pulse.label || "待启动";
-  $("readinessSummary").textContent = pulse.summary || "系统会根据简历、JD 匹配、面试训练和投递进度，给出下一步最该做的动作。";
-  $("pulseBlockers").innerHTML = (pulse.blockers || []).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
-  $("weeklyPlan").innerHTML = (pulse.weekly_plan || []).map((item, index) => `
-    <button class="plan-step" onclick="jumpToModule('${item.page}', '${item.module}')">
-      <b>${index + 1}</b>
-      <span>${escapeHtml(item.title)}</span>
-      <i data-lucide="arrow-right"></i>
-    </button>
-  `).join("");
-  renderIcons();
+  return opportunityController.renderCareerPulse(pulse);
 }
 
 function renderNextActions(actions) {
-  const box = $("nextActions");
-  if (!box) return;
-  box.innerHTML = actions.length ? actions.map((action) => `
-    <article class="next-action-card">
-      <div>
-        <b>${escapeHtml(action.title)}</b>
-        <small>${escapeHtml(action.description)}</small>
-      </div>
-      <button class="ghost small" onclick="jumpToModule('${action.page}', '${action.module}')">${escapeHtml(action.cta || "去处理")}</button>
-    </article>
-  `).join("") : "";
+  return opportunityController.renderNextActions(actions);
 }
 
 function currentAgentResumeId() {
