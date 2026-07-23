@@ -165,6 +165,26 @@ uv run python -m backend.cli
 生产默认关闭 OpenAPI UI。反向代理必须保留
 `Cf-Access-Jwt-Assertion` 请求头。
 
+### Ubuntu 容器运行
+
+仓库提供同一套 OCI 镜像和 Compose 配置，Windows/macOS 可用 Docker
+Desktop 验证，Ubuntu 使用 Docker Engine 运行，不依赖 PowerShell：
+
+```bash
+cp deploy/backend.env.example deploy/backend.env
+# 编辑域名、Cloudflare Access audience 和邮箱 allowlist
+docker compose config
+docker compose build backend
+docker compose up -d backend
+docker compose ps
+```
+
+容器使用非 root 用户、只读根文件系统、移除 Linux capabilities，并把
+SQLite、上传、导出和运行时配置集中挂载到 `/app/data`。宿主机端口只绑定
+`127.0.0.1:8000`，应由 Cloudflare Tunnel 或反向代理提供公网 TLS；不要把
+Compose 的端口映射改为 `0.0.0.0`。生产数据库切换到 PostgreSQL 后才允许
+增加 worker 数量。
+
 ## 9. 可观测性与发布门禁
 
 目标门禁：
