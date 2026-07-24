@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import re
 import sqlite3
 import tempfile
-
+from pathlib import Path
 
 APPLICATION_STATUSES = (
     "意向",
@@ -29,7 +28,7 @@ LEGACY_STATUS_MAP = {
     "拒绝": "已拒绝",
 }
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -57,17 +56,12 @@ def ensure_column(
     if not _IDENTIFIER.fullmatch(table) or not _IDENTIFIER.fullmatch(column):
         raise ValueError("table and column must be valid SQL identifiers")
 
-    columns = {
-        row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
-    }
+    columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
     if column not in columns:
         try:
             conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {column_type}')
         except sqlite3.OperationalError as exc:
-            refreshed = {
-                row[1]
-                for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
-            }
+            refreshed = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
             if column not in refreshed or "duplicate column name" not in str(exc).lower():
                 raise
 
@@ -75,9 +69,7 @@ def ensure_column(
 def migrate_database(db_path: str | os.PathLike[str]) -> None:
     path = os.fspath(db_path)
     if _is_in_memory_database(path):
-        raise ValueError(
-            "migrate_database requires a persistent path, not an in-memory database"
-        )
+        raise ValueError("migrate_database requires a persistent path, not an in-memory database")
 
     with connect(path) as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -101,6 +93,9 @@ def migrate_database(db_path: str | os.PathLike[str]) -> None:
             if current_version < 4:
                 _migrate_to_version_4(conn)
                 conn.execute("PRAGMA user_version = 4")
+            if current_version < 5:
+                _migrate_to_version_5(conn)
+                conn.execute("PRAGMA user_version = 5")
             conn.commit()
         except Exception:
             conn.rollback()
@@ -243,8 +238,7 @@ def _migrate_to_version_2(conn: sqlite3.Connection) -> None:
         columns = _table_columns(conn, table)
         if {"user_id", "created_at"}.issubset(columns):
             conn.execute(
-                f'CREATE INDEX IF NOT EXISTS "{index_name}" '
-                f'ON "{table}"(user_id, created_at)'
+                f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{table}"(user_id, created_at)'
             )
 
 
@@ -325,10 +319,96 @@ def _migrate_to_version_4(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_version_5(conn: sqlite3.Connection) -> None:
+    """Make schema creation independent from the removed Flask bootstrap."""
+    _create_legacy_base_tables_if_missing(conn)
+    required_columns = {
+        "resumes": (
+            ("file_path", "TEXT"),
+            ("file_type", "TEXT"),
+            ("analysis_result", "TEXT"),
+            ("tailored_result", "TEXT"),
+            ("parent_resume_id", "INTEGER REFERENCES resumes(id)"),
+            ("version_label", "TEXT"),
+            ("target_job_title", "TEXT"),
+            ("application_id", "INTEGER REFERENCES job_applications(id)"),
+            ("status", "TEXT DEFAULT 'active'"),
+            ("source_type", "TEXT DEFAULT 'manual'"),
+            ("created_at", "TEXT"),
+            ("updated_at", "TEXT"),
+        ),
+        "job_matches": (
+            ("match_score", "INTEGER"),
+            ("analysis", "TEXT"),
+            ("application_id", "INTEGER REFERENCES job_applications(id)"),
+            ("jd_text", "TEXT"),
+            ("details_json", "TEXT"),
+        ),
+        "job_applications": (
+            ("city", "TEXT"),
+            ("salary_min", "INTEGER"),
+            ("salary_max", "INTEGER"),
+            ("notes", "TEXT"),
+            ("applied_at", "TEXT"),
+            ("created_at", "TEXT"),
+            ("updated_at", "TEXT"),
+            ("deleted_at", "TEXT"),
+            ("jd_text", "TEXT"),
+            ("source_url", "TEXT"),
+            ("channel", "TEXT"),
+            ("resume_id", "INTEGER REFERENCES resumes(id)"),
+            ("priority", "INTEGER DEFAULT 0"),
+            ("contact_name", "TEXT"),
+            ("contact_info", "TEXT"),
+            ("next_action_at", "TEXT"),
+            ("interview_at", "TEXT"),
+            ("deadline_at", "TEXT"),
+            ("rejection_reason", "TEXT"),
+            ("offer_details", "TEXT"),
+            ("created_by", "TEXT DEFAULT 'user'"),
+        ),
+        "interviews": (
+            ("resume_id", "INTEGER"),
+            ("conversation", "TEXT"),
+            ("score", "INTEGER"),
+            ("feedback", "TEXT"),
+            ("source_session_id", "TEXT"),
+        ),
+        "practice_records": (
+            ("category", "TEXT"),
+            ("question", "TEXT"),
+            ("answer", "TEXT"),
+            ("correct_count", "INTEGER"),
+            ("total_count", "INTEGER"),
+            ("score", "INTEGER"),
+            ("feedback", "TEXT"),
+        ),
+        "audio_records": (
+            ("transcript", "TEXT"),
+            ("audio_file", "TEXT"),
+            ("duration", "REAL"),
+            ("analysis_result", "TEXT"),
+            ("score", "INTEGER"),
+            ("metrics", "TEXT"),
+            ("feedback", "TEXT"),
+        ),
+    }
+    for table, columns in required_columns.items():
+        for column, column_type in columns:
+            ensure_column(conn, table, column, column_type)
+    _create_domain_tables(conn)
+    ensure_column(conn, "action_items", "action_type", "TEXT")
+    ensure_column(conn, "action_items", "completion_evidence", "TEXT")
+    _create_domain_indexes(conn)
+
+
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
-    ).fetchone() is not None
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()
+        is not None
+    )
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -366,6 +446,42 @@ def _create_legacy_base_tables_if_missing(conn: sqlite3.Connection) -> None:
             user_id INTEGER NOT NULL,
             resume_id INTEGER NOT NULL,
             job_title TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS interviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            resume_id INTEGER,
+            job_title TEXT NOT NULL,
+            conversation TEXT,
+            score INTEGER,
+            feedback TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS practice_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER DEFAULT 1,
+            category TEXT,
+            question TEXT,
+            answer TEXT,
+            score INTEGER,
+            feedback TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS audio_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER DEFAULT 1,
+            transcript TEXT,
+            audio_file TEXT,
+            score INTEGER,
+            metrics TEXT,
+            feedback TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
         """,
@@ -489,21 +605,33 @@ def _create_domain_tables(conn: sqlite3.Connection) -> None:
 def _create_domain_indexes(conn: sqlite3.Connection) -> None:
     statements = (
         "CREATE INDEX IF NOT EXISTS idx_resumes_application ON resumes(application_id)",
-        "CREATE INDEX IF NOT EXISTS idx_applications_user_status ON job_applications(user_id, status)",
-        "CREATE INDEX IF NOT EXISTS idx_applications_next_action ON job_applications(next_action_at)",
+        "CREATE INDEX IF NOT EXISTS idx_applications_user_status "
+        "ON job_applications(user_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_applications_next_action "
+        "ON job_applications(next_action_at)",
         "CREATE INDEX IF NOT EXISTS idx_job_matches_application ON job_matches(application_id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_career_profiles_user ON career_profiles(user_id)",
-        "CREATE INDEX IF NOT EXISTS idx_action_items_user_status_due ON action_items(user_id, status, due_at)",
+        "CREATE INDEX IF NOT EXISTS idx_action_items_user_status_due "
+        "ON action_items(user_id, status, due_at)",
         "CREATE INDEX IF NOT EXISTS idx_action_items_application ON action_items(application_id)",
-        "CREATE INDEX IF NOT EXISTS idx_domain_events_aggregate ON domain_events(aggregate_type, aggregate_id, occurred_at)",
+        "CREATE INDEX IF NOT EXISTS idx_domain_events_aggregate "
+        "ON domain_events(aggregate_type, aggregate_id, occurred_at)",
         "CREATE INDEX IF NOT EXISTS idx_domain_events_user ON domain_events(user_id, occurred_at)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_domain_events_agent_source_receipt ON domain_events(user_id, source) WHERE source LIKE 'agent:%'",
-        "CREATE INDEX IF NOT EXISTS idx_career_reports_user_type ON career_reports(user_id, report_type, generated_at)",
-        "CREATE INDEX IF NOT EXISTS idx_interview_sessions_application ON interview_sessions(application_id)",
-        "CREATE INDEX IF NOT EXISTS idx_interview_sessions_user_status ON interview_sessions(user_id, status)",
-        "CREATE INDEX IF NOT EXISTS idx_agent_proposals_user_status ON agent_action_proposals(user_id, status, created_at)",
-        "CREATE INDEX IF NOT EXISTS idx_agent_proposals_user_status_expires ON agent_action_proposals(user_id, status, expires_at, created_at)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_proposals_user_idempotency ON agent_action_proposals(user_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_domain_events_agent_source_receipt "
+        "ON domain_events(user_id, source) WHERE source LIKE 'agent:%'",
+        "CREATE INDEX IF NOT EXISTS idx_career_reports_user_type "
+        "ON career_reports(user_id, report_type, generated_at)",
+        "CREATE INDEX IF NOT EXISTS idx_interview_sessions_application "
+        "ON interview_sessions(application_id)",
+        "CREATE INDEX IF NOT EXISTS idx_interview_sessions_user_status "
+        "ON interview_sessions(user_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_agent_proposals_user_status "
+        "ON agent_action_proposals(user_id, status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_agent_proposals_user_status_expires "
+        "ON agent_action_proposals(user_id, status, expires_at, created_at)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_proposals_user_idempotency "
+        "ON agent_action_proposals(user_id, idempotency_key) "
+        "WHERE idempotency_key IS NOT NULL",
     )
     for statement in statements:
         conn.execute(statement)

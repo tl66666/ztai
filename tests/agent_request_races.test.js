@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const AgentUI = require("../static/js/contextual_agent.js");
+const AgentUI = require("../frontend/src/agent/contextual-agent.mjs");
 
 function deferred() {
   let resolve;

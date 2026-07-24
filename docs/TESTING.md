@@ -4,26 +4,33 @@
 
 ## 1. 环境
 
-- Python 3.10+
+- Python 3.11+
 - Node.js 20+（JavaScript 与浏览器测试）
 - PowerShell 5.1+（Windows 启动 smoke）
 - Playwright 包及 Chromium/Firefox；Edge 矩阵使用系统安装的 Microsoft Edge
 
 安装 Python 依赖：
 
-```powershell
-python -m pip install -r requirements.txt
+```bash
+uv sync --frozen
 ```
 
 ## 2. Python 测试
 
 完整套件：
 
-```powershell
-python -m unittest discover -s tests -p "test_*.py" -v
+```bash
+uv run python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 测试使用临时数据库，不应读取或修改仓库根目录的 `jobhunter.db`。重点分组：
+
+- `tests/test_blob_storage.py`：opaque `BlobRef`、owner 隔离、checksum、Local/R2
+  adapter 契约与 R2 配置门禁。
+- `tests/test_background_jobs.py`：幂等提交、lease、heartbeat、retry、cancel 和
+  worker 重启后的过期 lease 恢复。
+- `tests/test_jobs_fastapi.py`：`202 + task_id`、状态查询、结果下载、AI 分析、
+  文档转换和旧同步接口兼容。
 
 | 范围 | 测试文件 |
 | --- | --- |
@@ -82,7 +89,7 @@ node --test tests/browser/job_hunter_flow.spec.js
 
 - Chromium、Firefox、已安装的 Edge；缺少的浏览器输出明确 SKIP 原因，不冒充通过。
 - `1440x900` 桌面和 `390x844` 移动视口；Chromium 另做中间宽度几何 smoke。
-- 每个组合使用独立空闲回环端口、临时 SQLite 和 Flask 子进程。
+- 每个组合使用独立回环端口、临时数据库、FastAPI 子进程和 Vite 静态服务。
 - 关闭所有模型 Key，走确定性本地 Agent，避免测试依赖外部模型。
 - 完成职业档案、简历、JD 匹配、机会、Agent 提案确认、面试恢复、阶段更新和可见时间线。
 - 检查项目资源 404、页面异常、控制台 error、横向溢出、关键遮挡和 Agent 桌面/移动布局。
@@ -117,7 +124,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-start.ps1
 ## 6. 静态检查
 
 ```powershell
-python -m compileall -q app.py config.py utils tests
+uv run python -m compileall -q backend utils tests
 node --check static/js/app.js
 node --check static/js/browser_capabilities.js
 node --check tests/browser/job_hunter_flow.spec.js
@@ -146,7 +153,7 @@ node tests/agent_request_races.test.js
 node tests/js/test_opportunity_handoffs.js
 node tests/js/test_opportunity_history.js
 node tests/js/test_opportunity_load_generation.js
-python -m compileall -q app.py config.py utils tests
+uv run python -m compileall -q backend utils tests
 node --check static/js/app.js
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-start.ps1
 git diff --check

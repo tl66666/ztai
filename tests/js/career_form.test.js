@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const CareerForm = require("../../static/js/career_form.js");
+const CareerForm = require("../../frontend/src/career/career-form.mjs");
 
 test("career lists accept Chinese and ASCII separators, trim, and deduplicate", () => {
   assert.deepEqual(

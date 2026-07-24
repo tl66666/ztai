@@ -1,110 +1,38 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 import re
-import sqlite3
 import uuid
+from collections.abc import Mapping
+from datetime import UTC, datetime
 
+from backend.adapters.persistence.sqlalchemy.agent_memory_store import (
+    SqlAlchemyAgentMemoryStore,
+)
+from backend.adapters.persistence.sqlalchemy.agent_session import (
+    AgentSessionProvider,
+    SessionFactory,
+)
 from utils.agent_runtime.models import Conversation, Message
-
 
 MAX_SEARCH_CANDIDATES = 500
 MAX_EXACT_QUERY_TOKENS = 24
 MAX_SEARCH_TERMS = 24
-BROWSER_EVENT_ARTIFACTS = frozenset({
-    "[object Event]",
-    "[object MouseEvent]",
-    "[object PointerEvent]",
-})
+BROWSER_EVENT_ARTIFACTS = frozenset(
+    {
+        "[object Event]",
+        "[object MouseEvent]",
+        "[object PointerEvent]",
+    }
+)
 
 
 def is_browser_event_artifact(value: object) -> bool:
     return isinstance(value, str) and value.strip() in BROWSER_EVENT_ARTIFACTS
 
 
-AGENT_SCHEMA = """
-CREATE TABLE IF NOT EXISTS agent_conversations (
-    id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active',
-    summary TEXT NOT NULL DEFAULT '',
-    summary_until_message_id INTEGER,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS agent_messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id TEXT NOT NULL,
-    user_id INTEGER NOT NULL,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (conversation_id) REFERENCES agent_conversations(id)
-);
-
-CREATE TABLE IF NOT EXISTS agent_tasks (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    user_id INTEGER NOT NULL,
-    task_type TEXT NOT NULL,
-    status TEXT NOT NULL,
-    slots_json TEXT NOT NULL DEFAULT '{}',
-    result_summary TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS agent_memories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    kind TEXT NOT NULL,
-    category TEXT NOT NULL DEFAULT '',
-    memory_key TEXT NOT NULL DEFAULT '',
-    value_json TEXT NOT NULL,
-    confidence REAL NOT NULL,
-    status TEXT NOT NULL,
-    source_message_id INTEGER,
-    related_entity_type TEXT,
-    related_entity_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS agent_runs (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    user_id INTEGER NOT NULL,
-    task_id TEXT,
-    status TEXT NOT NULL,
-    provider TEXT,
-    model TEXT,
-    iterations INTEGER NOT NULL DEFAULT 0,
-    tools_json TEXT NOT NULL DEFAULT '[]',
-    events_json TEXT NOT NULL DEFAULT '[]',
-    error_code TEXT,
-    latency_ms INTEGER,
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_agent_conversations_user
-ON agent_conversations(user_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_messages_conversation
-ON agent_messages(conversation_id, user_id, id);
-CREATE INDEX IF NOT EXISTS idx_agent_tasks_conversation
-ON agent_tasks(conversation_id, user_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_memories_user
-ON agent_memories(user_id, kind, status, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_conversation
-ON agent_runs(conversation_id, user_id, created_at DESC);
-"""
-
-
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _search_terms(text: str) -> list[str]:
@@ -118,10 +46,7 @@ def _search_terms(text: str) -> list[str]:
         return terms
 
     selected = {0, len(terms) - 1}
-    latin_indexes = [
-        index for index, term in enumerate(terms)
-        if re.fullmatch(r"[a-z0-9]+", term)
-    ]
+    latin_indexes = [index for index, term in enumerate(terms) if re.fullmatch(r"[a-z0-9]+", term)]
     for index in [*latin_indexes[:4], *latin_indexes[-4:]]:
         selected.add(index)
     for index in range(min(6, len(terms))):
@@ -146,116 +71,47 @@ def _normalized_value(value) -> str:
             return [normalize(child) for child in item]
         return item
 
-    return json.dumps(normalize(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        normalize(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
-def _fts_searchable(category, memory_key, value_json, entity_type, entity_id) -> str:
+def create_agent_tables(
+    db_path: str,
+    *,
+    session_factory: SessionFactory | None = None,
+) -> None:
+    """Compatibility helper for isolated callers.
+
+    Production startup owns schema migrations through Alembic; tests that create
+    only the agent tables can continue to use this small SQLAlchemy metadata path.
+    """
+
+    sessions = AgentSessionProvider(db_path, session_factory=session_factory)
     try:
-        value = json.loads(value_json or "null")
-    except (TypeError, ValueError, json.JSONDecodeError):
-        value = value_json
-    parts: list[str] = []
-
-    def collect(item) -> None:
-        if isinstance(item, dict):
-            for key in sorted(item, key=str):
-                collect(key)
-                collect(item[key])
-        elif isinstance(item, list):
-            for child in item:
-                collect(child)
-        elif item is not None:
-            text = (
-                item.decode("utf-8", errors="replace")
-                if isinstance(item, bytes) else str(item)
-            )
-            text = " ".join(text.casefold().split())
-            if text:
-                parts.append(text)
-
-    for item in (category, memory_key, value, entity_type, entity_id):
-        collect(item)
-    original = " ".join(parts)
-    return " ".join([original, *_search_terms(original)]).strip()
-
-
-def _sync_fts_row(connection: sqlite3.Connection, memory_id: int) -> None:
-    row = connection.execute(
-        """
-        SELECT id,user_id,category,memory_key,value_json,
-               related_entity_type,related_entity_id
-        FROM agent_memories WHERE id = ?
-        """,
-        (memory_id,),
-    ).fetchone()
-    connection.execute("DELETE FROM agent_memories_fts WHERE rowid = ?", (memory_id,))
-    if row:
-        connection.execute(
-            "INSERT INTO agent_memories_fts(rowid,searchable,user_id,memory_id) VALUES (?,?,?,?)",
-            (
-                row[0], _fts_searchable(row[2], row[3], row[4], row[5], row[6]),
-                row[1], row[0],
-            ),
-        )
-
-
-class ClosingConnection(sqlite3.Connection):
-    def __exit__(self, exc_type, exc_value, traceback):
-        result = super().__exit__(exc_type, exc_value, traceback)
-        self.close()
-        return result
-
-
-def create_agent_tables(db_path: str) -> None:
-    with sqlite3.connect(db_path, factory=ClosingConnection) as connection:
-        connection.executescript(AGENT_SCHEMA)
-        try:
-            connection.executescript(
-                """
-                DROP TRIGGER IF EXISTS agent_memories_fts_insert;
-                DROP TRIGGER IF EXISTS agent_memories_fts_delete;
-                DROP TRIGGER IF EXISTS agent_memories_fts_update;
-                CREATE VIRTUAL TABLE IF NOT EXISTS agent_memories_fts USING fts5(
-                    searchable, user_id UNINDEXED, memory_id UNINDEXED
-                );
-                """
-            )
-            connection.execute("DELETE FROM agent_memories_fts")
-            cursor = connection.execute(
-                """
-                SELECT id,user_id,category,memory_key,value_json,
-                       related_entity_type,related_entity_id
-                FROM agent_memories ORDER BY id
-                """
-            )
-            while True:
-                rows = cursor.fetchmany(500)
-                if not rows:
-                    break
-                connection.executemany(
-                    "INSERT INTO agent_memories_fts(rowid,searchable,user_id,memory_id) VALUES (?,?,?,?)",
-                    [
-                        (
-                            row[0], _fts_searchable(row[2], row[3], row[4], row[5], row[6]),
-                            row[1], row[0],
-                        )
-                        for row in rows
-                    ],
-                )
-        except sqlite3.OperationalError:
-            pass
+        SqlAlchemyAgentMemoryStore(sessions).create_tables()
+    finally:
+        sessions.dispose()
 
 
 class MemoryStore:
-    def __init__(self, db_path: str):
-        self.db_path = db_path
+    def __init__(
+        self,
+        db_path: str | None = None,
+        *,
+        session_factory: SessionFactory | None = None,
+    ):
+        self.db_path = db_path or ""
+        self._sessions = AgentSessionProvider(
+            db_path,
+            session_factory=session_factory,
+        )
+        self._persistence = SqlAlchemyAgentMemoryStore(self._sessions)
         self._last_search_candidate_count = 0
         self._last_fallback_scan_count = 0
-
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path, factory=ClosingConnection)
-        connection.row_factory = sqlite3.Row
-        return connection
 
     def create_conversation(self, user_id: int, title: str = "新对话") -> Conversation:
         conversation_id = uuid.uuid4().hex
@@ -263,100 +119,65 @@ class MemoryStore:
         safe_title = title.strip() if isinstance(title, str) else ""
         if not safe_title or is_browser_event_artifact(safe_title):
             safe_title = "新对话"
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO agent_conversations
-                    (id, user_id, title, status, summary, created_at, updated_at)
-                VALUES (?, ?, ?, 'active', '', ?, ?)
-                """,
-                (conversation_id, user_id, safe_title, timestamp, timestamp),
-            )
+        self._persistence.create_conversation(
+            {
+                "id": conversation_id,
+                "user_id": user_id,
+                "title": safe_title,
+                "status": "active",
+                "summary": "",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            }
+        )
         return Conversation(conversation_id, user_id, safe_title)
 
     def get_conversation(self, conversation_id: str, user_id: int) -> Conversation | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT id, user_id, title, status, summary
-                FROM agent_conversations WHERE id = ? AND user_id = ?
-                """,
-                (conversation_id, user_id),
-            ).fetchone()
+        row = self._persistence.get_conversation(conversation_id, user_id)
         if not row:
             return None
-        return Conversation(row["id"], row["user_id"], row["title"], row["status"], row["summary"])
+        return Conversation(
+            row["id"],
+            row["user_id"],
+            row["title"],
+            row["status"],
+            row["summary"],
+        )
 
     def list_conversations(self, user_id: int) -> list[Conversation]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, user_id, title, status, summary
-                FROM agent_conversations
-                WHERE user_id = ? AND status = 'active'
-                ORDER BY updated_at DESC
-                """,
-                (user_id,),
-            ).fetchall()
         return [
-            Conversation(row["id"], row["user_id"], row["title"], row["status"], row["summary"])
-            for row in rows
+            Conversation(
+                row["id"],
+                row["user_id"],
+                row["title"],
+                row["status"],
+                row["summary"],
+            )
+            for row in self._persistence.list_conversations(user_id)
         ]
 
     def name_conversation_from_message(
-        self, conversation_id: str, user_id: int, message: str
+        self,
+        conversation_id: str,
+        user_id: int,
+        message: str,
     ) -> bool:
         title = " ".join(message.strip().split())[:24]
         if not title or is_browser_event_artifact(title):
             return False
-        with self._connect() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE agent_conversations SET title = ?, updated_at = ?
-                WHERE id = ? AND user_id = ? AND title = '新对话'
-                """,
-                (title, _now(), conversation_id, user_id),
-            )
-        return cursor.rowcount > 0
+        return self._persistence.name_conversation(
+            conversation_id,
+            user_id,
+            title,
+            _now(),
+        )
 
     def repair_browser_event_artifacts(self, user_id: int) -> None:
-        """Remove only exact browser-event artifacts and their generated replies."""
-        with self._connect() as connection:
-            conversations = connection.execute(
-                "SELECT id, title FROM agent_conversations WHERE user_id = ?",
-                (user_id,),
-            ).fetchall()
-            for conversation in conversations:
-                conversation_id = conversation["id"]
-                if is_browser_event_artifact(conversation["title"]):
-                    connection.execute(
-                        "UPDATE agent_conversations SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?",
-                        ("新对话", _now(), conversation_id, user_id),
-                    )
-                rows = connection.execute(
-                    "SELECT id, role, content FROM agent_messages WHERE conversation_id = ? AND user_id = ? ORDER BY id",
-                    (conversation_id, user_id),
-                ).fetchall()
-                delete_ids: list[int] = []
-                for index, row in enumerate(rows):
-                    if row["role"] != "user" or not is_browser_event_artifact(row["content"]):
-                        continue
-                    delete_ids.append(row["id"])
-                    next_index = index + 1
-                    while next_index < len(rows) and rows[next_index]["role"] != "user":
-                        delete_ids.append(rows[next_index]["id"])
-                        next_index += 1
-                if not delete_ids:
-                    continue
-                placeholders = ", ".join("?" for _ in delete_ids)
-                connection.execute(
-                    f"DELETE FROM agent_messages WHERE id IN ({placeholders}) AND user_id = ?",
-                    (*delete_ids, user_id),
-                )
-                connection.execute(
-                    "UPDATE agent_conversations SET summary = '', summary_until_message_id = NULL, updated_at = ? WHERE id = ? AND user_id = ?",
-                    (_now(), conversation_id, user_id),
-                )
+        self._persistence.repair_browser_event_artifacts(
+            user_id,
+            tuple(BROWSER_EVENT_ARTIFACTS),
+            _now(),
+        )
 
     def add_message(
         self,
@@ -366,133 +187,65 @@ class MemoryStore:
         content: str,
         metadata: dict | None = None,
     ) -> Message:
-        timestamp = _now()
-        with self._connect() as connection:
-            owned = connection.execute(
-                "SELECT 1 FROM agent_conversations WHERE id = ? AND user_id = ?",
-                (conversation_id, user_id),
-            ).fetchone()
-            if not owned:
-                raise ValueError("conversation_not_found")
-            cursor = connection.execute(
-                """
-                INSERT INTO agent_messages
-                    (conversation_id, user_id, role, content, metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (conversation_id, user_id, role, content, json.dumps(metadata or {}, ensure_ascii=False), timestamp),
-            )
-            connection.execute(
-                "UPDATE agent_conversations SET updated_at = ? WHERE id = ? AND user_id = ?",
-                (timestamp, conversation_id, user_id),
-            )
-            message_id = cursor.lastrowid
-        return Message(message_id, conversation_id, user_id, role, content, metadata or {})
+        metadata = metadata or {}
+        message_id = self._persistence.add_message(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            role=role,
+            content=content,
+            metadata_json=json.dumps(metadata, ensure_ascii=False),
+            created_at=_now(),
+        )
+        return Message(message_id, conversation_id, user_id, role, content, metadata)
 
-    def list_messages(self, conversation_id: str, user_id: int, limit: int | None = None) -> list[Message]:
-        sql = """
-            SELECT id, conversation_id, user_id, role, content, metadata_json
-            FROM agent_messages
-            WHERE conversation_id = ? AND user_id = ?
-            ORDER BY id
-        """
-        params: tuple = (conversation_id, user_id)
-        if limit is not None:
-            sql = """
-                SELECT * FROM (
-                    SELECT id, conversation_id, user_id, role, content, metadata_json
-                    FROM agent_messages
-                    WHERE conversation_id = ? AND user_id = ?
-                    ORDER BY id DESC LIMIT ?
-                ) ORDER BY id
-            """
-            params = (conversation_id, user_id, limit)
-        with self._connect() as connection:
-            rows = connection.execute(sql, params).fetchall()
+    def list_messages(
+        self,
+        conversation_id: str,
+        user_id: int,
+        limit: int | None = None,
+    ) -> list[Message]:
         return [
-            Message(
-                row["id"], row["conversation_id"], row["user_id"], row["role"], row["content"],
-                json.loads(row["metadata_json"] or "{}"),
+            self._message_from_row(row)
+            for row in self._persistence.list_messages(
+                conversation_id,
+                user_id,
+                limit,
             )
-            for row in rows
         ]
 
     def clear_conversation(self, conversation_id: str, user_id: int) -> bool:
-        with self._connect() as connection:
-            owned = connection.execute(
-                "SELECT 1 FROM agent_conversations WHERE id = ? AND user_id = ?",
-                (conversation_id, user_id),
-            ).fetchone()
-            if not owned:
-                return False
-            connection.execute(
-                "DELETE FROM agent_messages WHERE conversation_id = ? AND user_id = ?",
-                (conversation_id, user_id),
-            )
-            connection.execute(
-                """
-                UPDATE agent_tasks SET status = 'cancelled', updated_at = ?
-                WHERE conversation_id = ? AND user_id = ? AND status = 'waiting_input'
-                """,
-                (_now(), conversation_id, user_id),
-            )
-            connection.execute(
-                """
-                UPDATE agent_conversations
-                SET summary = '', summary_until_message_id = NULL, updated_at = ?
-                WHERE id = ? AND user_id = ?
-                """,
-                (_now(), conversation_id, user_id),
-            )
-        return True
+        return self._persistence.clear_conversation(
+            conversation_id,
+            user_id,
+            _now(),
+        )
 
     def message_count(self, conversation_id: str, user_id: int) -> int:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT COUNT(*) AS count FROM agent_messages WHERE conversation_id = ? AND user_id = ?",
-                (conversation_id, user_id),
-            ).fetchone()
-        return int(row["count"] if row else 0)
+        return self._persistence.message_count(conversation_id, user_id)
 
     def unsummarized_message_count(self, conversation_id: str, user_id: int) -> int:
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT COUNT(*) AS count
-                FROM agent_messages
-                WHERE conversation_id = ? AND user_id = ?
-                  AND id > COALESCE((
-                      SELECT summary_until_message_id
-                      FROM agent_conversations
-                      WHERE id = ? AND user_id = ?
-                  ), 0)
-                """,
-                (conversation_id, user_id, conversation_id, user_id),
-            ).fetchone()
-        return int(row["count"] if row else 0)
-
-    def list_unsummarized_messages(self, conversation_id: str, user_id: int) -> list[Message]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, conversation_id, user_id, role, content, metadata_json
-                FROM agent_messages
-                WHERE conversation_id = ? AND user_id = ?
-                  AND id > COALESCE((
-                      SELECT summary_until_message_id
-                      FROM agent_conversations
-                      WHERE id = ? AND user_id = ?
-                  ), 0)
-                ORDER BY id
-                """,
-                (conversation_id, user_id, conversation_id, user_id),
-            ).fetchall()
-        return [
-            Message(
-                row["id"], row["conversation_id"], row["user_id"], row["role"], row["content"],
-                json.loads(row["metadata_json"] or "{}"),
+        after_id = self._persistence.summary_until_message_id(conversation_id, user_id)
+        return len(
+            self._persistence.list_messages(
+                conversation_id,
+                user_id,
+                after_id=after_id,
             )
-            for row in rows
+        )
+
+    def list_unsummarized_messages(
+        self,
+        conversation_id: str,
+        user_id: int,
+    ) -> list[Message]:
+        after_id = self._persistence.summary_until_message_id(conversation_id, user_id)
+        return [
+            self._message_from_row(row)
+            for row in self._persistence.list_messages(
+                conversation_id,
+                user_id,
+                after_id=after_id,
+            )
         ]
 
     def save_summary(
@@ -502,16 +255,13 @@ class MemoryStore:
         summary: str,
         until_message_id: int | None,
     ) -> bool:
-        with self._connect() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE agent_conversations
-                SET summary = ?, summary_until_message_id = ?, updated_at = ?
-                WHERE id = ? AND user_id = ?
-                """,
-                (summary, until_message_id, _now(), conversation_id, user_id),
-            )
-        return cursor.rowcount > 0
+        return self._persistence.save_summary(
+            conversation_id,
+            user_id,
+            summary,
+            until_message_id,
+            _now(),
+        )
 
     def upsert_memory(
         self,
@@ -527,44 +277,24 @@ class MemoryStore:
         related_entity_id: str | int | None = None,
     ) -> int:
         timestamp = _now()
-        normalized_entity_id = (
-            str(related_entity_id) if related_entity_id is not None else None
+        normalized_entity_id = str(related_entity_id) if related_entity_id is not None else None
+        return self._persistence.insert_memory(
+            {
+                "user_id": user_id,
+                "kind": kind,
+                "category": category,
+                "memory_key": memory_key,
+                "value_json": json.dumps(value, ensure_ascii=False),
+                "confidence": confidence,
+                "status": status,
+                "source_message_id": source_message_id,
+                "related_entity_type": related_entity_type,
+                "related_entity_id": normalized_entity_id,
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            },
+            supersede_confirmed=status == "confirmed" and bool(memory_key),
         )
-        with self._connect() as connection:
-            if status == "confirmed" and memory_key:
-                connection.execute(
-                    """
-                    UPDATE agent_memories SET status = 'superseded', updated_at = ?
-                    WHERE user_id = ? AND kind = ? AND memory_key = ? AND status = 'confirmed'
-                      AND related_entity_type IS ? AND related_entity_id IS ?
-                    """,
-                    (
-                        timestamp, user_id, kind, memory_key,
-                        related_entity_type, normalized_entity_id,
-                    ),
-                )
-            cursor = connection.execute(
-                """
-                INSERT INTO agent_memories
-                    (user_id, kind, category, memory_key, value_json, confidence, status,
-                     source_message_id, related_entity_type, related_entity_id,
-                     created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    user_id, kind, category, memory_key,
-                    json.dumps(value, ensure_ascii=False), confidence, status,
-                    source_message_id, related_entity_type,
-                    normalized_entity_id,
-                    timestamp, timestamp,
-                ),
-            )
-            memory_id = cursor.lastrowid
-            try:
-                _sync_fts_row(connection, memory_id)
-            except sqlite3.OperationalError:
-                pass
-            return memory_id
 
     def list_memories(
         self,
@@ -572,68 +302,29 @@ class MemoryStore:
         kind: str | None = None,
         statuses: tuple[str, ...] = ("confirmed", "candidate"),
     ) -> list[dict]:
-        clauses = ["user_id = ?"]
-        params: list = [user_id]
-        if kind:
-            clauses.append("kind = ?")
-            params.append(kind)
-        placeholders = ",".join("?" for _ in statuses)
-        clauses.append(f"status IN ({placeholders})")
-        params.extend(statuses)
-        with self._connect() as connection:
-            rows = connection.execute(
-                f"""
-                SELECT * FROM agent_memories
-                WHERE {' AND '.join(clauses)}
-                ORDER BY confidence DESC, id DESC
-                """,
-                params,
-            ).fetchall()
         return [
             self._memory_from_row(row)
-            for row in rows
+            for row in self._persistence.list_memories(user_id, kind, statuses)
         ]
 
     def fts_available(self) -> bool:
-        try:
-            with self._connect() as connection:
-                return connection.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_memories_fts'"
-                ).fetchone() is not None
-        except sqlite3.OperationalError:
-            return False
+        return self._sessions.dialect_name == "postgresql"
 
     def _fts_matches(
         self,
-        connection: sqlite3.Connection,
         query: str,
         user_id: int,
         limit: int = 160,
         kind: str | None = None,
         statuses: tuple[str, ...] = ("confirmed", "candidate"),
     ) -> dict[int, float]:
-        terms = _search_terms(query)
-        if not terms:
-            return {}
-        expression = " OR ".join('"' + term.replace('"', '""') + '"' for term in terms[:12])
-        clauses = ["agent_memories_fts MATCH ?", "f.user_id = ?", "m.user_id = ?"]
-        params: list = [expression, user_id, user_id]
-        if kind:
-            clauses.append("m.kind = ?")
-            params.append(kind)
-        clauses.append(f"m.status IN ({','.join('?' for _ in statuses)})")
-        params.extend(statuses)
-        rows = connection.execute(
-            f"""
-            SELECT f.memory_id, bm25(agent_memories_fts) AS relevance
-            FROM agent_memories_fts AS f
-            JOIN agent_memories AS m ON m.id = f.memory_id
-            WHERE {' AND '.join(clauses)}
-            ORDER BY relevance LIMIT ?
-            """,
-            [*params, limit],
-        ).fetchall()
-        return {int(row["memory_id"]): -float(row["relevance"]) for row in rows}
+        return self._persistence.postgres_fts_scores(
+            query,
+            user_id,
+            limit,
+            kind,
+            statuses,
+        )
 
     def search_memories(
         self,
@@ -645,156 +336,55 @@ class MemoryStore:
     ) -> list[dict]:
         if limit <= 0 or not statuses:
             return []
-        clauses = ["user_id = ?"]
-        params: list = [user_id]
-        if kind:
-            clauses.append("kind = ?")
-            params.append(kind)
-        clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
-        params.extend(statuses)
         normalized = " ".join((query or "").casefold().split())
         terms = _search_terms(normalized)
         candidate_cap = max(50, min(MAX_SEARCH_CANDIDATES, limit * 20))
-        self._last_fallback_scan_count = 0
-        entity_budget = max(8, candidate_cap // 5)
-        key_budget = max(6, candidate_cap // 10)
-        category_budget = max(6, candidate_cap // 10)
-        recent_budget = max(8, min(candidate_cap // 10, limit * 3))
-        primary_budget = max(
-            8,
-            candidate_cap - entity_budget - key_budget - category_budget - recent_budget,
+        primary_budget = max(8, candidate_cap * 3 // 5)
+        try:
+            fts_scores = self._fts_matches(
+                query,
+                user_id,
+                primary_budget,
+                kind,
+                statuses,
+            )
+        except Exception:
+            fts_scores = {}
+        raw_tokens = re.findall(
+            r"[a-z0-9_]+|[\u4e00-\u9fff]+",
+            normalized,
+        )[:MAX_EXACT_QUERY_TOKENS]
+        rows, fallback_scan_count = self._persistence.search_candidates(
+            user_id=user_id,
+            normalized_query=normalized,
+            terms=terms,
+            raw_tokens=raw_tokens,
+            kind=kind,
+            statuses=statuses,
+            candidate_cap=candidate_cap,
+            fts_scores=fts_scores,
         )
-        with self._connect() as connection:
-            try:
-                fts_scores = self._fts_matches(
-                    connection, query, user_id, primary_budget, kind, statuses
-                )
-                fts_enabled = True
-            except sqlite3.OperationalError:
-                fts_scores = {}
-                fts_enabled = False
-
-            raw_tokens = re.findall(
-                r"[a-z0-9_]+|[\u4e00-\u9fff]+", normalized
-            )[:MAX_EXACT_QUERY_TOKENS]
-            numeric_tokens = [token for token in raw_tokens if token.isdigit()]
-            entity_ids: list[int] = []
-            if numeric_tokens:
-                placeholders = ",".join("?" for _ in numeric_tokens)
-                entity_ids = [
-                    row[0] for row in connection.execute(
-                        f"""
-                        SELECT id FROM agent_memories
-                        WHERE {' AND '.join(clauses)}
-                          AND related_entity_id IN ({placeholders})
-                        ORDER BY updated_at DESC, id DESC LIMIT ?
-                        """,
-                        [*params, *numeric_tokens, entity_budget],
-                    ).fetchall()
-                ]
-
-            def exact_field_ids(column: str, budget: int) -> list[int]:
-                if not raw_tokens:
-                    return []
-                placeholders = ",".join("?" for _ in raw_tokens)
-                return [
-                    row[0] for row in connection.execute(
-                        f"""
-                        SELECT id FROM agent_memories
-                        WHERE {' AND '.join(clauses)}
-                          AND lower({column}) IN ({placeholders})
-                        ORDER BY updated_at DESC, id DESC LIMIT ?
-                        """,
-                        [*params, *raw_tokens, budget],
-                    ).fetchall()
-                ]
-
-            key_ids = exact_field_ids("memory_key", key_budget)
-            category_ids = exact_field_ids("category", category_budget)
-
-            query_value_ids: list[int] = []
-            if not fts_enabled:
-                patterns = []
-                if normalized:
-                    patterns.append(normalized)
-                patterns.extend(sorted(terms, key=len, reverse=True))
-                escaped_patterns = []
-                for term in dict.fromkeys(patterns):
-                    escaped = (
-                        term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                    )
-                    escaped_patterns.append(f"%{escaped}%")
-                if escaped_patterns:
-                    match_expression = (
-                        "(lower(value_json) LIKE ? ESCAPE '\\' "
-                        "OR lower(memory_key) LIKE ? ESCAPE '\\' "
-                        "OR lower(category) LIKE ? ESCAPE '\\')"
-                    )
-                    where_matches = " OR ".join(
-                        match_expression for _ in escaped_patterns
-                    )
-                    order_matches = " ".join(
-                        f"WHEN {match_expression} THEN {index}"
-                        for index, _pattern in enumerate(escaped_patterns)
-                    )
-                    pattern_params = [
-                        value
-                        for pattern in escaped_patterns
-                        for value in (pattern, pattern, pattern)
-                    ]
-                    self._last_fallback_scan_count = 1
-                    query_value_ids = [
-                        row[0] for row in connection.execute(
-                            f"""
-                        SELECT id FROM agent_memories
-                        WHERE {' AND '.join(clauses)} AND ({where_matches})
-                        ORDER BY CASE {order_matches} ELSE {len(escaped_patterns)} END,
-                                 updated_at DESC, id DESC LIMIT ?
-                            """,
-                            [
-                                *params, *pattern_params, *pattern_params,
-                                primary_budget,
-                            ],
-                        ).fetchall()
-                    ]
-
-            confirmed_fill = " AND status = 'confirmed'" if fts_enabled else ""
-            recent_ids = [
-                row[0] for row in connection.execute(
-                    f"""
-                    SELECT id FROM agent_memories
-                    WHERE {' AND '.join(clauses)}{confirmed_fill}
-                    ORDER BY updated_at DESC, id DESC LIMIT ?
-                    """,
-                    [*params, recent_budget],
-                ).fetchall()
-            ]
-            candidate_ids = list(dict.fromkeys([
-                *(fts_scores.keys() if fts_enabled else query_value_ids),
-                *entity_ids, *key_ids, *category_ids, *recent_ids,
-            ]))
-            if candidate_ids:
-                id_placeholders = ",".join("?" for _ in candidate_ids)
-                rows = connection.execute(
-                    f"""
-                    SELECT * FROM agent_memories
-                    WHERE {' AND '.join(clauses)} AND id IN ({id_placeholders})
-                    """,
-                    [*params, *candidate_ids],
-                ).fetchall()
-            else:
-                rows = []
         self._last_search_candidate_count = len(rows)
+        self._last_fallback_scan_count = fallback_scan_count
 
-        def rank(row: sqlite3.Row) -> tuple:
+        def rank(row: Mapping[str, object]) -> tuple:
             searchable = " ".join(
                 str(row[key] or "")
-                for key in ("category", "memory_key", "value_json", "related_entity_type", "related_entity_id")
+                for key in (
+                    "category",
+                    "memory_key",
+                    "value_json",
+                    "related_entity_type",
+                    "related_entity_id",
+                )
             ).casefold()
             entity_exact = bool(
                 row["related_entity_id"]
                 and str(row["related_entity_id"]).casefold() in terms
-                and (not row["related_entity_type"] or str(row["related_entity_type"]).casefold() in normalized)
+                and (
+                    not row["related_entity_type"]
+                    or str(row["related_entity_type"]).casefold() in normalized
+                )
             )
             normalized_value_text = str(row["value_json"] or "").strip('"').casefold()
             value_query_hit = bool(
@@ -802,15 +392,16 @@ class MemoryStore:
             )
             exact_field = any(
                 term and term in terms
-                for term in (str(row["category"] or "").casefold(), str(row["memory_key"] or "").casefold())
+                for term in (
+                    str(row["category"] or "").casefold(),
+                    str(row["memory_key"] or "").casefold(),
+                )
             )
             searchable_terms = set(_search_terms(searchable))
             overlap_signature = tuple(term in searchable_terms for term in terms)
             overlap_hits = len(set(terms) & searchable_terms)
             overlap_weight = sum(
-                len(terms) - index
-                for index, term in enumerate(terms)
-                if term in searchable_terms
+                len(terms) - index for index, term in enumerate(terms) if term in searchable_terms
             )
             substring_hits = sum(term in searchable for term in terms)
             reverse_hit = any(
@@ -818,10 +409,11 @@ class MemoryStore:
                 for value in (
                     str(row["category"] or "").casefold(),
                     str(row["memory_key"] or "").casefold(),
-                    str(row["value_json"] or "").strip('"').casefold(),
+                    normalized_value_text,
                     str(row["related_entity_id"] or "").casefold(),
                 )
             )
+            row_id = int(row["id"])
             return (
                 entity_exact,
                 value_query_hit,
@@ -830,46 +422,69 @@ class MemoryStore:
                 overlap_signature,
                 overlap_weight,
                 overlap_hits,
-                row["id"] in fts_scores,
-                fts_scores.get(row["id"], 0.0),
+                row_id in fts_scores,
+                fts_scores.get(row_id, 0.0),
                 substring_hits,
                 row["status"] == "confirmed",
                 float(row["confidence"]),
                 row["updated_at"] or "",
-                row["id"],
+                row_id,
             )
 
-        deduplicated: dict[tuple, sqlite3.Row] = {}
+        deduplicated: dict[tuple, Mapping[str, object]] = {}
         for row in rows:
             parsed = self._memory_from_row(row)
-            identity = (
-                row["kind"], row["category"], row["memory_key"],
-                _normalized_value(parsed["value"]), row["related_entity_type"] or "",
-                row["related_entity_id"] or "",
-            ) if row["kind"] == "semantic" else (
-                row["kind"], _normalized_value(parsed["value"]),
-                row["related_entity_type"] or "", row["related_entity_id"] or "",
-            )
+            if row["kind"] == "semantic":
+                identity = (
+                    row["kind"],
+                    row["category"],
+                    row["memory_key"],
+                    _normalized_value(parsed["value"]),
+                    row["related_entity_type"] or "",
+                    row["related_entity_id"] or "",
+                )
+            else:
+                identity = (
+                    row["kind"],
+                    _normalized_value(parsed["value"]),
+                    row["related_entity_type"] or "",
+                    row["related_entity_id"] or "",
+                )
             incumbent = deduplicated.get(identity)
             quality = (
-                row["status"] == "confirmed", float(row["confidence"]),
-                row["updated_at"] or "", row["id"],
+                row["status"] == "confirmed",
+                float(row["confidence"]),
+                row["updated_at"] or "",
+                int(row["id"]),
             )
             if incumbent is None or quality > (
-                incumbent["status"] == "confirmed", float(incumbent["confidence"]),
-                incumbent["updated_at"] or "", incumbent["id"],
+                incumbent["status"] == "confirmed",
+                float(incumbent["confidence"]),
+                incumbent["updated_at"] or "",
+                int(incumbent["id"]),
             ):
                 deduplicated[identity] = row
         candidate_rows = list(deduplicated.values())
-
         relevant = [
-            row for row in candidate_rows
-            if not terms or row["id"] in fts_scores or any(
-                term in " ".join(str(row[key] or "") for key in (
-                    "category", "memory_key", "value_json", "related_entity_type", "related_entity_id"
-                )).casefold()
+            row
+            for row in candidate_rows
+            if not terms
+            or int(row["id"]) in fts_scores
+            or any(
+                term
+                in " ".join(
+                    str(row[key] or "")
+                    for key in (
+                        "category",
+                        "memory_key",
+                        "value_json",
+                        "related_entity_type",
+                        "related_entity_id",
+                    )
+                ).casefold()
                 for term in terms
-            ) or any(
+            )
+            or any(
                 len(value) >= 2 and value in normalized
                 for value in (
                     str(row["category"] or "").casefold(),
@@ -879,12 +494,12 @@ class MemoryStore:
                 )
             )
         ]
-        relevant_ids = {row["id"] for row in relevant}
+        relevant_ids = {int(row["id"]) for row in relevant}
         ordered = sorted(relevant, key=rank, reverse=True)
         if len(ordered) < limit:
             ordered.extend(
                 sorted(
-                    (row for row in candidate_rows if row["id"] not in relevant_ids),
+                    (row for row in candidate_rows if int(row["id"]) not in relevant_ids),
                     key=rank,
                     reverse=True,
                 )[: limit - len(ordered)]
@@ -892,33 +507,7 @@ class MemoryStore:
         return [self._memory_from_row(row) for row in ordered[:limit]]
 
     def delete_memory(self, user_id: int, memory_id: int) -> bool:
-        with self._connect() as connection:
-            cursor = connection.execute(
-                "DELETE FROM agent_memories WHERE id = ? AND user_id = ?", (memory_id, user_id)
-            )
-            if cursor.rowcount:
-                try:
-                    connection.execute(
-                        "DELETE FROM agent_memories_fts WHERE rowid = ?", (memory_id,)
-                    )
-                except sqlite3.OperationalError:
-                    pass
-        return cursor.rowcount > 0
-
-    @staticmethod
-    def _memory_from_row(row: sqlite3.Row) -> dict:
-        try:
-            value = json.loads(row["value_json"])
-        except (TypeError, ValueError, json.JSONDecodeError):
-            value = str(row["value_json"] or "")[:500]
-        return {
-            "id": row["id"], "user_id": row["user_id"], "kind": row["kind"],
-            "category": row["category"], "memory_key": row["memory_key"], "value": value,
-            "confidence": row["confidence"], "status": row["status"],
-            "source_message_id": row["source_message_id"],
-            "related_entity_type": row["related_entity_type"],
-            "related_entity_id": row["related_entity_id"],
-        }
+        return self._persistence.delete_memory(user_id, memory_id)
 
     def create_task(
         self,
@@ -929,43 +518,23 @@ class MemoryStore:
     ) -> str:
         task_id = uuid.uuid4().hex
         timestamp = _now()
-        with self._connect() as connection:
-            connection.execute(
-                """
-                UPDATE agent_tasks SET status = 'superseded', updated_at = ?
-                WHERE conversation_id = ? AND user_id = ? AND status = 'waiting_input'
-                """,
-                (timestamp, conversation_id, user_id),
-            )
-            connection.execute(
-                """
-                INSERT INTO agent_tasks
-                    (id, conversation_id, user_id, task_type, status, slots_json,
-                     result_summary, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'waiting_input', ?, '', ?, ?)
-                """,
-                (
-                    task_id,
-                    conversation_id,
-                    user_id,
-                    task_type,
-                    json.dumps(slots or {}, ensure_ascii=False),
-                    timestamp,
-                    timestamp,
-                ),
-            )
+        self._persistence.create_task(
+            {
+                "id": task_id,
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "task_type": task_type,
+                "status": "waiting_input",
+                "slots_json": json.dumps(slots or {}, ensure_ascii=False),
+                "result_summary": "",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            }
+        )
         return task_id
 
     def get_active_task(self, conversation_id: str, user_id: int) -> dict | None:
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT * FROM agent_tasks
-                WHERE conversation_id = ? AND user_id = ? AND status = 'waiting_input'
-                ORDER BY updated_at DESC LIMIT 1
-                """,
-                (conversation_id, user_id),
-            ).fetchone()
+        row = self._persistence.get_active_task(conversation_id, user_id)
         if not row:
             return None
         return {
@@ -983,24 +552,14 @@ class MemoryStore:
         slots: dict | None = None,
         result_summary: str = "",
     ) -> bool:
-        with self._connect() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE agent_tasks
-                SET status = ?, slots_json = COALESCE(?, slots_json),
-                    result_summary = ?, updated_at = ?
-                WHERE id = ? AND user_id = ?
-                """,
-                (
-                    status,
-                    json.dumps(slots, ensure_ascii=False) if slots is not None else None,
-                    result_summary,
-                    _now(),
-                    task_id,
-                    user_id,
-                ),
-            )
-        return cursor.rowcount > 0
+        return self._persistence.update_task(
+            task_id,
+            user_id,
+            status=status,
+            slots_json=(json.dumps(slots, ensure_ascii=False) if slots is not None else None),
+            result_summary=result_summary,
+            updated_at=_now(),
+        )
 
     def record_run(
         self,
@@ -1017,27 +576,55 @@ class MemoryStore:
         latency_ms: int = 0,
     ) -> str:
         run_id = uuid.uuid4().hex
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO agent_runs
-                    (id, conversation_id, user_id, task_id, status, provider, model,
-                     iterations, tools_json, events_json, error_code, latency_ms, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id, conversation_id, user_id, task_id, status, provider, model,
-                    iterations, json.dumps(tools, ensure_ascii=False),
-                    json.dumps(events, ensure_ascii=False), error_code or None,
-                    latency_ms, _now(),
-                ),
-            )
+        self._persistence.record_run(
+            {
+                "id": run_id,
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "task_id": task_id,
+                "status": status,
+                "provider": provider,
+                "model": model,
+                "iterations": iterations,
+                "tools_json": json.dumps(tools, ensure_ascii=False),
+                "events_json": json.dumps(events, ensure_ascii=False),
+                "error_code": error_code or None,
+                "latency_ms": latency_ms,
+                "created_at": _now(),
+            }
+        )
         return run_id
 
     def run_count(self, conversation_id: str, user_id: int) -> int:
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT COUNT(*) AS count FROM agent_runs WHERE conversation_id = ? AND user_id = ?",
-                (conversation_id, user_id),
-            ).fetchone()
-        return int(row["count"] if row else 0)
+        return self._persistence.run_count(conversation_id, user_id)
+
+    @staticmethod
+    def _message_from_row(row: Mapping[str, object]) -> Message:
+        return Message(
+            int(row["id"]),
+            str(row["conversation_id"]),
+            int(row["user_id"]),
+            str(row["role"]),
+            str(row["content"]),
+            json.loads(str(row["metadata_json"] or "{}")),
+        )
+
+    @staticmethod
+    def _memory_from_row(row: Mapping[str, object]) -> dict:
+        try:
+            value = json.loads(str(row["value_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            value = str(row["value_json"] or "")[:500]
+        return {
+            "id": row["id"],
+            "user_id": row["user_id"],
+            "kind": row["kind"],
+            "category": row["category"],
+            "memory_key": row["memory_key"],
+            "value": value,
+            "confidence": row["confidence"],
+            "status": row["status"],
+            "source_message_id": row["source_message_id"],
+            "related_entity_type": row["related_entity_type"],
+            "related_entity_id": row["related_entity_id"],
+        }

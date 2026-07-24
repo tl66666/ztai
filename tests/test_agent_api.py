@@ -1,27 +1,26 @@
-import os
 import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
-from unittest.mock import patch
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-import app as app_module
+from sqlalchemy.exc import SQLAlchemyError
+
+from tests.agent_api_client import create_agent_test_runtime
 
 
 class AgentAPITests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.original_db_path = app_module.DB_PATH
-        app_module.DB_PATH = os.path.join(self.temp_dir.name, "api.db")
-        app_module._agent_service = None
-        app_module.init_db()
-        app_module.app.config["TESTING"] = True
-        self.client = app_module.app.test_client()
+        self.db_path = f"{self.temp_dir.name}/api.db"
+        self.client_context, self.client = create_agent_test_runtime(
+            self.temp_dir.name
+        )
+        self.client_context.__enter__()
+        self.container = self.client_context.app.state.container
 
     def tearDown(self):
-        app_module._agent_service = None
-        app_module.DB_PATH = self.original_db_path
+        self.client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
 
     def create_conversation(self, user_id=1, title="新对话"):
@@ -55,7 +54,7 @@ class AgentAPITests(unittest.TestCase):
 
     def test_chat_rejects_invalid_message_lengths_before_writes(self):
         def counts():
-            with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+            with closing(sqlite3.connect(self.db_path)) as conn:
                 return tuple(
                     conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                     for table in ("agent_runs", "agent_memories", "agent_messages")
@@ -77,7 +76,7 @@ class AgentAPITests(unittest.TestCase):
         self.assertEqual(counts(), before)
 
     def test_chat_rejects_browser_event_artifacts_before_writes(self):
-        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             before = conn.execute("SELECT COUNT(*) FROM agent_messages").fetchone()[0]
 
         response = self.client.post(
@@ -89,7 +88,7 @@ class AgentAPITests(unittest.TestCase):
             response.get_json(),
             {"success": False, "message": "点击已忽略，请在输入框中写下你的问题后再发送"},
         )
-        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             after = conn.execute("SELECT COUNT(*) FROM agent_messages").fetchone()[0]
         self.assertEqual(after, before)
 
@@ -100,7 +99,7 @@ class AgentAPITests(unittest.TestCase):
             "status": "completed", "events": [], "tools_used": [],
             "action_proposals": [], "suggested_actions": [],
         }
-        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             resume_id = conn.execute(
                 "INSERT INTO resumes(user_id,title,content) VALUES (1,'Owned','content')"
             ).lastrowid
@@ -110,7 +109,7 @@ class AgentAPITests(unittest.TestCase):
             conn.commit()
         context = {"module": "resume:jd", "opportunity_id": opportunity_id, "resume_id": resume_id}
 
-        with patch.object(app_module, "get_agent_service", return_value=service):
+        with patch.object(self.container.agent, "service", service):
             response = self.client.post(
                 "/api/agent/chat",
                 json={"conversation_id": "conversation-1", "message": "分析差距", "context": context},
@@ -162,7 +161,7 @@ class AgentAPITests(unittest.TestCase):
                 self.assertEqual(response.get_json()["message"], "上下文只能包含当前模块和实体 ID")
 
     def test_chat_rejects_nonexistent_and_foreign_context_entities(self):
-        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             foreign_resume = conn.execute(
                 "INSERT INTO resumes(user_id,title,content) VALUES (2,'Foreign','content')"
             ).lastrowid
@@ -229,7 +228,7 @@ class AgentAPITests(unittest.TestCase):
 
     def test_list_conversations_returns_only_owned_records(self):
         self.create_conversation(user_id=1, title="我的会话")
-        app_module.get_agent_service().store.create_conversation(2, "别人的会话")
+        self.container.agent.service.store.create_conversation(2, "别人的会话")
 
         response = self.client.get("/api/agent/conversations/1").get_json()
 
@@ -237,7 +236,7 @@ class AgentAPITests(unittest.TestCase):
 
     def test_listing_conversations_repairs_only_known_browser_event_artifacts(self):
         conversation_id = self.create_conversation()
-        store = app_module.get_agent_service().store
+        store = self.container.agent.service.store
         store.name_conversation_from_message(conversation_id, 1, "[object PointerEvent]")
         store.add_message(conversation_id, 1, "assistant", "正常欢迎语")
         store.add_message(conversation_id, 1, "user", "[object PointerEvent]")
@@ -362,12 +361,12 @@ class AgentAPITests(unittest.TestCase):
         self.assertFalse(client.called)
 
     def test_profile_and_report_result_endpoints_validate_exact_owned_id(self):
-        service = app_module.get_career_service()
+        service = self.container.career_service
         profile = service.upsert_profile(1, {"target_role": "Engineer"})
         report = service.save_report(
             1, {"report_type": "weekly", "title": "Week 1", "content": {"summary": "ok"}}
         )
-        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             foreign_report = conn.execute(
                 "INSERT INTO career_reports(user_id,report_type,content_json,status) "
                 "VALUES (2,'weekly','{}','ready')"
@@ -393,10 +392,10 @@ class AgentAPITests(unittest.TestCase):
 
     def test_profile_and_report_result_endpoints_contain_server_errors(self):
         service = Mock()
-        service.get_profile.side_effect = sqlite3.OperationalError("database unavailable")
-        service.get_report.side_effect = sqlite3.OperationalError("database unavailable")
+        service.get_profile.side_effect = SQLAlchemyError("database unavailable")
+        service.get_report.side_effect = SQLAlchemyError("database unavailable")
 
-        with patch.object(app_module, "get_career_service", return_value=service):
+        with patch.object(self.container, "_career_service", service):
             profile_response = self.client.get("/api/profile/1")
             report_response = self.client.get("/api/career-reports/1")
 

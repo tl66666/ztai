@@ -1,12 +1,13 @@
 # 职途 AI 项目交接
 
-> 更新日期：2026-07-18。本文面向首次接手项目的开发者、产品同学和面试官；它解释系统现在能做什么、Agent 如何工作，以及下一步应从哪里继续。
+> 更新日期：2026-07-24。本文面向首次接手项目的开发者、产品同学和面试官；它解释系统现在能做什么、Agent 如何工作，以及下一步应从哪里继续。
 
 ## 1. 项目定位
 
 职途 AI 是一个本地优先的求职辅助 Web 系统。它把简历、岗位 JD、面试训练、投递机会和复盘串为一条可追踪的求职链路。核心差异不在于增加一个聊天框，而在于全局求职 Agent 能读取当前业务上下文、调用受限工具、给出下一步，并把写操作收敛为用户确认后的提案。
 
-当前面向单机单用户使用：服务默认只监听 `127.0.0.1`，数据默认保存在本机 SQLite，不适合作为未加认证的公网服务直接部署。
+本地开发默认监听 `127.0.0.1` 并使用 SQLite。生产采用 Cloudflare Access allowlist、
+Ubuntu FastAPI、PostgreSQL 与 R2；不得把本地认证模式直接公开。
 
 ## 2. 用户如何理解产品
 
@@ -19,7 +20,7 @@
 
 ```text
 页面输入 + module / resume_id / opportunity_id
-  -> Flask API 校验并固定本地用户
+  -> FastAPI Principal 校验并固定可信用户
   -> ContextBuilder 重建权威业务上下文
   -> MemoryStore 检索相关记忆与待续任务
   -> LocalPolicy 或 RemoteModelPolicy 决策
@@ -70,9 +71,9 @@
 ## 7. 接手与验证入口
 
 1. 阅读 [用户指南](USER_GUIDE.md)、[Agent 双模式](AGENT_MODES.md) 和 [架构说明](ARCHITECTURE.md)。
-2. Windows 用户双击仓库根目录的 `start.bat`；开发模式可执行 `python app.py`。
-3. 运行 Python 全量测试：`python -m unittest discover -s tests -p "test_*.py" -v`。
-4. 静态、浏览器、启动器和发布门禁的命令见 [测试指南](TESTING.md)。
+2. 跨平台开发执行 `uv sync --frozen`、`uv run python -m backend.cli` 和 `npm run dev`。
+3. 运行 Python 全量测试：`uv run python -m unittest discover -s tests -p "test_*.py" -v`。
+4. 静态、浏览器、跨平台运行和发布门禁的命令见 [测试指南](TESTING.md)。
 5. 项目展示页仅用于阅读真实界面和设计说明；业务流程必须在本地应用中体验。
 
 ## 8. 已知限制与后续路线

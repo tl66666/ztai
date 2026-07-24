@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const InterviewMedia = require("../../static/js/interview_media.js");
+const InterviewMedia = require("../../frontend/src/interview/interview-media.mjs");
 
 function undecodableBlob() {
   return { arrayBuffer: async () => new ArrayBuffer(8) };

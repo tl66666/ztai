@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const path = require("node:path");
 const test = require("node:test");
 
 const { artifactNames, cleanupArtifacts } = require("../browser/artifacts.js");
@@ -25,11 +26,11 @@ test("suite cleanup removes stale artifacts before skipped tests are registered"
     ensureDirectory() {},
   });
   assert.deepEqual(removed, [
-    "C:\\artifacts\\firefox-desktop.png",
-    "C:\\artifacts\\firefox-desktop-trace.zip",
-    "C:\\artifacts\\firefox-desktop-server.log",
-    "C:\\artifacts\\firefox-mobile.png",
-    "C:\\artifacts\\firefox-mobile-trace.zip",
-    "C:\\artifacts\\firefox-mobile-server.log",
+    path.join("C:\\artifacts", "firefox-desktop.png"),
+    path.join("C:\\artifacts", "firefox-desktop-trace.zip"),
+    path.join("C:\\artifacts", "firefox-desktop-server.log"),
+    path.join("C:\\artifacts", "firefox-mobile.png"),
+    path.join("C:\\artifacts", "firefox-mobile-trace.zip"),
+    path.join("C:\\artifacts", "firefox-mobile-server.log"),
   ]);
 });

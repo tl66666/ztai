@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { createOpportunityHistoryController } = require("../../static/js/opportunity_history.js");
+const { createOpportunityHistoryController } = require("../../frontend/src/opportunity/opportunity-history.mjs");
 
 class FakeWindow {
   constructor(initialUrl) {

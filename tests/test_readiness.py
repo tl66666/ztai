@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from tests.agent_api_client import create_agent_test_runtime
 from utils.domain.career import (
     DELIVERABLE_THRESHOLD,
     MIN_MEANINGFUL_JD_LENGTH,
@@ -499,17 +500,14 @@ class DashboardReadinessTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.temp_dir.name, "app.db")
-        import app as app_module
-
-        self.app_module = app_module
-        self.old_db_path = app_module.DB_PATH
-        app_module.DB_PATH = self.db_path
-        app_module.init_db()
-        app_module.app.config["TESTING"] = True
-        self.client = app_module.app.test_client()
+        self.client_context, self.client = create_agent_test_runtime(
+            self.temp_dir.name,
+            db_name="app.db",
+        )
+        self.client_context.__enter__()
 
     def tearDown(self):
-        self.app_module.DB_PATH = self.old_db_path
+        self.client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
 
     def test_dashboard_uses_readiness_service_and_preserves_shapes(self):
@@ -584,7 +582,7 @@ class DashboardReadinessTests(unittest.TestCase):
         )
 
         self.assertEqual(invalid.status_code, 400)
-        self.assertEqual(cross_user.status_code, 403)
+        self.assertEqual(cross_user.status_code, 404)
 
 
 if __name__ == "__main__":

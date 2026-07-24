@@ -1,7 +1,6 @@
-from pathlib import Path
 import subprocess
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,15 +31,17 @@ class ContextualAgentFrontendTests(unittest.TestCase):
 
     def test_profile_result_uses_a_dedicated_entity_summary_not_the_preset_select(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        script = (
+            ROOT / "frontend" / "src" / "agent" / "agent-result-focus.ts"
+        ).read_text(encoding="utf-8")
         result_flow = script[
-            script.index("async function focusAgentResultFromQuery"):
-            script.index("async function refreshAfterAgentAction")
+            script.index("function renderLookup"):
+            script.index("return { focusFromLocation }")
         ]
 
         self.assertIn('id="agentResultFocus"', html)
-        self.assertIn("ContextualAgent.profileResultHtml(lookup.entity)", result_flow)
-        self.assertNotIn('$("careerProfileSelect")', result_flow)
+        self.assertIn("contextualAgent.profileResultHtml(lookup.entity)", result_flow)
+        self.assertNotIn('byId("careerProfileSelect")', result_flow)
 
     def test_context_chip_remove_control_meets_touch_target(self):
         css = (ROOT / "static" / "css" / "style.css").read_text(encoding="utf-8")
@@ -76,7 +77,9 @@ class ContextualAgentFrontendTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
     def test_agent_async_loaders_use_independent_latest_request_gates(self):
-        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        script = (
+            ROOT / "frontend" / "src" / "agent" / "agent-workspace.ts"
+        ).read_text(encoding="utf-8")
         restore_flow = script[
             script.index("async function restoreAgentMessages"):
             script.index("function renderAgentProposals")
@@ -87,7 +90,7 @@ class ContextualAgentFrontendTests(unittest.TestCase):
         ]
         proposal_flow = script[
             script.index("async function handleProposalClick"):
-            script.index("async function focusAgentResultFromQuery")
+            script.index("async function refreshAfterAgentAction")
         ]
 
         send_flow = script[
@@ -97,7 +100,7 @@ class ContextualAgentFrontendTests(unittest.TestCase):
 
         self.assertIn("agentConversationEpoch.begin(conversationId)", restore_flow)
         self.assertIn("agentConversationEpoch.isCurrent", restore_flow)
-        self.assertIn("ContextualAgent.authoritativeHydrationSuccess(latest.action)", restore_flow)
+        self.assertIn("contextualAgent.authoritativeHydrationSuccess(latest.action)", restore_flow)
         self.assertNotIn("state.agentProposals.set", restore_flow)
         self.assertIn("agentCommandCenterGate.begin", command_flow)
         self.assertIn("agentCommandCenterGate.isCurrent", command_flow)

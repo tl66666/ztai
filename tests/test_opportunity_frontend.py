@@ -1,14 +1,13 @@
-import importlib
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
+from tests.agent_api_client import create_agent_test_runtime
 from utils.domain.database import connect
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,15 +16,38 @@ class OpportunityFrontendContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-        cls.script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        sources = [
+            ROOT / "frontend" / "src" / "app" / "runtime.ts",
+            ROOT / "frontend" / "src" / "opportunity" / "opportunity-controller.ts",
+            ROOT / "frontend" / "src" / "opportunity" / "application-board.ts",
+            ROOT / "frontend" / "src" / "opportunity" / "opportunity-dashboard.ts",
+            ROOT / "frontend" / "src" / "opportunity" / "opportunity-handoffs.ts",
+            ROOT / "frontend" / "src" / "opportunity" / "opportunity-history.mjs",
+            ROOT / "frontend" / "src" / "opportunity" / "opportunity-workspace.ts",
+            ROOT / "frontend" / "src" / "opportunity" / "opportunity-workspace-renderer.ts",
+            ROOT / "frontend" / "src" / "shell" / "shell-controller.ts",
+            ROOT / "frontend" / "src" / "shell" / "topbar-controller.ts",
+        ]
+        cls.script = "\n".join(path.read_text(encoding="utf-8") for path in sources)
+        cls.interview_controller = (
+            ROOT
+            / "frontend"
+            / "src"
+            / "interview"
+            / "interview-controller.ts"
+        ).read_text(encoding="utf-8")
 
     def test_kanban_uses_api_statuses_and_keeps_legacy_records_visible(self):
         self.assertIn("data.canonical_statuses", self.script)
         self.assertIn("needs_status_review", self.script)
         self.assertIn('stage: "待确认"', self.script)
         self.assertIn('data-lucide="triangle-alert"', self.script)
+        hard_coded_stages = (
+            'const stages = ["已投递", "简历筛选", "笔试", "一面", '
+            '"二面", "HR 面", "Offer", "已拒绝"]'
+        )
         self.assertNotIn(
-            'const stages = ["已投递", "简历筛选", "笔试", "一面", "二面", "HR 面", "Offer", "已拒绝"]',
+            hard_coded_stages,
             self.script,
         )
 
@@ -49,16 +71,17 @@ class OpportunityFrontendContractTests(unittest.TestCase):
 
     def test_entity_ids_drive_deep_links_and_cross_feature_handoffs(self):
         self.assertIn("currentOpportunityId", self.script)
-        self.assertIn("opportunityHistory.open", self.script)
+        self.assertIn("return history.open", self.script)
         self.assertIn("applicationPayloadForJob(state.pendingApplicationHandoff", self.script)
-        self.assertIn("buildInterviewStartPayload(baseBody, handoff)", self.script)
+        self.assertIn("buildInterviewStartPayload({", self.interview_controller)
+        self.assertIn("}, handoff)", self.interview_controller)
         self.assertIn("buildMatchPayload", self.script)
         self.assertIn("actionId", self.script)
 
     def test_opportunity_interview_handoff_is_cleared_after_successful_start(self):
         start = re.search(
-            r"async function startInterview\(\).*?function updateInterviewQuestion",
-            self.script,
+            r"async function start\(\).*?function renderFeedbackHtml",
+            self.interview_controller,
             re.DOTALL,
         ).group(0)
         self.assertIn("state.interviewOpportunityHandoff = null", start)
@@ -79,8 +102,17 @@ class OpportunityFrontendContractTests(unittest.TestCase):
 
     def test_entity_handoffs_are_immutable_and_one_shot_behaviorally(self):
         result = subprocess.run(
-            ["node", str(ROOT / "tests" / "js" / "test_opportunity_handoffs.js")],
-            cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+            [
+                "npm",
+                "run",
+                "test:unit",
+                "--",
+                "frontend/src/opportunity/opportunity-handoffs.test.ts",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -97,28 +129,30 @@ class OpportunityFrontendContractTests(unittest.TestCase):
         self.assertIn('id="applicationBoardHeading"', self.html)
         self.assertIn('id="matchOpportunityNotice"', self.html)
         self.assertIn('id="clearMatchOpportunityLink"', self.html)
-        self.assertIn('<script src="js/opportunity_handoffs.js"></script>', self.html)
+        self.assertIn(
+            '<script type="module" src="js/react_app.js"></script>',
+            self.html,
+        )
+        self.assertNotIn('src="js/opportunity_handoffs.js"', self.html)
         for token in (
             "interviewOpportunityHandoff", "pendingApplicationHandoff", "matchOpportunityId",
             "buildInterviewStartPayload", "applicationPayloadForJob", "buildMatchPayload",
             "retryOpportunityWorkspace", "opportunityWorkspaceError", "opportunityOpener",
             "focus({ preventScroll: true })", "navigateToRoute", "onRouteTransition",
-            "routeLeavesFlow", "opportunityLoadGeneration", "request.isCurrent",
+            "routeLeavesFlow", "opportunityLoadGeneration", "requestState.isCurrent",
             "focusCleanedRoute", "focusRoute:", "tabIndex = -1",
         ):
             self.assertIn(token, self.script)
         self.assertNotIn("application_id: state.currentOpportunityId", self.script)
 
     def test_app_uses_the_history_controller_as_its_single_route_sync(self):
-        history_script = '<script src="js/opportunity_history.js"></script>'
-        app_script = '<script src="js/app.js"></script>'
-        self.assertIn(history_script, self.html)
-        self.assertLess(self.html.index(history_script), self.html.index(app_script))
+        self.assertNotIn('src="js/opportunity_history.js"', self.html)
+        self.assertNotIn('src="js/app.js"', self.html)
         self.assertIn("OpportunityHistory.createOpportunityHistoryController", self.script)
         self.assertIn("opportunityHistory.bind()", self.script)
-        self.assertIn("await opportunityHistory.sync()", self.script)
-        self.assertIn("return opportunityHistory.open", self.script)
-        self.assertIn("opportunityHistory.close", self.script)
+        self.assertIn("await history().sync()", self.script)
+        self.assertIn("return history.open", self.script)
+        self.assertIn("history.close", self.script)
         self.assertNotIn('params.get("opportunity")', self.script)
         self.assertNotIn("function opportunityWorkspaceUrl", self.script)
 
@@ -148,22 +182,21 @@ class OpportunityWorkspaceApiTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.temp_dir.name, "workspace.db")
-        os.environ["JOBHUNTER_DB_PATH"] = self.db_path
-        import app as app_module
-
-        self.app_module = importlib.reload(app_module)
-        self.app_module.app.config["TESTING"] = True
-        self.app_module.init_db()
-        self.client = self.app_module.app.test_client()
+        self.client_context, self.client = create_agent_test_runtime(
+            self.temp_dir.name,
+            db_name="workspace.db",
+        )
+        self.client_context.__enter__()
 
     def tearDown(self):
-        os.environ.pop("JOBHUNTER_DB_PATH", None)
+        self.client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
 
     def _seed_workspace(self):
         with connect(self.db_path) as conn:
             resume_id = conn.execute(
-                "INSERT INTO resumes (user_id, title, content) VALUES (1, 'Backend v3', 'PRIVATE RESUME BODY')"
+                "INSERT INTO resumes (user_id, title, content) "
+                "VALUES (1, 'Backend v3', 'PRIVATE RESUME BODY')"
             ).lastrowid
         opportunity = self.client.post(
             "/api/opportunities",
@@ -184,24 +217,29 @@ class OpportunityWorkspaceApiTests(unittest.TestCase):
         with connect(self.db_path) as conn:
             conn.execute(
                 """INSERT INTO job_matches
-                   (user_id, resume_id, job_title, match_score, analysis, jd_text, details_json, application_id)
+                   (user_id, resume_id, job_title, match_score, analysis,
+                    jd_text, details_json, application_id)
                    VALUES (1, ?, 'Backend Engineer', 86, 'good match', 'LOCAL STORED JD', ?, ?)""",
                 (resume_id, json.dumps({"strengths": ["Python"]}), opportunity_id),
             )
             conn.execute(
                 """INSERT INTO interview_sessions
-                   (user_id, application_id, resume_id, job_title, status, current_stage, conversation_json, score)
-                   VALUES (1, ?, ?, 'Backend Engineer', 'active', 'technical', 'PRIVATE CONVERSATION', NULL)""",
+                   (user_id, application_id, resume_id, job_title, status,
+                    current_stage, conversation_json, score)
+                   VALUES (1, ?, ?, 'Backend Engineer', 'active', 'technical',
+                           'PRIVATE CONVERSATION', NULL)""",
                 (opportunity_id, resume_id),
             )
             conn.execute(
                 """INSERT INTO action_items
                    (user_id, application_id, title, description, status, priority, due_at)
-                   VALUES (1, ?, 'Prepare system design', 'Review tradeoffs', 'pending', 2, '2026-07-21')""",
+                   VALUES (1, ?, 'Prepare system design', 'Review tradeoffs',
+                           'pending', 2, '2026-07-21')""",
                 (opportunity_id,),
             )
             foreign_resume = conn.execute(
-                "INSERT INTO resumes (user_id, title, content) VALUES (2, 'FOREIGN RESUME', 'FOREIGN BODY')"
+                "INSERT INTO resumes (user_id, title, content) "
+                "VALUES (2, 'FOREIGN RESUME', 'FOREIGN BODY')"
             ).lastrowid
             conn.execute(
                 """INSERT INTO job_matches
@@ -255,7 +293,8 @@ class OpportunityWorkspaceApiTests(unittest.TestCase):
     def test_workspace_rejects_cross_user_and_deleted_opportunities(self):
         with connect(self.db_path) as conn:
             foreign_id = conn.execute(
-                "INSERT INTO job_applications (user_id, company, job_title) VALUES (2, 'Private', 'Role')"
+                "INSERT INTO job_applications (user_id, company, job_title) "
+                "VALUES (2, 'Private', 'Role')"
             ).lastrowid
         local_id = self.client.post(
             "/api/opportunities", json={"company": "Deleted", "job_title": "Role"}

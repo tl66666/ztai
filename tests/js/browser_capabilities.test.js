@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const Capabilities = require("../../static/js/browser_capabilities.js");
+const Capabilities = require("../../frontend/src/interview/browser-capabilities.mjs");
 
 test("detects standard, prefixed, and missing speech recognition", () => {
   class StandardRecognition {}

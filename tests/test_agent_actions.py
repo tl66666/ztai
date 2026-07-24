@@ -7,9 +7,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-import app as app_module
+from tests.agent_api_client import create_agent_test_runtime
 from utils.agent_runtime.actions import ActionProposalError
-
 from utils.domain.database import APPLICATION_STATUSES, connect, migrate_database
 
 
@@ -1112,13 +1111,14 @@ class AgentActionServiceTests(unittest.TestCase):
 class AgentActionAPITests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.original_db_path = app_module.DB_PATH
-        app_module.DB_PATH = os.path.join(self.temp_dir.name, "api-actions.db")
-        app_module._agent_action_service = None
-        app_module.init_db()
-        app_module.app.config["TESTING"] = True
-        self.client = app_module.app.test_client()
-        self.service = app_module.get_agent_action_service()
+        self.db_path = os.path.join(self.temp_dir.name, "api-actions.db")
+        self.client_context, self.client = create_agent_test_runtime(
+            self.temp_dir.name,
+            db_name="api-actions.db",
+        )
+        self.client_context.__enter__()
+        self.container = self.client_context.app.state.container
+        self.service = self.container.agent.action_service
 
     def test_execution_failure_uses_a_clear_chinese_message(self):
         action = self.service.propose(1, "create_action_item", {"title": "测试失败提示"})
@@ -1136,8 +1136,7 @@ class AgentActionAPITests(unittest.TestCase):
         self.assertEqual(payload["error"]["message"], "暂时无法保存这项操作，请稍后重试。")
 
     def tearDown(self):
-        app_module._agent_action_service = None
-        app_module.DB_PATH = self.original_db_path
+        self.client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
 
     def test_api_lists_gets_edits_confirms_and_cancels(self):
@@ -1189,7 +1188,7 @@ class AgentActionAPITests(unittest.TestCase):
 
     def test_action_api_uses_server_identity_and_cannot_read_foreign_proposal(self):
         own = self.service.propose(1, "create_action_item", {"title": "Own"})
-        with connect(app_module.DB_PATH) as conn:
+        with connect(self.db_path) as conn:
             foreign_id = conn.execute(
                 """
                 INSERT INTO agent_action_proposals
@@ -1291,7 +1290,7 @@ class AgentActionAPITests(unittest.TestCase):
         proposal = self.service.propose(1, "create_action_item", {"title": "x"})
         with patch.object(
             self.service, "confirm", side_effect=RuntimeError(secret)
-        ), patch.object(app_module.app.logger, "exception") as logged:
+        ), patch("backend.api.agent._LOGGER.exception") as logged:
             response = self.client.post(
                 f"/api/agent/actions/{proposal['id']}/confirm", json={}
             )
@@ -1306,7 +1305,7 @@ class AgentActionAPITests(unittest.TestCase):
         original = self.service._finalize_completed
         with patch.object(
             self.service, "_finalize_completed", side_effect=RuntimeError(secret)
-        ), patch.object(app_module.app.logger, "exception") as logged:
+        ), patch("backend.api.agent._LOGGER.exception") as logged:
             response = self.client.post(
                 f"/api/agent/actions/{proposal['id']}/confirm", json={}
             )
@@ -1325,7 +1324,7 @@ class AgentActionAPITests(unittest.TestCase):
             f"/api/agent/actions/{proposal['id']}/confirm", json={}
         )
         self.assertEqual(recovered.status_code, 200)
-        with connect(app_module.DB_PATH) as conn:
+        with connect(self.db_path) as conn:
             count = conn.execute(
                 "SELECT COUNT(*) FROM action_items WHERE title = 'once'"
             ).fetchone()[0]

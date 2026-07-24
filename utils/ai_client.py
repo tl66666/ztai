@@ -7,14 +7,14 @@ rules engine when no API key is configured, so the project remains demoable.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
 import re
+import threading
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 
 import requests
-
 
 LOCAL_AI_CONFIG_PATH = os.environ.get(
     "JOBHUNTER_AI_CONFIG_PATH",
@@ -366,9 +366,10 @@ def extract_keywords(text: str) -> List[str]:
 _registry = AIProviderRegistry()
 
 
-def load_local_ai_config() -> dict:
+def load_local_ai_config(config_path: str | None = None) -> dict:
+    path = config_path or LOCAL_AI_CONFIG_PATH
     try:
-        with open(LOCAL_AI_CONFIG_PATH, "r", encoding="utf-8") as handle:
+        with open(path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except (OSError, json.JSONDecodeError, TypeError):
         return {}
@@ -386,17 +387,24 @@ def load_local_ai_config() -> dict:
     }
 
 
-def save_local_ai_config(api_key: str, provider_id: str, model_id: str = "") -> None:
+def save_local_ai_config(
+    api_key: str,
+    provider_id: str,
+    model_id: str = "",
+    *,
+    config_path: str | None = None,
+) -> None:
+    path = config_path or LOCAL_AI_CONFIG_PATH
     api_key = str(api_key or "").strip()
     if not api_key:
         try:
-            os.remove(LOCAL_AI_CONFIG_PATH)
+            os.remove(path)
         except FileNotFoundError:
             pass
         return
-    directory = os.path.dirname(LOCAL_AI_CONFIG_PATH)
+    directory = os.path.dirname(path)
     os.makedirs(directory, exist_ok=True)
-    temporary_path = f"{LOCAL_AI_CONFIG_PATH}.{os.getpid()}.tmp"
+    temporary_path = f"{path}.{os.getpid()}.tmp"
     payload = {
         "provider_id": str(provider_id or "glm").strip() or "glm",
         "model_id": str(model_id or "").strip(),
@@ -404,11 +412,13 @@ def save_local_ai_config(api_key: str, provider_id: str, model_id: str = "") -> 
     }
     with open(temporary_path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False)
-    os.replace(temporary_path, LOCAL_AI_CONFIG_PATH)
+    os.replace(temporary_path, path)
 
 
-def build_client_from_local_config() -> MultiModelAIClient:
-    saved = load_local_ai_config()
+def build_client_from_local_config(
+    config_path: str | None = None,
+) -> MultiModelAIClient:
+    saved = load_local_ai_config(config_path)
     if not saved:
         return MultiModelAIClient(registry=_registry)
     return MultiModelAIClient(
@@ -419,16 +429,49 @@ def build_client_from_local_config() -> MultiModelAIClient:
     )
 
 
-ai_client = build_client_from_local_config()
+class AIClientManager:
+    """Own one model client and persisted configuration per runtime."""
+
+    def __init__(self, config_path: str | os.PathLike[str] | None = None):
+        self.config_path = os.fspath(config_path or LOCAL_AI_CONFIG_PATH)
+        self._lock = threading.RLock()
+        self._client = build_client_from_local_config(self.config_path)
+
+    def get_ai_client(self) -> MultiModelAIClient:
+        return self._client
+
+    def set_api_key(
+        self,
+        api_key: str,
+        provider_id: str = "glm",
+        model_id: str = "",
+    ) -> MultiModelAIClient:
+        with self._lock:
+            normalized_key = str(api_key or "").strip()
+            save_local_ai_config(
+                normalized_key,
+                provider_id,
+                model_id,
+                config_path=self.config_path,
+            )
+            self._client = MultiModelAIClient(
+                provider_id=provider_id,
+                model_id=model_id,
+                api_key=normalized_key,
+                registry=_registry,
+            )
+            return self._client
+
+
+_default_manager = AIClientManager()
+ai_client = _default_manager.get_ai_client()
 
 
 def get_ai_client() -> MultiModelAIClient:
-    return ai_client
+    return _default_manager.get_ai_client()
 
 
 def set_api_key(api_key: str, provider_id: str = "glm", model_id: str = "") -> MultiModelAIClient:
     global ai_client
-    api_key = str(api_key or "").strip()
-    save_local_ai_config(api_key, provider_id, model_id)
-    ai_client = MultiModelAIClient(provider_id=provider_id, model_id=model_id, api_key=api_key, registry=_registry)
+    ai_client = _default_manager.set_api_key(api_key, provider_id, model_id)
     return ai_client

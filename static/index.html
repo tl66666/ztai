@@ -11,26 +11,7 @@
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-  <aside class="sidebar">
-    <button class="brand" data-page="home">
-      <img id="brandLogo" src="/assets/images/logo%20(2).png" alt="职途AI" />
-      <span>职途<br><strong>AI</strong></span>
-    </button>
-    <nav class="nav">
-      <button class="nav-item active" data-page="home"><i data-lucide="sparkles"></i><span>项目总览</span></button>
-      <button class="nav-item" data-page="resume"><i data-lucide="file-user"></i><span>简历实验室</span></button>
-      <button class="nav-item" data-page="interview"><i data-lucide="messages-square"></i><span>面试训练场</span></button>
-      <button class="nav-item" data-page="tracker"><i data-lucide="kanban-square"></i><span>投递看板</span></button>
-      <button class="nav-item" data-page="agent"><i data-lucide="layout-dashboard"></i><span>求职指挥台</span></button>
-    </nav>
-    <div class="provider-mini">
-      <span id="providerDot"></span>
-      <div>
-        <b id="providerName">本地兜底</b>
-        <small id="providerModel">规则引擎可用</small>
-      </div>
-    </div>
-  </aside>
+  <div id="reactAppRoot"></div>
 
   <main class="shell">
     <header class="topbar">
@@ -567,7 +548,7 @@
           <div id="agentActiveActions" class="command-list" aria-live="polite"></div>
         </section>
         <section class="panel command-panel">
-          <div class="panel-head"><h3>活跃机会</h3><button class="ghost small" type="button" onclick="jumpToModule('tracker','board')">打开看板</button></div>
+          <div class="panel-head"><h3>活跃机会</h3><button class="ghost small" type="button" data-route-page="tracker" data-route-module="board">打开看板</button></div>
           <div id="agentCommandOpportunities" class="command-list" aria-live="polite"></div>
         </section>
       </div>
@@ -654,15 +635,9 @@
     <span>AI 正在整理你的求职策略...</span>
   </div>
 
+  <script src="config.js"></script>
   <script src="js/vendor/lucide.min.js"></script>
   <script src="js/vendor/chart.umd.min.js"></script>
-  <script src="js/interview_submission.js"></script>
-  <script src="js/opportunity_handoffs.js"></script>
-  <script src="js/opportunity_history.js"></script>
-  <script src="js/contextual_agent.js"></script>
-  <script src="js/browser_capabilities.js"></script>
-  <script src="js/career_form.js"></script>
-  <script src="js/interview_media.js"></script>
-  <script src="js/app.js"></script>
+  <script type="module" src="js/react_app.js"></script>
 </body>
 </html>

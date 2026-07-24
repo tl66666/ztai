@@ -1,18 +1,21 @@
 # 职途 AI 架构说明
 
+> 本文记录当前模块化实现及业务不变量。部署拓扑、Cloudflare、PostgreSQL、R2
+> 与任务 worker 见[生产架构](PRODUCTION_ARCHITECTURE.md)。
+
 ## 1. 设计目标
 
 职途 AI 是本地单用户求职工作台，不是通用聊天机器人。架构优先保证四件事：业务数据一致、Agent 行为可控、刷新或重启后可继续、没有模型 Key 也能诚实运行。
 
 ```text
-原生 Web UI
+React 19 / TypeScript Web UI
   |  用户输入 + resume_id / opportunity_id / module
   v
-Flask API（参数、同源和本地用户边界）
+FastAPI（协议、身份与 owner 边界）
   |---------------------> CareerService / InterviewService
   |                              |
   v                              v
-AgentService              SQLite 业务表 + 领域事件
+AgentService              SQLAlchemy UoW + 领域事件
   |
   +-> ContextBuilder -> 分层记忆 + 实时业务快照
   +-> Orchestrator -> ToolRegistry -> 只读工具/公开网页工具
@@ -23,17 +26,20 @@ AgentService              SQLite 业务表 + 领域事件
 
 | 层 | 主要文件 | 职责 |
 | --- | --- | --- |
-| Web/API | `app.py`、`static/` | 页面、输入校验、同源限制、薄 API 适配 |
+| Web/API | `frontend/src/`、`backend/api/` | React 页面组合、输入校验、薄 FastAPI 适配 |
 | 领域服务 | `utils/domain/` | 职业档案、机会、简历版本、行动项、准备度、面试会话、领域事件 |
 | Agent 运行时 | `utils/agent_runtime/` | 会话、记忆、上下文、工具注册、编排、提案和回执 |
 | 模型网关 | `utils/ai_client.py` | 供应商配置、原生 tool calls、错误分类和本地降级 |
-| 持久化 | SQLite | 业务事实、会话、记忆、运行审计、提案和执行回执 |
+| 持久化 | `backend/adapters/persistence/sqlalchemy/` | SQLite/PostgreSQL 业务事实、会话、审计和回执 |
+| 文件/任务 | `backend/adapters/storage/`、`backend/adapters/jobs/` | Local/R2 文件与可恢复后台任务 |
 
-Flask 路由不应复制业务写入逻辑。新增业务行为优先放入领域服务，并在同一事务中写入相应领域事件。
+FastAPI router 不复制业务写入逻辑。新增行为进入 application/domain module，并在同一
+UoW 中写入业务事实与领域事件。
 
 ## 3. 数据模型与迁移
 
-`utils/domain/database.py` 使用 `PRAGMA user_version` 管理版本化迁移，启用外键，并在非临时数据库首次跨版本迁移前创建 SQLite 一致性备份。旧投递状态会映射到统一阶段；无法识别的历史值仍保留并在界面归入“待确认”，避免静默丢数据。
+Alembic 是当前 schema 权威。`utils/domain/database.py` 仅保留旧 SQLite 离线纳管兼容；
+旧投递状态仍映射到统一阶段，无法识别的历史值保留并归入“待确认”。
 
 核心聚合：
 
@@ -91,7 +97,7 @@ Agent 工具不能直接修改业务表。写入意图必须经过：
 当前不引入是有意取舍，不是缺少 Agent 设计：
 
 - 运行循环短且边界明确，核心复杂度在业务事务、身份隔离、提案确认和恢复语义。
-- Flask + SQLite + 原生前端追求下载即跑；额外框架会增加依赖、启动和排障成本。
+- 当前模块化单体已覆盖持久化、任务恢复和审计，不需要为短流程再叠加通用 Agent 框架。
 - 现有工具协议、持久化和审计都需要贴合本项目数据模型，套用通用抽象不会自动提高智能度。
 - 直接实现更容易验证“模型不能写库”“确认只执行持久化参数”等安全不变量。
 

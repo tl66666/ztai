@@ -1,24 +1,23 @@
-import os
 import sqlite3
 import tempfile
 import unittest
 from contextlib import ExitStack, closing
 from unittest.mock import patch
 
-import app as app_module
+from tests.agent_api_client import create_agent_test_runtime
 
 
 class AgentResumeWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.original_db_path = app_module.DB_PATH
-        app_module.DB_PATH = os.path.join(self.temp_dir.name, "resume-agent.db")
-        app_module._agent_service = None
-        app_module._agent_action_service = None
-        app_module.init_db()
-        app_module.app.config["TESTING"] = True
-        self.client = app_module.app.test_client()
-        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+        self.db_path = f"{self.temp_dir.name}/resume-agent.db"
+        self.client_context, self.client = create_agent_test_runtime(
+            self.temp_dir.name,
+            db_name="resume-agent.db",
+        )
+        self.client_context.__enter__()
+        self.container = self.client_context.app.state.container
+        with closing(sqlite3.connect(self.db_path)) as conn:
             self.resume_id = conn.execute(
                 "INSERT INTO resumes(user_id,title,content) VALUES (1,?,?)",
                 (
@@ -31,14 +30,12 @@ class AgentResumeWorkflowTests(unittest.TestCase):
                 ("测试开发简历", "李四\n项目经历\n负责接口测试\n技能：Python Playwright"),
             )
             conn.commit()
-        app_module.get_career_service().upsert_profile(
+        self.container.career_service.upsert_profile(
             1, {"target_role": "Python 后端工程师"}
         )
 
     def tearDown(self):
-        app_module._agent_service = None
-        app_module._agent_action_service = None
-        app_module.DB_PATH = self.original_db_path
+        self.client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
 
     def local_client(self):
@@ -117,7 +114,7 @@ class AgentResumeWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(confirmed.status_code, 200)
 
-        with closing(sqlite3.connect(app_module.DB_PATH)) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             source = conn.execute(
                 "SELECT content FROM resumes WHERE id = ?", (self.resume_id,)
             ).fetchone()[0]
@@ -213,7 +210,7 @@ class AgentResumeWorkflowTests(unittest.TestCase):
         self.assertIn("本地简历诊断", diagnosed["reply"])
 
     def test_draft_endpoint_rejects_non_resume_proposals(self):
-        action = app_module.get_agent_action_service().propose(
+        action = self.container.agent.action_service.propose(
             1, "create_action_item", {"title": "Prepare interview"}
         )
         response = self.client.get(f"/api/agent/actions/{action['id']}/draft")

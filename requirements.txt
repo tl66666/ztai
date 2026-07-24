@@ -1,7 +1,10 @@
-flask>=2.0.0
-flask-cors>=4.0.0
+# Compatibility installer only. pyproject.toml + uv.lock are authoritative.
+fastapi>=0.115,<1
 requests>=2.28.0
 python-docx>=0.8.11
 reportlab>=3.6.0
 pdf2docx>=0.5.6
+PyJWT[crypto]>=2.10,<3
 PyPDF2>=3.0.0
+python-multipart>=0.0.20
+uvicorn[standard]>=0.30,<1

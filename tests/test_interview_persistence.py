@@ -1,11 +1,11 @@
 import json
-import importlib
 import os
 import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
+from tests.agent_api_client import create_agent_test_runtime
 from utils.domain.database import connect, migrate_database
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -444,23 +444,19 @@ class InterviewApiPersistenceTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.temp_dir.name, "api.db")
-        os.environ["JOBHUNTER_DB_PATH"] = self.db_path
-        import app as app_module
-
-        self.app_module = importlib.reload(app_module)
-        self.app_module.app.config["TESTING"] = True
-        self.app_module.init_db()
-        self.app_module._interview_service = None
-        self.client = self.app_module.app.test_client()
+        self.client_context, self.client = create_agent_test_runtime(
+            self.temp_dir.name
+        )
+        self.client_context.__enter__()
+        self.container = self.client_context.app.state.container
         with connect(self.db_path) as conn:
             self.resume_id = conn.execute(
                 "INSERT INTO resumes (user_id, title, content) VALUES (1, 'Resume', 'Python testing')"
             ).lastrowid
 
     def tearDown(self):
-        self.app_module._interview_service = None
+        self.client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
-        os.environ.pop("JOBHUNTER_DB_PATH", None)
 
     def start(self, **overrides):
         body = {
@@ -473,10 +469,11 @@ class InterviewApiPersistenceTests(unittest.TestCase):
         body.update(overrides)
         return self.client.post("/api/interview/sessions", json=body)
 
-    def test_flask_recreates_cached_service_and_continues_session(self):
+    def test_runtime_recreates_cached_module_and_continues_session(self):
         started_response = self.start()
         started = started_response.get_json()
-        self.app_module._interview_service = None
+        self.container._interview_service = None
+        self.container._interviews = None
 
         answered_response = self.client.post(
             f"/api/interview/sessions/{started['session_id']}/answer",
@@ -614,7 +611,7 @@ class InterviewApiPersistenceTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 400)
                 self.assertEqual(
-                    self.app_module.get_interview_service().get(1, session_id)["progress"], 1
+                    self.container.interview_service.get(1, session_id)["progress"], 1
                 )
 
         legacy_session_id = self.start().get_json()["session_id"]
@@ -647,9 +644,33 @@ class InterviewApiPersistenceTests(unittest.TestCase):
 class InterviewFrontendSubmissionTests(unittest.TestCase):
     def test_frontend_sends_one_reusable_submission_identity_and_stage_precondition(self):
         with open(
-            os.path.join(PROJECT_ROOT, "static", "js", "app.js"), encoding="utf-8"
+            os.path.join(PROJECT_ROOT, "frontend", "src", "app", "runtime.ts"),
+            encoding="utf-8",
         ) as file:
-            script = file.read()
+            app_script = file.read()
+        with open(
+            os.path.join(
+                PROJECT_ROOT,
+                "frontend",
+                "src",
+                "interview",
+                "interview-controller.ts",
+            ),
+            encoding="utf-8",
+        ) as file:
+            controller_script = file.read()
+        with open(
+            os.path.join(
+                PROJECT_ROOT,
+                "frontend",
+                "src",
+                "interview",
+                "interview-submission.ts",
+            ),
+            encoding="utf-8",
+        ) as file:
+            submission_script = file.read()
+        script = app_script + controller_script + submission_script
 
         self.assertIn("interviewStageIndex", script)
         self.assertIn("pendingInterviewSubmission", script)
@@ -658,12 +679,10 @@ class InterviewFrontendSubmissionTests(unittest.TestCase):
         self.assertIn("submission_id: pending.submissionId", script)
         self.assertIn("expected_stage_index: pending.expectedStageIndex", script)
         self.assertIn("if (state.interviewSubmitting) return", script)
-        self.assertIn("http_status: response.status", script)
-        with open(
-            os.path.join(PROJECT_ROOT, "static", "index.html"), encoding="utf-8"
-        ) as file:
-            html = file.read()
-        self.assertIn('<script src="js/interview_submission.js"></script>', html)
+        self.assertIn(
+            'import * as InterviewSubmission from "../interview/interview-submission"',
+            app_script,
+        )
 
 
 if __name__ == "__main__":

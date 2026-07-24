@@ -3,7 +3,6 @@ import subprocess
 import unittest
 from pathlib import Path, PurePosixPath
 
-
 ROOT = Path(__file__).resolve().parents[1]
 TEXT_SUFFIXES = {
     "",
@@ -47,7 +46,11 @@ class RepositoryHygieneTests(unittest.TestCase):
             path = PurePosixPath(name)
             lowered_parts = {part.lower() for part in path.parts}
             lowered_name = path.name.lower()
-            if lowered_name == ".env" or lowered_name.startswith(".env.") and lowered_name != ".env.example":
+            if (
+                lowered_name == ".env"
+                or lowered_name.startswith(".env.")
+                and lowered_name != ".env.example"
+            ):
                 forbidden.append(name)
             elif runtime_roots & lowered_parts:
                 forbidden.append(name)
@@ -69,7 +72,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         findings = []
         for name in self.tracked:
             path = ROOT / name
-            if path.suffix.lower() not in TEXT_SUFFIXES:
+            if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES:
                 continue
             content = path.read_text(encoding="utf-8", errors="replace")
             for label, pattern in patterns.items():
@@ -78,12 +81,14 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertEqual(findings, [], f"possible tracked secrets: {findings}")
 
     def test_tracked_text_has_no_developer_home_path(self):
-        windows_home = re.compile(r"[A-Za-z]:\\Users\\(?!<|your-name|username)[^\\\s\"']+\\", re.IGNORECASE)
+        windows_home = re.compile(
+            r"[A-Za-z]:\\Users\\(?!<|your-name|username)[^\\\s\"']+\\", re.IGNORECASE
+        )
         unix_home = re.compile(r"/(?:Users|home)/(?!<|your-name|username)[^/\s\"']+/")
         findings = []
         for name in self.tracked:
             path = ROOT / name
-            if path.suffix.lower() not in TEXT_SUFFIXES:
+            if not path.is_file() or path.suffix.lower() not in TEXT_SUFFIXES:
                 continue
             content = path.read_text(encoding="utf-8", errors="replace")
             if windows_home.search(content) or unix_home.search(content):
