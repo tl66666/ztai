@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 const projectRoot = resolve(import.meta.dirname, "../..");
 const staticDir = resolve(projectRoot, "static");
 const outputDir = resolve(projectRoot, "dist");
+const workerSource = resolve(projectRoot, "frontend/cloudflare/worker.mjs");
 const apiBaseUrl = String(process.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 
 if (!apiBaseUrl) {
@@ -18,6 +19,7 @@ await cp(staticDir, outputDir, {
   recursive: true,
   filter: (source) => !source.endsWith(".map"),
 });
+await cp(workerSource, resolve(outputDir, "_worker.js"));
 
 await writeFile(
   resolve(outputDir, "config.js"),
