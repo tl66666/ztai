@@ -1,4 +1,4 @@
-const API_ORIGIN = "https://api.ztai.kralai.tech";
+const API_ORIGIN = "https://ztai-api.kralai.tech";
 
 export function isApiRequest(request) {
   return new URL(request.url).pathname.startsWith("/api/");

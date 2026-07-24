@@ -9,7 +9,7 @@ test("Cloudflare worker proxies API requests and preserves Access identity", asy
 
   const upstream = worker.createUpstreamRequest(request);
 
-  assert.equal(upstream.url, "https://api.ztai.kralai.tech/api/jobs?limit=10");
+  assert.equal(upstream.url, "https://ztai-api.kralai.tech/api/jobs?limit=10");
   assert.equal(upstream.headers.get("Cf-Access-Jwt-Assertion"), "signed-access-token");
 });
 
