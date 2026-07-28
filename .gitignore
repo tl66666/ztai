@@ -39,6 +39,9 @@ static/assets/images/*.docx
 .DS_Store
 Thumbs.db
 
+# Runtime PID files
+.run/
+
 # Logs
 *.log
 
