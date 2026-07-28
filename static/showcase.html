@@ -1077,7 +1077,7 @@
         <article class="card liquid highlight-card fade-up">
           <span class="hl-icon">🤖</span>
           <h3>自研 Agent Runtime</h3>
-          <p>基于 Flask、SQLite 和 JSON Schema 实现有界工具循环、策略切换、任务续接和审计记录。当前没有引入 LangChain 或 LangGraph，避免增加重复框架层。</p>
+          <p>基于 FastAPI、SQLAlchemy 和 JSON Schema 实现有界工具循环、策略切换、任务续接和审计记录。后端拆分为 API、Application、Adapters、Ports 分层，前端迁移至 React 19 + TypeScript 模块化架构。当前没有引入 LangChain 或 LangGraph，避免增加重复框架层。</p>
         </article>
         <article class="card liquid highlight-card fade-up">
           <span class="hl-icon">🎯</span>
@@ -1097,7 +1097,7 @@
         <article class="card liquid highlight-card fade-up">
           <span class="hl-icon">⚡</span>
           <h3>一键启动，重复双击可复用</h3>
-          <p>双击 start.bat 自动检测 Python、检查依赖、安全选择可用端口并打开浏览器；项目已运行时再次双击会直接打开现有页面，不结束其他端口进程。</p>
+          <p>双击 start.bat 打开交互菜单，自动检测 Python、Node.js、检查依赖、启动后端 (FastAPI :5000) 和前端 (Vite :5173) 并打开浏览器；支持启动、停止、重启和状态查看，停止时自动清理子进程。</p>
         </article>
       </div>
     </section>
@@ -1108,11 +1108,11 @@
         <h2>技术栈完整说明</h2>
         <p>项目采用轻量可运行架构，同时覆盖文件处理、模型调用、语音能力、图表渲染和数据持久化。</p>
         <div class="tech-tags">
-          <span>Python 3</span><span>Flask</span><span>SQLite</span><span>Requests</span>
+          <span>Python 3</span><span>FastAPI</span><span>Uvicorn</span><span>SQLAlchemy</span><span>Alembic</span>
           <span>python-docx</span><span>reportlab</span><span>pdf2docx</span><span>PyPDF2</span>
-          <span>HTML5</span><span>CSS Variables</span><span>JavaScript</span><span>Chart.js</span>
+          <span>React 19</span><span>TypeScript</span><span>Vite</span><span>Chart.js</span>
           <span>Lucide Icons</span><span>Web Speech API</span><span>MediaRecorder API</span><span>Web Audio API</span>
-          <span>HTML5 Video</span><span>JSON Schema</span><span>SQLite FTS5</span><span>unittest</span><span>Playwright</span><span>GitHub</span>
+          <span>HTML5 Video</span><span>JSON Schema</span><span>SQLite FTS5</span><span>PostgreSQL</span><span>Cloudflare Pages</span><span>Playwright</span><span>GitHub</span>
         </div>
       </article>
       <article class="card liquid fade-up">
@@ -1162,7 +1162,7 @@
     </section>
   </main>
 
-  <footer class="wrap">职途 AI Agent / Flask + SQLite + Vanilla JavaScript / <a href="../README.md">项目说明</a> / <a href="../docs/ARCHITECTURE.md">架构文档</a> / <a href="../docs/TESTING.md">测试文档</a></footer>
+  <footer class="wrap">职途 AI Agent / FastAPI + SQLAlchemy + React 19 + TypeScript / <a href="../README.md">项目说明</a> / <a href="../docs/ARCHITECTURE.md">架构文档</a> / <a href="../docs/TESTING.md">测试文档</a></footer>
 
   <script>
     const observer = new IntersectionObserver((entries) => {
