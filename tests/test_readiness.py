@@ -474,8 +474,8 @@ class ReadinessTests(unittest.TestCase):
                 conn.execute(
                     """INSERT INTO interviews
                        (user_id, job_title, conversation, source_session_id, score, created_at)
-                       VALUES (1, 'Role', '[{\"answer\":\"same\"}]', 'session-low', 39, ?)""",
-                    (f"2026-07-{day:02d} 00:00:00",),
+                       VALUES (1, 'Role', '[{\"answer\":\"same\"}]', 'session-low', 39, datetime('now', ?))""",
+                    (f"-{day} days",),
                 )
 
         result = self.service.calculate_readiness(1)
