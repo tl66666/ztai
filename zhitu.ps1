@@ -1,4 +1,4 @@
-#Requires -Version 5.0
+﻿#Requires -Version 5.0
 <#
 .SYNOPSIS
     职途 AI (JobHunter) 一键管理工具
@@ -73,6 +73,24 @@ function Find-Python {
         $ver = python --version 2>&1
         if ($ver -match '3\.(1[1-9]|[2-9]\d)') {
             return 'python'
+        }
+    }
+    # 检查常见 Windows 安装路径
+    $userLocal = [Environment]::GetFolderPath('LocalApplicationData')
+    $searchPaths = @(
+        "$userLocal\Programs\Python\Python313\python.exe",
+        "$userLocal\Programs\Python\Python312\python.exe",
+        "$userLocal\Programs\Python\Python311\python.exe",
+        'C:\Python313\python.exe',
+        'C:\Python312\python.exe',
+        'C:\Python311\python.exe'
+    )
+    foreach ($p in $searchPaths) {
+        if (Test-Path $p) {
+            $ver = & $p --version 2>&1
+            if ($ver -match '3\.(1[1-9]|[2-9]\d)') {
+                return $p
+            }
         }
     }
     return $null
