@@ -14,7 +14,7 @@
 
 ## 页面本机配置
 
-启动系统，打开“模型配置”，选择供应商和模型后输入 Key。Key 通过本机回环 HTTP 发送到 Flask，并保存在 Git 忽略的本机运行文件 `output/runtime/ai-config.json`，用于重启后复用：
+启动系统，打开“模型配置”，选择供应商和模型后输入 Key。Key 通过本机回环 HTTP 发送到 FastAPI，并保存在 Git 忽略的本机运行文件 `output/runtime/ai-config.json`，用于重启后复用：
 
 - 不写入 SQLite；
 - 不写入浏览器 localStorage；
@@ -30,7 +30,7 @@
 ```powershell
 $env:GLM_API_KEY = "你的 Key"
 $env:JOBHUNTER_MODEL = "供应商支持的模型 ID"
-python app.py
+python -m backend.cli
 ```
 
 也可以在操作系统或安全的开发工具中管理环境变量。不要把真实 Key 写入 `.env.example`、脚本、截图或 Git 历史。

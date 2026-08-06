@@ -1,5 +1,7 @@
 # 职途 AI Agent（JobHunter）
 
+![CI](https://github.com/tl66666/ztai/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/badge/license-MIT-blue.svg) ![Python](https://img.shields.io/badge/python-3.11+-green.svg) ![React](https://img.shields.io/badge/React-19-blue.svg)
+
 一个把简历、岗位、面试、投递和复盘连接起来的本地优先求职工作台。它的 Agent 不是独立聊天页，而是贯穿整个产品的行动助手：能读取当前机会和简历上下文、找出阻塞点、调用求职工具，并把写入操作先整理成预览，只有用户确认后才执行。
 
 [在线项目展示](https://tl66666.github.io/ztai/static/showcase.html) · [项目交接](docs/PROJECT_HANDOFF.md) · [用户指南](docs/USER_GUIDE.md) · [Agent 双模式](docs/AGENT_MODES.md) · [架构说明](docs/ARCHITECTURE.md) · [测试指南](docs/TESTING.md) · [简历项目素材](docs/RESUME_PROJECT_ENTRY.md) · [版本记录](CHANGELOG.md)
@@ -55,6 +57,23 @@ Agent 的工作方式是：
 
 支持计算机/软件/AI、运营/新媒体、市场/销售、财务/会计、教育/师范、行政/人事等求职方向。语音能力会根据浏览器特性检测；不支持语音识别或录音时，文字回答和音频上传仍可使用。
 
+## 一键启动（Windows）
+
+双击 `start.bat` 即可打开交互菜单，支持启动/停止/重启/状态查看：
+
+- 自动检测 Python 3.11+ 和 Node.js 22+ 环境
+- 自动安装 Python 和前端依赖
+- 后端运行在 `http://localhost:5000`，前端运行在 `http://localhost:5173`
+- 关闭菜单或执行停止命令时会终止所有子进程
+
+也可以命令行使用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File zhitu.ps1 start   # 启动
+powershell -ExecutionPolicy Bypass -File zhitu.ps1 stop    # 停止
+powershell -ExecutionPolicy Bypass -File zhitu.ps1 status  # 状态
+```
+
 ## 快速开始（跨平台）
 
 Windows、macOS 和 Linux 使用同一套 Python/ASGI 运行入口，不依赖 PowerShell：
@@ -106,6 +125,34 @@ DEEPSEEK_API_KEY="你的 Key" uv run python -m backend.cli
 | 语音识别 | 取决于浏览器 Web Speech 实现 | 通常不可用 | 文字输入 |
 | 浏览器录音 | WebM/Opus（按能力选择） | Ogg/Opus（按能力选择） | 音频上传或文字输入 |
 | Word 转 PDF | 浏览器无关 | 浏览器无关 | 安装 Office 可提高 Windows 转换保真度 |
+
+## 项目结构
+
+```text
+jobhunter/
+├── backend/              # FastAPI 后端
+│   ├── api/              # 路由层（agent, career, interviews, jobs, opportunities...）
+│   ├── application/      # 应用服务（容器、编排、作业运行器）
+│   ├── adapters/         # 适配器（SQLAlchemy 持久化、R2 存储、作业队列）
+│   ├── core/             # 核心（设置、数据库、运行时）
+│   ├── documents/        # 文档转换（Word/PDF、简历渲染）
+│   ├── ports/            # 端口接口（BlobStorage、JobQueue）
+│   └── security/         # 安全（身份主体）
+├── frontend/             # React 19 + TypeScript 前端
+│   └── src/              # 源码（agent, app, career, interview, opportunity, resume, shell）
+├── utils/                # 工具层
+│   ├── agent_runtime/    # Agent 运行时（编排、工具、记忆、动作）
+│   └── domain/           # 领域服务（职业、面试、机会、事件）
+├── static/               # 静态资源（HTML、CSS、图片、展示页）
+├── tests/                # 测试（Python unittest、Vitest、Node、Playwright）
+├── alembic/              # 数据库迁移
+├── docs/                 # 文档（架构、用户指南、Agent 模式、测试指南...）
+├── .github/workflows/    # CI 配置（跨平台 + 多 Python 版本矩阵）
+├── pyproject.toml        # Python 项目配置（uv）
+├── package.json          # 前端配置（Vite + React 19）
+├── start.bat             # Windows 一键启动入口
+└── zhitu.ps1             # Windows 服务管理脚本
+```
 
 ## 技术设计
 

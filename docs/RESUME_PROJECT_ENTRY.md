@@ -12,7 +12,7 @@
 
 ## 技术栈
 
-Python / Flask / SQLite / SQLite FTS5 / 原生 JavaScript / HTML5 / CSS3 / Web Speech / MediaRecorder / Playwright / 多模型 API（GLM、DeepSeek、Kimi）/ Windows PowerShell 启动器
+Python / FastAPI / SQLAlchemy 2 / Alembic / SQLite / SQLite FTS5 / React 19 / TypeScript / Vite / HTML5 / CSS3 / Web Speech / MediaRecorder / Playwright / 多模型 API（GLM、DeepSeek、Kimi）/ 跨平台启动器
 
 ## 核心亮点
 
@@ -49,4 +49,4 @@ Python / Flask / SQLite / SQLite FTS5 / 原生 JavaScript / HTML5 / CSS3 / Web S
 - 技术岗位：保留 `ContextBuilder`、`ToolRegistry`、有界编排、Schema 校验、幂等回执等关键词。
 - 产品/测试岗位：突出真实求职闭环、降级策略、跨浏览器验证、数据迁移和异常恢复。
 - HR 初筛：优先使用“HR 快速阅读版”，再用“一页简历版”补充工程细节。
-- 面试时不要声称使用 LangChain/LangGraph；准确表述为“基于 Flask + SQLite 自研 Agent Runtime”，并说明未来在多 Agent、跨服务长流程和可视化状态机需求出现时再评估 LangGraph。
+- 面试时不要声称使用 LangChain/LangGraph；准确表述为"基于 FastAPI + SQLAlchemy 自研 Agent Runtime"，并说明未来在多 Agent、跨服务长流程和可视化状态机需求出现时再评估 LangGraph。
