@@ -28,8 +28,12 @@ class LocalSecurityBoundaryTests(unittest.TestCase):
 
     def tearDown(self):
         self.client_context.__exit__(None, None, None)
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def test_audio_download_cannot_escape_upload_directory(self):
         secret_path = Path(self.temp_dir.name) / "secret.txt"
         secret_path.write_text("outside-upload-secret", encoding="utf-8")

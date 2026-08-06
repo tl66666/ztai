@@ -30,8 +30,12 @@ class AgentBusinessMemoryTests(unittest.TestCase):
         self.store = MemoryStore(self.db_path)
 
     def tearDown(self):
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def test_search_memories_ranks_entity_match_and_never_crosses_user(self):
         old_id = self.store.upsert_memory(
             1, "semantic", "preference", "target_role", "Backend Engineer", 0.9,

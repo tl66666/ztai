@@ -27,8 +27,12 @@ class AgentActionServiceTests(unittest.TestCase):
             ).lastrowid
 
     def tearDown(self):
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def propose(self, action_type, arguments, **kwargs):
         return self.service.propose(1, action_type, arguments, **kwargs)
 

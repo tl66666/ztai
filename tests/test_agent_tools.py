@@ -43,8 +43,12 @@ class AgentToolTests(unittest.TestCase):
         self.registry = build_tool_registry(self.db_path)
 
     def tearDown(self):
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def test_runtime_injects_user_id_instead_of_trusting_model(self):
         result = self.registry.execute("list_resumes", {"user_id": 2}, user_id=1)
 

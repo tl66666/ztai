@@ -106,8 +106,12 @@ class ReadinessTests(unittest.TestCase):
         self.service = CareerService(self.db_path)
 
     def tearDown(self):
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def insert(self, sql, values=()):
         with connect(self.db_path) as conn:
             return conn.execute(sql, values).lastrowid

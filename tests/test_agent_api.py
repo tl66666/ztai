@@ -21,8 +21,12 @@ class AgentAPITests(unittest.TestCase):
 
     def tearDown(self):
         self.client_context.__exit__(None, None, None)
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def create_conversation(self, user_id=1, title="新对话"):
         response = self.client.post(
             "/api/agent/conversations",

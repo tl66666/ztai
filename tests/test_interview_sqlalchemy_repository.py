@@ -37,8 +37,12 @@ class InterviewSqlAlchemyRepositoryTests(unittest.TestCase):
 
     def tearDown(self):
         self.database.dispose()
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def test_service_accepts_injected_session_and_repository_factories(self):
         with self.database.session() as session:
             resume_id = session.execute(

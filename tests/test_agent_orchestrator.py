@@ -160,8 +160,12 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.context_builder = ContextBuilder(self.store, self.db_path)
 
     def tearDown(self):
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def make_orchestrator(self, policy):
         return AgentOrchestrator(
             policy=policy,

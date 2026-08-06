@@ -73,8 +73,12 @@ class AgentDomainToolTests(unittest.TestCase):
         self.registry = build_tool_registry(self.db_path)
 
     def tearDown(self):
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def test_domain_reads_match_career_service_and_filter_deleted_and_foreign(self):
         self.career.upsert_profile(1, {"target_role": "测试工程师"})
         secrets = {

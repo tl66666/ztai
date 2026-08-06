@@ -15,8 +15,12 @@ class AgentMemoryTests(unittest.TestCase):
         self.store = MemoryStore(self.db_path)
 
     def tearDown(self):
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def test_messages_are_isolated_by_user_and_conversation(self):
         first = self.store.create_conversation(1, "第一段对话")
         second = self.store.create_conversation(2, "第二段对话")

@@ -77,8 +77,12 @@ class InterviewPersistenceTests(unittest.TestCase):
         self.service = self.make_service()
 
     def tearDown(self):
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def make_service(self, local_user_id=1):
         from utils.domain.interviews import InterviewService
 

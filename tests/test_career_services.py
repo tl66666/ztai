@@ -58,8 +58,12 @@ class CareerServiceTests(unittest.TestCase):
         self.service = CareerService(self.db_path)
 
     def tearDown(self):
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def assert_event_failure_rolls_back(self, operation, assert_unchanged):
         with patch.object(self.service, "_write_event", side_effect=RuntimeError("event failed")):
             with self.assertRaisesRegex(RuntimeError, "event failed"):

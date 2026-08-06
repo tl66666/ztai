@@ -59,8 +59,12 @@ class BackendFeatureTests(unittest.TestCase):
 
     def tearDown(self):
         self.client_context.__exit__(None, None, None)
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def test_tailor_resume_for_jd_returns_structured_sections(self):
         response = self.client.post(
             f"/api/resumes/{self.resume_id}/tailor",
