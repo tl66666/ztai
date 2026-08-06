@@ -38,7 +38,7 @@ class ProviderRegistryTests(unittest.TestCase):
 
 class BackendFeatureTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = os.path.join(self.temp_dir.name, "test.db")
         self.client_context, self.client = create_agent_test_runtime(
             self.temp_dir.name,
@@ -62,7 +62,12 @@ class BackendFeatureTests(unittest.TestCase):
         import gc, shutil
         gc.collect()
         try:
-            self.temp_dir.cleanup()
+            import gc, shutil
+            gc.collect()
+            try:
+                self.temp_dir.cleanup()
+            except (PermissionError, OSError):
+                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
         except (PermissionError, OSError):
             shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def test_tailor_resume_for_jd_returns_structured_sections(self):

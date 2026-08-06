@@ -23,7 +23,7 @@ from backend.core.runtime import RuntimeDatabase
 
 class SqlAlchemyPersistenceTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.temporary_directory = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.root = Path(self.temporary_directory.name)
         self.db_path = self.root / "jobhunter.db"
         self.database = Database(sqlite_database_url(self.db_path))
@@ -34,8 +34,12 @@ class SqlAlchemyPersistenceTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.database.dispose()
-        self.temporary_directory.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temporary_directory.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temporary_directory.name, ignore_errors=True)
     def test_alembic_baseline_creates_complete_empty_sqlite_schema(self) -> None:
         with sqlite3.connect(self.db_path) as connection:
             tables = {
@@ -202,7 +206,7 @@ class SqlAlchemyPersistenceTests(unittest.TestCase):
 
 class LegacyDatabaseAdoptionTests(unittest.TestCase):
     def test_alembic_adopts_version_five_without_losing_rows(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
             root = Path(directory)
             db_path = root / "legacy.db"
             with sqlite3.connect(db_path) as connection:

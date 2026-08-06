@@ -136,7 +136,7 @@ def create_legacy_database(db_path):
 
 class DomainMigrationTests(unittest.TestCase):
     def test_ensure_column_is_idempotent_under_concurrent_initialization(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
             db_path = os.path.join(directory, "concurrent-column.db")
             with connect(db_path) as conn:
                 conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
@@ -164,14 +164,14 @@ class DomainMigrationTests(unittest.TestCase):
         self.assertEqual(LEGACY_STATUS_MAP["拒绝"], "已拒绝")
 
     def test_connect_enables_foreign_keys(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             with connect(os.path.join(temp_dir, "test.db")) as conn:
                 enabled = conn.execute("PRAGMA foreign_keys").fetchone()[0]
 
         self.assertEqual(enabled, 1)
 
     def test_initialization_repairs_an_empty_legacy_user_table(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = os.path.join(temp_dir, "legacy-users.db")
             with connect(db_path) as conn:
                 conn.executescript(
@@ -200,7 +200,7 @@ class DomainMigrationTests(unittest.TestCase):
             self.assertIsNotNone(local_user)
 
     def test_initialization_repairs_local_user_when_the_default_name_is_taken(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = os.path.join(temp_dir, "legacy-user-name.db")
             with connect(db_path) as conn:
                 conn.executescript(
@@ -222,7 +222,7 @@ class DomainMigrationTests(unittest.TestCase):
                 )
 
     def test_migrates_legacy_schema_and_data_idempotently(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = os.path.join(temp_dir, "legacy-test.db")
             create_legacy_database(db_path)
 
@@ -251,7 +251,7 @@ class DomainMigrationTests(unittest.TestCase):
             self.assertFalse(os.path.exists(f"{db_path}.backup-v0"))
 
     def test_first_migration_backs_up_a_persistent_database(self):
-        with tempfile.TemporaryDirectory():
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True):
             persistent_dir = os.path.join(os.getcwd(), ".migration-test-data")
             os.makedirs(persistent_dir, exist_ok=True)
             db_path = os.path.join(persistent_dir, f"legacy-{uuid.uuid4().hex}.db")
@@ -324,7 +324,7 @@ class DomainMigrationTests(unittest.TestCase):
             migrate_database(":memory:")
 
     def test_failed_migration_does_not_advance_user_version(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = os.path.join(temp_dir, "broken-test.db")
             create_legacy_database(db_path)
             with connect(db_path) as conn:
@@ -337,7 +337,7 @@ class DomainMigrationTests(unittest.TestCase):
                 self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 0)
 
     def test_version_one_migrates_to_evidence_indexes_idempotently(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = os.path.join(temp_dir, "version-one.db")
             with connect(db_path) as conn:
                 conn.executescript(
@@ -386,7 +386,7 @@ class DomainMigrationTests(unittest.TestCase):
             )
 
     def test_version_two_migrates_agent_proposals_to_version_three_idempotently(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = os.path.join(temp_dir, "version-two.db")
             create_legacy_database(db_path)
             migrate_database(db_path)
@@ -447,7 +447,7 @@ class DomainMigrationTests(unittest.TestCase):
             self.assertIsNotNone(legacy["idempotency_key"])
 
     def test_version_three_adds_unique_agent_domain_event_receipts(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = os.path.join(temp_dir, "version-three.db")
             create_legacy_database(db_path)
             migrate_database(db_path)

@@ -14,7 +14,7 @@ from utils.domain.database import APPLICATION_STATUSES, connect, migrate_databas
 
 class AgentActionServiceTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = os.path.join(self.temp_dir.name, "actions.db")
         migrate_database(self.db_path)
         from utils.agent_runtime.actions import ActionProposalError, ActionProposalService
@@ -30,7 +30,12 @@ class AgentActionServiceTests(unittest.TestCase):
         import gc, shutil
         gc.collect()
         try:
-            self.temp_dir.cleanup()
+            import gc, shutil
+            gc.collect()
+            try:
+                self.temp_dir.cleanup()
+            except (PermissionError, OSError):
+                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
         except (PermissionError, OSError):
             shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def propose(self, action_type, arguments, **kwargs):
@@ -1114,7 +1119,7 @@ class AgentActionServiceTests(unittest.TestCase):
 
 class AgentActionAPITests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = os.path.join(self.temp_dir.name, "api-actions.db")
         self.client_context, self.client = create_agent_test_runtime(
             self.temp_dir.name,
@@ -1141,8 +1146,12 @@ class AgentActionAPITests(unittest.TestCase):
 
     def tearDown(self):
         self.client_context.__exit__(None, None, None)
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def test_api_lists_gets_edits_confirms_and_cancels(self):
         editable = self.service.propose(1, "create_action_item", {"title": "Draft"})
         pending = self.client.get("/api/agent/actions?status=pending")

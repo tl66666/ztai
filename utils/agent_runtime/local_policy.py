@@ -29,7 +29,11 @@ class LocalPolicy:
             now = datetime.now().astimezone()
             return AgentDecision(
                 "final",
-                message=f"现在是 {now:%Y年%m月%d日 %H:%M}（{now.tzname() or '本地时间'}）。",
+                message=(
+                f"现在是 {now.year}年{now.month:02d}月{now.day:02d}日"
+                f" {now.hour:02d}:{now.minute:02d}"
+                f"（{now.tzname() or '本地时间'}）。"
+            ),
             )
         casual_reply = self._casual_reply(message)
         if casual_reply:

@@ -11,7 +11,7 @@ from utils.agent_runtime.tools import ToolDefinition, ToolRegistry, build_tool_r
 
 class AgentToolTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = os.path.join(self.temp_dir.name, "tools.db")
         connection = sqlite3.connect(self.db_path)
         try:
@@ -46,7 +46,12 @@ class AgentToolTests(unittest.TestCase):
         import gc, shutil
         gc.collect()
         try:
-            self.temp_dir.cleanup()
+            import gc, shutil
+            gc.collect()
+            try:
+                self.temp_dir.cleanup()
+            except (PermissionError, OSError):
+                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
         except (PermissionError, OSError):
             shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def test_runtime_injects_user_id_instead_of_trusting_model(self):

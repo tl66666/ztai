@@ -151,7 +151,7 @@ class SequenceAIClient(FakeAIClient):
 
 class AgentOrchestratorTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = os.path.join(self.temp_dir.name, "runtime.db")
         create_agent_tables(self.db_path)
         self.store = MemoryStore(self.db_path)
@@ -163,7 +163,12 @@ class AgentOrchestratorTests(unittest.TestCase):
         import gc, shutil
         gc.collect()
         try:
-            self.temp_dir.cleanup()
+            import gc, shutil
+            gc.collect()
+            try:
+                self.temp_dir.cleanup()
+            except (PermissionError, OSError):
+                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
         except (PermissionError, OSError):
             shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def make_orchestrator(self, policy):

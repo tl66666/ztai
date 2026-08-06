@@ -28,7 +28,7 @@ class TrackingInterviewRepository(SqlAlchemyInterviewRepository):
 
 class InterviewSqlAlchemyRepositoryTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = Path(self.temp_dir.name) / "interview.db"
         self.database = Database(sqlite_database_url(self.db_path))
         self.database.upgrade()
@@ -40,7 +40,12 @@ class InterviewSqlAlchemyRepositoryTests(unittest.TestCase):
         import gc, shutil
         gc.collect()
         try:
-            self.temp_dir.cleanup()
+            import gc, shutil
+            gc.collect()
+            try:
+                self.temp_dir.cleanup()
+            except (PermissionError, OSError):
+                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
         except (PermissionError, OSError):
             shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def test_service_accepts_injected_session_and_repository_factories(self):

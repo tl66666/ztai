@@ -11,7 +11,7 @@ from tests.agent_api_client import create_agent_test_runtime
 
 class AgentAPITests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = f"{self.temp_dir.name}/api.db"
         self.client_context, self.client = create_agent_test_runtime(
             self.temp_dir.name
@@ -24,7 +24,12 @@ class AgentAPITests(unittest.TestCase):
         import gc, shutil
         gc.collect()
         try:
-            self.temp_dir.cleanup()
+            import gc, shutil
+            gc.collect()
+            try:
+                self.temp_dir.cleanup()
+            except (PermissionError, OSError):
+                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
         except (PermissionError, OSError):
             shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def create_conversation(self, user_id=1, title="新对话"):

@@ -113,6 +113,7 @@ class OpportunityFrontendContractTests(unittest.TestCase):
             capture_output=True,
             text=True,
             encoding="utf-8",
+            shell=True,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -180,7 +181,7 @@ class OpportunityFrontendContractTests(unittest.TestCase):
 
 class OpportunityWorkspaceApiTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = os.path.join(self.temp_dir.name, "workspace.db")
         self.client_context, self.client = create_agent_test_runtime(
             self.temp_dir.name,
@@ -193,7 +194,12 @@ class OpportunityWorkspaceApiTests(unittest.TestCase):
         import gc, shutil
         gc.collect()
         try:
-            self.temp_dir.cleanup()
+            import gc, shutil
+            gc.collect()
+            try:
+                self.temp_dir.cleanup()
+            except (PermissionError, OSError):
+                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
         except (PermissionError, OSError):
             shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def _seed_workspace(self):

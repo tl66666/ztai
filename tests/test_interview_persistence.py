@@ -67,7 +67,7 @@ def evaluate(_session, answer, duration_seconds, stage):
 
 class InterviewPersistenceTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = os.path.join(self.temp_dir.name, "interviews.db")
         create_database(self.db_path)
         with connect(self.db_path) as conn:
@@ -80,7 +80,12 @@ class InterviewPersistenceTests(unittest.TestCase):
         import gc, shutil
         gc.collect()
         try:
-            self.temp_dir.cleanup()
+            import gc, shutil
+            gc.collect()
+            try:
+                self.temp_dir.cleanup()
+            except (PermissionError, OSError):
+                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
         except (PermissionError, OSError):
             shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def make_service(self, local_user_id=1):
@@ -446,7 +451,7 @@ class InterviewPersistenceTests(unittest.TestCase):
 
 class InterviewApiPersistenceTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = os.path.join(self.temp_dir.name, "api.db")
         self.client_context, self.client = create_agent_test_runtime(
             self.temp_dir.name
@@ -460,8 +465,12 @@ class InterviewApiPersistenceTests(unittest.TestCase):
 
     def tearDown(self):
         self.client_context.__exit__(None, None, None)
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def start(self, **overrides):
         body = {
             "user_id": 2,

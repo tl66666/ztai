@@ -50,7 +50,7 @@ def create_database(db_path):
 
 class CareerServiceTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = os.path.join(self.temp_dir.name, "career.db")
         create_database(self.db_path)
         from utils.domain.career import CareerService
@@ -61,7 +61,12 @@ class CareerServiceTests(unittest.TestCase):
         import gc, shutil
         gc.collect()
         try:
-            self.temp_dir.cleanup()
+            import gc, shutil
+            gc.collect()
+            try:
+                self.temp_dir.cleanup()
+            except (PermissionError, OSError):
+                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
         except (PermissionError, OSError):
             shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def assert_event_failure_rolls_back(self, operation, assert_unchanged):
@@ -390,7 +395,7 @@ class CareerServiceTests(unittest.TestCase):
 
 class CareerApiTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = os.path.join(self.temp_dir.name, "api.db")
         self.client_context, self.client = create_agent_test_runtime(
             self.temp_dir.name
@@ -400,8 +405,12 @@ class CareerApiTests(unittest.TestCase):
 
     def tearDown(self):
         self.client_context.__exit__(None, None, None)
-        self.temp_dir.cleanup()
-
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temp_dir.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
     def test_profile_opportunity_and_action_api_basics(self):
         profile = self.client.put("/api/profile", json={"target_role": "Engineer"})
         self.assertEqual(profile.status_code, 200)
