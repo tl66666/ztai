@@ -2,6 +2,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -113,7 +114,7 @@ class OpportunityFrontendContractTests(unittest.TestCase):
             capture_output=True,
             text=True,
             encoding="utf-8",
-            shell=True,
+            shell=(sys.platform == "win32"),
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -194,14 +195,10 @@ class OpportunityWorkspaceApiTests(unittest.TestCase):
         import gc, shutil
         gc.collect()
         try:
-            import gc, shutil
-            gc.collect()
-            try:
-                self.temp_dir.cleanup()
-            except (PermissionError, OSError):
-                shutil.rmtree(self.temp_dir.name, ignore_errors=True)
+            self.temp_dir.cleanup()
         except (PermissionError, OSError):
             shutil.rmtree(self.temp_dir.name, ignore_errors=True)
+
     def _seed_workspace(self):
         with connect(self.db_path) as conn:
             resume_id = conn.execute(
