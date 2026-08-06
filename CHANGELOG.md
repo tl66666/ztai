@@ -7,6 +7,7 @@
 - CI：修复跨平台测试矩阵，添加 Node.js 环境到 backend job，修复 Windows 文件锁定（WinError 32）和 npm subprocess shell 兼容性。
 - 启动：新增 `start.bat` + `zhitu.ps1` 一键管理工具，支持菜单交互、进程树终止和端口+PID 双重定位。
 - 文档：新增项目结构说明和 README 徽章；修复 API 配置说明中 Flask → FastAPI 的过时引用。
+- 启动：`zhitu.ps1` 的 `Find-Python` 增加常见 Windows 安装路径检测（`%LOCALAPPDATA%\Programs\Python\Python3{1,2,3}\python.exe`），解决 Python 未加入 PATH 时无法启动的问题。
 
 - 文档：新增 `docs/PROJECT_HANDOFF.md`，交代产品边界、Agent 运行链路、双模式、外部工具安全约束、接手入口和后续路线；README 与展示页同步补充外部工具的准确说明。
 - Agent：新增“指定简历 → 定制面试题”工作流；未选择简历时展示中文选择卡，选择后使用可信 `resume_id` 生成 5 道题，不回显简历正文。修复简历标题中的数字覆盖真实选择 ID 的问题。
