@@ -13,7 +13,9 @@ from backend.main import create_application
 
 class TrainingFastAPITests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.temporary_directory = tempfile.TemporaryDirectory(
+            ignore_cleanup_errors=True
+        )
         self.root = Path(self.temporary_directory.name)
         self.settings = Settings(
             environment="test",
@@ -26,7 +28,12 @@ class TrainingFastAPITests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.client.__exit__(None, None, None)
-        self.temporary_directory.cleanup()
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temporary_directory.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temporary_directory.name, ignore_errors=True)
 
     def test_native_training_flow_preserves_feedback_audio_and_history(self) -> None:
         voice = self.client.post(

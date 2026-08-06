@@ -13,7 +13,9 @@ from backend.core.database import Database, sqlite_database_url
 
 class DurableJobQueueTests(unittest.TestCase):
     def setUp(self):
-        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.temporary_directory = tempfile.TemporaryDirectory(
+            ignore_cleanup_errors=True
+        )
         self.database = Database(
             sqlite_database_url(
                 Path(self.temporary_directory.name) / "jobs.db"
@@ -24,7 +26,12 @@ class DurableJobQueueTests(unittest.TestCase):
 
     def tearDown(self):
         self.database.dispose()
-        self.temporary_directory.cleanup()
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temporary_directory.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temporary_directory.name, ignore_errors=True)
 
     def test_submit_is_idempotent_per_owner_and_job_type(self):
         first = self.queue.submit(

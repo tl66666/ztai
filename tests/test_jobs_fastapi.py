@@ -15,7 +15,9 @@ from backend.main import create_application
 
 class BackgroundJobFastAPITests(unittest.TestCase):
     def setUp(self):
-        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.temporary_directory = tempfile.TemporaryDirectory(
+            ignore_cleanup_errors=True
+        )
         root = Path(self.temporary_directory.name)
         self.settings = Settings(
             environment="test",
@@ -38,7 +40,12 @@ class BackgroundJobFastAPITests(unittest.TestCase):
 
     def tearDown(self):
         self.client_context.__exit__(None, None, None)
-        self.temporary_directory.cleanup()
+        import gc, shutil
+        gc.collect()
+        try:
+            self.temporary_directory.cleanup()
+        except (PermissionError, OSError):
+            shutil.rmtree(self.temporary_directory.name, ignore_errors=True)
 
     def test_resume_analysis_has_202_status_and_worker_completion(self):
         resume = self.client.post(
