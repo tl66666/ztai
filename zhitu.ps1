@@ -21,6 +21,12 @@ param(
 $Root        = $PSScriptRoot
 $RunDir      = Join-Path $Root '.run'
 
+# ========== PowerShell 可执行文件路径 ==========
+$PowerShellExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+if (-not (Test-Path $PowerShellExe)) {
+    $PowerShellExe = "$env:SystemRoot\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
+}
+
 # ========== 端口配置 ==========
 $BackendPort  = 5000
 $FrontendPort = 5173
@@ -206,7 +212,7 @@ Write-Host '  后端服务已停止' -ForegroundColor Yellow
 Read-Host '  按回车键关闭窗口'
 "@
 
-    $proc = Start-Process powershell -ArgumentList '-NoExit', '-NoProfile', '-Command', $innerScript -PassThru
+    $proc = Start-Process $PowerShellExe -ArgumentList '-NoExit', '-NoProfile', '-Command', $innerScript -PassThru
     $proc.Id | Out-File -FilePath $BackendPidFile -Encoding utf8 -Force
 
     # 等待端口就绪
@@ -254,7 +260,7 @@ Write-Host '  前端服务已停止' -ForegroundColor Yellow
 Read-Host '  按回车键关闭窗口'
 "@
 
-    $proc = Start-Process powershell -ArgumentList '-NoExit', '-NoProfile', '-Command', $innerScript -PassThru
+    $proc = Start-Process $PowerShellExe -ArgumentList '-NoExit', '-NoProfile', '-Command', $innerScript -PassThru
     $proc.Id | Out-File -FilePath $FrontendPidFile -Encoding utf8 -Force
 
     # 等待端口就绪
@@ -329,10 +335,19 @@ function Stop-All {
     Stop-OneService $FrontendPort '前端' $FrontendPidFile
 
     # 清理可能残留的 python/uvicorn 和 node/vite 进程
-    Get-Process -Name "uvicorn*","python*" -ErrorAction SilentlyContinue | Where-Object {
-        $_.CommandLine -match 'backend\.cli' -or $_.CommandLine -match 'uvicorn'
-    } | ForEach-Object {
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    # 注意: Get-Process 在 PowerShell 5.0 没有 CommandLine 属性，需用 Get-CimInstance
+    try {
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            ($_.Name -match 'python|uvicorn|node') -and
+            ($_.CommandLine -match 'backend\.cli|uvicorn|vite|npm')
+        } | ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        # 如果 CIM 查询失败，回退到按进程名清理
+        Get-Process -Name "uvicorn*","python*","node*" -ErrorAction SilentlyContinue | ForEach-Object {
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
     }
 
     Write-Ok '所有服务已停止'
