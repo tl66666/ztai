@@ -508,11 +508,24 @@ function Show-Menu {
 }
 
 # ========== 主入口 ==========
-switch ($Action) {
-    'start'   { Start-All }
-    'stop'    { Stop-All }
-    'restart' { Restart-All }
-    'status'  { Show-Status }
-    'open'    { Open-Browser }
-    'menu'    { Show-Menu }
+try {
+    switch ($Action) {
+        'start'   { Start-All }
+        'stop'    { Stop-All }
+        'restart' { Restart-All }
+        'status'  { Show-Status }
+        'open'    { Open-Browser }
+        'menu'    { Show-Menu }
+    }
+} catch {
+    Write-Host ''
+    Write-Err "脚本执行出错: $($_.Exception.Message)"
+    Write-Host ''
+    Write-Host '  请截图此错误并反馈' -ForegroundColor Yellow
+    Write-Host ''
+    if (-not $script:loop) {
+        # 非菜单模式下暂停，让用户看到错误
+        Read-Host '  按回车键退出' | Out-Null
+    }
+    exit 1
 }
