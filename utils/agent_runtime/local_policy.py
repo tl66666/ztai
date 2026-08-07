@@ -138,18 +138,33 @@ class LocalPolicy:
 
     @classmethod
     def prefers_local_routing(cls, message: str) -> bool:
+        """Return True only for trivial queries that never need AI reasoning.
+
+        When an API key is configured, AgentService routes all other queries
+        to RemoteModelPolicy.  This method only intercepts deterministic
+        queries where a local response is always correct and faster than a
+        model round-trip:
+
+        * empty input — nothing to send to the model;
+        * time questions — the model does not know the user's local clock;
+        * casual chat (greetings, identity, thanks) — fixed canned responses
+          that do not benefit from model generation.
+
+        All career-specific intents (resume analysis, job matching, interview
+        prep, salary evaluation, career reports …) are deliberately left for
+        the remote model so the user gets AI-quality answers when a key is
+        configured.  When no key is present, AgentService falls back to
+        LocalPolicy unconditionally, so the broad keyword matching that used
+        to live here is no longer needed.
+        """
         text = str(message or "").strip()
         if not text:
             return True
-        if cls._is_time_question(text) or cls._casual_reply(text) or cls._read_intent(text):
+        if cls._is_time_question(text):
             return True
-        return any(
-            phrase in text
-            for phrase in (
-                "简历", "投递", "求职报告", "作战报告", "岗位匹配", "匹配岗位",
-                "面试题", "练习面试", "薪资", "工资", "待遇",
-            )
-        )
+        if cls._casual_reply(text):
+            return True
+        return False
 
     @staticmethod
     def _is_time_question(message: str) -> bool:

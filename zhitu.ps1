@@ -147,17 +147,29 @@ function Test-Environment {
 function Test-Dependencies {
     # Python 依赖
     Write-Info '同步 Python 依赖...'
+    $pyOk = $true
     if (Test-Command 'uv') {
         Write-Info '使用 uv 安装依赖...'
         Push-Location $Root
-        uv sync --frozen 2>&1 | Out-Null
+        $uvOutput = uv sync 2>&1
+        $uvExit = $LASTEXITCODE
         Pop-Location
-        Write-Ok 'Python 依赖就绪 (uv)'
+        if ($uvExit -ne 0) {
+            Write-Warn 'uv sync 有警告，尝试 pip 回退...'
+            Push-Location $Root
+            & $script:PyCmd -m pip install -r requirements.txt --quiet 2>&1 | Out-Null
+            Pop-Location
+        }
+        Write-Ok 'Python 依赖就绪'
     } else {
         Write-Info '使用 pip 安装依赖...'
         Push-Location $Root
-        & $script:PyCmd -m pip install -r requirements.txt --quiet 2>&1 | Out-Null
+        $pipOutput = & $script:PyCmd -m pip install -r requirements.txt --quiet 2>&1
+        $pipExit = $LASTEXITCODE
         Pop-Location
+        if ($pipExit -ne 0) {
+            Write-Warn 'pip 安装可能有警告，继续尝试启动...'
+        }
         Write-Ok 'Python 依赖就绪 (pip)'
     }
 
@@ -179,7 +191,7 @@ function Start-Backend {
     $existing = Get-PortProcess $BackendPort
     if ($existing) {
         Write-Warn "后端已在运行 (PID: $($existing.Id))"
-        return
+        return $true
     }
 
     Write-Info '启动后端服务 (FastAPI + Uvicorn)...'
@@ -187,48 +199,52 @@ function Start-Backend {
     # 确定启动命令
     $useUv = Test-Command 'uv'
     if ($useUv) {
-        $runCmd = 'uv run python -m backend.cli'
+        $pyCommand = 'uv run python -m backend.cli'
     } else {
-        $runCmd = "$($script:PyCmd) -m backend.cli"
+        $pyCommand = "`"$($script:PyCmd)`" -m backend.cli"
     }
 
-    # 在新 PowerShell 窗口中启动后端
-    $innerScript = @"
-Set-Location -LiteralPath '$Root'
-`$Host.UI.RawUI.WindowTitle = '职途AI - 后端 :$BackendPort'
-Write-Host ''
-Write-Host '  ===== 职途 AI 后端服务 =====' -ForegroundColor Cyan
-Write-Host '  FastAPI + Uvicorn + SQLAlchemy' -ForegroundColor DarkGray
-Write-Host '  端口: $BackendPort' -ForegroundColor DarkGray
-Write-Host ''
-Write-Host '  重要提示:' -ForegroundColor Yellow
-Write-Host '  - 按 Ctrl+C 可优雅停止服务' -ForegroundColor Gray
-Write-Host '  - 直接关闭本窗口可能导致子进程残留' -ForegroundColor Gray
-Write-Host '  - 推荐使用主脚本的 stop 命令关闭' -ForegroundColor Gray
-Write-Host ''
-$runCmd
-Write-Host ''
-Write-Host '  后端服务已停止' -ForegroundColor Yellow
-Read-Host '  按回车键关闭窗口'
-"@
+    # 创建临时 batch 文件（比 PowerShell inner script 更可靠）
+    $batPath = Join-Path $RunDir '_run_backend.bat'
+    $batContent = "@echo off`r`n"
+    $batContent += "title JobHunter Backend :$BackendPort`r`n"
+    $batContent += "cd /d `"$Root`"`r`n"
+    $batContent += "echo.`r`n"
+    $batContent += "echo   ===== JobHunter Backend (FastAPI) =====`r`n"
+    $batContent += "echo   Port: $BackendPort`r`n"
+    $batContent += "echo   Press Ctrl+C to stop`r`n"
+    $batContent += "echo.`r`n"
+    $batContent += "$pyCommand`r`n"
+    $batContent += "echo.`r`n"
+    $batContent += "echo   Backend stopped. Press any key to close.`r`n"
+    $batContent += "pause >nul`r`n"
+    [System.IO.File]::WriteAllText($batPath, $batContent, [System.Text.Encoding]::Default)
 
-    $proc = Start-Process $PowerShellExe -ArgumentList '-NoExit', '-NoProfile', '-Command', $innerScript -PassThru
+    $proc = Start-Process -FilePath $batPath -PassThru
     $proc.Id | Out-File -FilePath $BackendPidFile -Encoding utf8 -Force
 
     # 等待端口就绪
     Write-Info '等待后端启动...'
-    $maxWait = 20
+    $maxWait = 40
     for ($i = 1; $i -le $maxWait; $i++) {
         Start-Sleep -Seconds 1
         $running = Get-PortProcess $BackendPort
         if ($running) {
+            # 端口已监听，再等 1 秒让 uvicorn 完全就绪
+            Start-Sleep -Seconds 1
             Write-Ok "后端已启动  ->  http://localhost:$BackendPort"
-            return
+            Write-Host "  API 文档:  http://localhost:$BackendPort/api/v1/docs" -ForegroundColor DarkGray
+            return $true
         }
         Write-Host "`r  进度: $i / $maxWait s" -NoNewline -ForegroundColor DarkGray
     }
     Write-Host ''
-    Write-Warn '后端可能仍在启动，请查看后端窗口'
+    Write-Warn '后端可能启动失败，请查看后端窗口的错误信息'
+    Write-Host '  常见原因:' -ForegroundColor DarkGray
+    Write-Host '    - Python 依赖未安装完整' -ForegroundColor DarkGray
+    Write-Host '    - 数据库迁移失败 (尝试删除 jobhunter.db 后重启)' -ForegroundColor DarkGray
+    Write-Host '    - 端口 5000 被其他程序占用' -ForegroundColor DarkGray
+    return $false
 }
 
 # ========== 启动前端 ==========
@@ -236,47 +252,46 @@ function Start-Frontend {
     $existing = Get-PortProcess $FrontendPort
     if ($existing) {
         Write-Warn "前端已在运行 (PID: $($existing.Id))"
-        return
+        return $true
     }
 
     Write-Info '启动前端服务 (React 19 + Vite)...'
 
-    $innerScript = @"
-Set-Location -LiteralPath '$Root'
-`$Host.UI.RawUI.WindowTitle = '职途AI - 前端 :$FrontendPort'
-Write-Host ''
-Write-Host '  ===== 职途 AI 前端服务 =====' -ForegroundColor Cyan
-Write-Host '  React 19 + TypeScript + Vite' -ForegroundColor DarkGray
-Write-Host '  端口: $FrontendPort' -ForegroundColor DarkGray
-Write-Host ''
-Write-Host '  重要提示:' -ForegroundColor Yellow
-Write-Host '  - 按 Ctrl+C 可优雅停止服务' -ForegroundColor Gray
-Write-Host '  - 直接关闭本窗口可能导致子进程残留' -ForegroundColor Gray
-Write-Host '  - 推荐使用主脚本的 stop 命令关闭' -ForegroundColor Gray
-Write-Host ''
-npm run dev
-Write-Host ''
-Write-Host '  前端服务已停止' -ForegroundColor Yellow
-Read-Host '  按回车键关闭窗口'
-"@
+    # 创建临时 batch 文件
+    $batPath = Join-Path $RunDir '_run_frontend.bat'
+    $batContent = "@echo off`r`n"
+    $batContent += "title JobHunter Frontend :$FrontendPort`r`n"
+    $batContent += "cd /d `"$Root`"`r`n"
+    $batContent += "echo.`r`n"
+    $batContent += "echo   ===== JobHunter Frontend (React + Vite) =====`r`n"
+    $batContent += "echo   Port: $FrontendPort`r`n"
+    $batContent += "echo   API Proxy -> http://localhost:$BackendPort`r`n"
+    $batContent += "echo   Press Ctrl+C to stop`r`n"
+    $batContent += "echo.`r`n"
+    $batContent += "call npm run dev`r`n"
+    $batContent += "echo.`r`n"
+    $batContent += "echo   Frontend stopped. Press any key to close.`r`n"
+    $batContent += "pause >nul`r`n"
+    [System.IO.File]::WriteAllText($batPath, $batContent, [System.Text.Encoding]::Default)
 
-    $proc = Start-Process $PowerShellExe -ArgumentList '-NoExit', '-NoProfile', '-Command', $innerScript -PassThru
+    $proc = Start-Process -FilePath $batPath -PassThru
     $proc.Id | Out-File -FilePath $FrontendPidFile -Encoding utf8 -Force
 
     # 等待端口就绪
     Write-Info '等待前端启动...'
-    $maxWait = 20
+    $maxWait = 30
     for ($i = 1; $i -le $maxWait; $i++) {
         Start-Sleep -Seconds 1
         $running = Get-PortProcess $FrontendPort
         if ($running) {
             Write-Ok "前端已启动  ->  http://localhost:$FrontendPort"
-            return
+            return $true
         }
         Write-Host "`r  进度: $i / $maxWait s" -NoNewline -ForegroundColor DarkGray
     }
     Write-Host ''
-    Write-Warn '前端可能仍在启动，请查看前端窗口'
+    Write-Warn '前端可能启动失败，请查看前端窗口的错误信息'
+    return $false
 }
 
 # ========== 停止单个服务（杀进程树） ==========
@@ -365,8 +380,18 @@ function Start-All {
     Write-Host ''
     Write-Host '  ------------------------------------------' -ForegroundColor DarkGray
     Write-Host ''
-    Start-Backend
+
+    # 先启动后端
+    $backendOk = Start-Backend
+    if (-not $backendOk) {
+        Write-Host ''
+        Write-Err '后端启动失败，前端无法正常工作。请修复后端问题后重试。'
+        Write-Host '  提示: 可以先选菜单 [6] 仅启动前端查看页面' -ForegroundColor DarkGray
+        return
+    }
+
     Write-Host ''
+    # 再启动前端（前端启动时会自动打开浏览器）
     Start-Frontend
     Write-Host ''
     Write-Host '  ------------------------------------------' -ForegroundColor DarkGray
@@ -375,10 +400,20 @@ function Start-All {
     Write-Host ''
     Write-Host "  前端页面:  " -NoNewline; Write-Host "http://localhost:$FrontendPort" -ForegroundColor White
     Write-Host "  后端 API:  " -NoNewline; Write-Host "http://localhost:$BackendPort" -ForegroundColor White
-    Write-Host "  API 文档:  " -NoNewline; Write-Host "http://localhost:$BackendPort/docs" -ForegroundColor White
+    Write-Host "  API 文档:  " -NoNewline; Write-Host "http://localhost:$BackendPort/api/v1/docs" -ForegroundColor White
     Write-Host ''
-    Write-Host '  提示: 在浏览器中访问前端页面即可使用' -ForegroundColor DarkGray
-    Write-Host '  停止服务: 运行 zhitu.ps1 stop 或在菜单中选择 [2]' -ForegroundColor DarkGray
+
+    # 兜底打开浏览器（Vite 也会自动打开，这里做双保险）
+    Start-Sleep -Seconds 2
+    $frontendRunning = Get-PortProcess $FrontendPort
+    if ($frontendRunning) {
+        Write-Info '确认浏览器已打开...'
+        Start-Process "http://localhost:$FrontendPort"
+    }
+
+    Write-Host ''
+    Write-Host '  提示: 关闭后端/前端窗口或使用菜单 [2] 停止服务' -ForegroundColor DarkGray
+    Write-Host '  提示: 前端已配置 API 代理，所有 /api 请求自动转发到后端' -ForegroundColor DarkGray
     Write-Host ''
 }
 

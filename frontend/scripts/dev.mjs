@@ -4,6 +4,7 @@ import { build, createServer } from "vite";
 const projectRoot = resolve(import.meta.dirname, "../..");
 const staticDir = resolve(projectRoot, "static");
 const port = Number(process.env.PORT || 5173);
+const apiTarget = process.env.API_TARGET || "http://localhost:5000";
 
 const modes = ["app"];
 const watchers = await Promise.all(modes.map((mode) => build({
@@ -17,6 +18,13 @@ const server = await createServer({
   server: {
     host: process.env.HOST || "127.0.0.1",
     port,
+    open: true,
+    proxy: {
+      "/api": {
+        target: apiTarget,
+        changeOrigin: true,
+      },
+    },
   },
 });
 

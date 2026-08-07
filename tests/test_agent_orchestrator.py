@@ -640,6 +640,94 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertEqual(decision.type, "needs_input")
         self.assertEqual(decision.message, "请提供 JD")
 
+    # ------------------------------------------------------------------
+    # Routing: prefers_local_routing should only intercept trivial queries
+    # so that career-related questions reach the remote model when a key
+    # is configured.
+    # ------------------------------------------------------------------
+
+    def test_prefers_local_routing_for_trivial_queries(self):
+        """Empty, time, and casual-chat queries stay local."""
+        for message in ("", "   ", "现在几点", "现在几时", "几点了",
+                        "你睡了吗", "你好", "你是谁", "谢谢", "hello"):
+            with self.subTest(message=message):
+                self.assertTrue(
+                    LocalPolicy.prefers_local_routing(message),
+                    f"Expected local routing for trivial query: {message!r}",
+                )
+
+    def test_prefers_remote_routing_for_career_queries(self):
+        """Career-related queries must NOT stay local when a key exists."""
+        for message in (
+            "帮我分析简历",
+            "看看我的投递",
+            "生成求职报告",
+            "生成一份求职作战报告",
+            "面试准备得怎么样",
+            "帮我匹配岗位",
+            "薪资怎么样",
+            "下一步该做什么",
+            "帮我优化简历",
+            "给我一道面试题",
+            "岗位匹配度怎么样",
+        ):
+            with self.subTest(message=message):
+                self.assertFalse(
+                    LocalPolicy.prefers_local_routing(message),
+                    f"Expected remote routing for career query: {message!r}",
+                )
+
+    def test_remote_model_is_used_for_career_query_when_api_key_configured(self):
+        """End-to-end: when an API key is present, a career query must call
+        the remote model rather than the local policy."""
+
+        class TrackingClient:
+            api_key = "test-key"
+            provider = type("Provider", (), {"id": "fake"})()
+            model = "fake-model"
+
+            def __init__(self):
+                self.chat_called = False
+
+            def chat(self, messages, **kwargs):
+                self.chat_called = True
+                return {
+                    "success": True,
+                    "message": {"role": "assistant",
+                                "content": "这是来自 AI 模型的分析。"},
+                }
+
+        client = TrackingClient()
+        policy = RemoteModelPolicy(client)
+        result = self.make_orchestrator(policy).run(
+            1, self.conversation.id, "帮我分析简历"
+        )
+
+        self.assertTrue(client.chat_called)
+        self.assertEqual(result.status, "completed")
+        self.assertIn("AI 模型", result.reply)
+
+    def test_remote_fallback_prepends_error_hint(self):
+        """When the remote model fails, the fallback message should explain
+        *why* local rules were used, not just say 'local mode'."""
+
+        class FailingClient:
+            api_key = "test-key"
+            provider = type("Provider", (), {"id": "fake"})()
+            model = "fake-model"
+
+            def chat(self, *args, **kwargs):
+                return {"success": False, "error_code": "authentication_error"}
+
+        policy = RemoteModelPolicy(FailingClient())
+        result = self.make_orchestrator(policy).run(
+            1, self.conversation.id, "帮我分析简历"
+        )
+
+        self.assertEqual(result.status, "degraded")
+        self.assertIn("AI 模型暂时不可用", result.reply)
+        self.assertIn("API Key 无效或已过期", result.reply)
+
 
 if __name__ == "__main__":
     unittest.main()

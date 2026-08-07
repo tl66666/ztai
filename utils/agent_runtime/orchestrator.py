@@ -55,9 +55,50 @@ class RemoteModelPolicy:
         self._local_fallback = LocalPolicy()
         self._using_local_fallback = False
 
+    _ERROR_HINTS = {
+        "missing_api_key": "未配置 API Key",
+        "authentication_error": "API Key 无效或已过期",
+        "rate_limited": "请求频率超限，请稍后重试",
+        "timeout": "模型响应超时",
+        "network_error": "网络连接失败",
+        "invalid_response": "模型返回格式异常",
+        "http_error": "模型服务返回错误",
+        "model_error": "模型服务异常",
+    }
+
+    def _error_hint(self) -> str:
+        return self._ERROR_HINTS.get(self.last_error_code, "模型服务暂时不可用")
+
+    def _wrap_fallback(self, decision: AgentDecision) -> AgentDecision:
+        """Prepend a user-facing error hint to fallback messages.
+
+        When the remote model fails and the local policy takes over, the
+        user should understand *why* local rules are being used — the AI
+        service failed, not a deliberate choice to stay in local mode.
+        The hint is only added to ``final`` and ``needs_input`` decisions
+        (which carry a user-visible message), not to intermediate
+        ``tool_call`` decisions.
+        """
+        if (
+            decision.message
+            and self.last_error_code
+            and decision.type in ("final", "needs_input")
+            and "AI 模型暂时不可用" not in decision.message
+        ):
+            hint = self._error_hint()
+            if hint:
+                return AgentDecision(
+                    decision.type,
+                    decision.tool,
+                    decision.arguments,
+                    f"（AI 模型暂时不可用：{hint}，已自动切换本地规则）\n{decision.message}",
+                    decision.call_id,
+                )
+        return decision
+
     def decide(self, state: RunState, tool_schemas: list[dict]) -> AgentDecision:
         if self._using_local_fallback:
-            return self._local_fallback.decide(state, tool_schemas)
+            return self._wrap_fallback(self._local_fallback.decide(state, tool_schemas))
         if not hasattr(state, "pending_decisions"):
             state.pending_decisions = []
         if state.pending_decisions:
@@ -97,7 +138,7 @@ class RemoteModelPolicy:
             self.ai_used = False
             self.last_error_code = result.get("error_code", "model_error")
             self._using_local_fallback = True
-            return self._local_fallback.decide(state, tool_schemas)
+            return self._wrap_fallback(self._local_fallback.decide(state, tool_schemas))
         message = result.get("message") or result.get("assistant_message") or {}
         tool_calls = message.get("tool_calls") or []
         if tool_calls:

@@ -369,6 +369,40 @@ class AgentAPITests(unittest.TestCase):
         self.assertIn("不需要睡觉", response["reply"])
         self.assertFalse(client.called)
 
+    def test_career_query_uses_remote_model_when_api_key_is_configured(self):
+        """When an API key is present, career-related queries must route to
+        the remote model — the core fix for the 'still in local mode after
+        configuring API' bug."""
+
+        class TrackingClient:
+            api_key = "test-key"
+            provider = type("Provider", (), {"id": "fake"})()
+            model = "fake-model"
+
+            def __init__(self):
+                self.chat_called = False
+
+            def chat(self, messages, **kwargs):
+                self.chat_called = True
+                return {
+                    "success": True,
+                    "message": {"role": "assistant",
+                                "content": "这是来自 AI 模型的简历分析建议。"},
+                }
+
+        client = TrackingClient()
+        # Replace the container's AI client so AgentService picks it up.
+        self.container.ai_clients._client = client
+
+        response = self.client.post(
+            "/api/agent/chat", json={"message": "帮我分析简历"}
+        ).get_json()
+
+        self.assertTrue(response["success"])
+        self.assertTrue(client.chat_called,
+                        "Remote model should be called for career queries when API key is set")
+        self.assertNotIn("本地", response["reply"])
+
     def test_profile_and_report_result_endpoints_validate_exact_owned_id(self):
         service = self.container.career_service
         profile = service.upsert_profile(1, {"target_role": "Engineer"})
