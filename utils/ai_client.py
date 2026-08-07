@@ -11,6 +11,7 @@ import json
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -191,15 +192,41 @@ class MultiModelAIClient:
             payload["response_format"] = response_format
 
         try:
-            response = requests.post(
-                self.provider.api_url,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=timeout,
-            )
+            # Retry on 429 (rate limited) with exponential backoff.
+            #
+            # The Agent orchestrator may call the API 2+ times per user
+            # message (tool-call → final answer), and free-tier keys often
+            # allow only 1 RPM.  We respect the Retry-After header when the
+            # server provides one, and fall back to exponential backoff
+            # (3 s → 6 s) otherwise.  If the server asks us to wait more
+            # than 12 s we skip remaining retries — the user is better
+            # served by an immediate local fallback than a long block.
+            max_retries = 2  # 1 initial + 2 retries = 3 attempts total
+            response = None
+            for attempt in range(max_retries + 1):
+                response = requests.post(
+                    self.provider.api_url,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=timeout,
+                )
+                if response.status_code != 429 or attempt >= max_retries:
+                    break
+                # Determine wait time: prefer Retry-After header, fall back
+                # to exponential backoff (3 s, 6 s).
+                retry_after = response.headers.get("Retry-After", "")
+                try:
+                    wait_time = float(retry_after)
+                except (ValueError, TypeError):
+                    wait_time = 3.0 * (2 ** attempt)
+                # If the wait is too long, stop retrying and let the
+                # orchestrator fall back to local mode immediately.
+                if wait_time > 12:
+                    break
+                time.sleep(wait_time)
             if response.status_code == 200:
                 data = response.json()
                 message = data["choices"][0]["message"]

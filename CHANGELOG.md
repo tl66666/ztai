@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Agent：修复限流（429）场景下每次提问都降级的问题。`ai_client.py` 增加指数退避重试（3s→6s，最多 3 次）并解析 `Retry-After` 响应头；超过 12s 的等待直接跳过重试、立即降级。`orchestrator.py` 限流提示从"请稍后重试"改为可操作建议（间隔 60 秒或更换高频 API Key），并存储真实错误详情供调试。
+- Agent：修复配置 API Key 后求职问题仍走本地模式的问题。`LocalPolicy.prefers_local_routing()` 仅拦截空输入、时间问答和闲聊，其余全部路由到远程模型。
 - CI：修复跨平台测试矩阵，添加 Node.js 环境到 backend job，修复 Windows 文件锁定（WinError 32）和 npm subprocess shell 兼容性。
 - 启动：新增 `start.bat` + `zhitu.ps1` 一键管理工具，支持菜单交互、进程树终止和端口+PID 双重定位。
 - 文档：新增项目结构说明和 README 徽章；修复 API 配置说明中 Flask → FastAPI 的过时引用。

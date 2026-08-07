@@ -728,6 +728,29 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertIn("AI 模型暂时不可用", result.reply)
         self.assertIn("API Key 无效或已过期", result.reply)
 
+    def test_rate_limited_fallback_includes_actionable_advice(self):
+        """When the remote model returns rate_limited, the fallback message
+        should include actionable advice about free-tier limits."""
+
+        class RateLimitedClient:
+            api_key = "test-key"
+            provider = type("Provider", (), {"id": "fake"})()
+            model = "fake-model"
+
+            def chat(self, *args, **kwargs):
+                return {"success": False, "error_code": "rate_limited"}
+
+        policy = RemoteModelPolicy(RateLimitedClient())
+        result = self.make_orchestrator(policy).run(
+            1, self.conversation.id, "帮我分析简历"
+        )
+
+        self.assertEqual(result.status, "degraded")
+        self.assertIn("AI 模型暂时不可用", result.reply)
+        self.assertIn("请求频率超限", result.reply)
+        self.assertIn("60 秒", result.reply)
+        self.assertIn("API Key", result.reply)
+
 
 if __name__ == "__main__":
     unittest.main()

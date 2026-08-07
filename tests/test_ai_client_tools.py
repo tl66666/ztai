@@ -19,10 +19,11 @@ DASHBOARD_SCHEMA = {
 
 
 class FakeResponse:
-    def __init__(self, status_code, payload):
+    def __init__(self, status_code, payload, headers=None):
         self.status_code = status_code
         self.payload = payload
         self.text = str(payload)
+        self.headers = headers or {}
 
     def json(self):
         return self.payload
@@ -73,7 +74,7 @@ class AIClientToolTests(unittest.TestCase):
         )
 
     def test_remote_rate_limit_is_diagnostic_not_fake_local_success(self):
-        with patch(
+        with patch("utils.ai_client.time.sleep"), patch(
             "utils.ai_client.requests.post",
             return_value=FakeResponse(429, {"error": "limited"}),
         ):
@@ -84,6 +85,41 @@ class AIClientToolTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "rate_limited")
         self.assertNotIn("本地求职 Agent 分析", result.get("content", ""))
+
+    def test_rate_limit_retries_then_succeeds(self):
+        """429 on first attempt, 200 on retry → success."""
+        responses = [
+            FakeResponse(429, {"error": "limited"}),
+            FakeResponse(
+                200,
+                {"choices": [{"message": {"role": "assistant", "content": "OK"}}]},
+            ),
+        ]
+        with patch("utils.ai_client.time.sleep"), patch(
+            "utils.ai_client.requests.post", side_effect=responses
+        ):
+            result = MultiModelAIClient(api_key="key").chat(
+                [{"role": "user", "content": "你好"}]
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["content"], "OK")
+
+    def test_rate_limit_skips_retry_when_retry_after_too_long(self):
+        """When Retry-After > 12 s, skip retry and return immediately."""
+        response = FakeResponse(
+            429, {"error": "limited"}, headers={"Retry-After": "60"}
+        )
+        with patch("utils.ai_client.time.sleep") as mock_sleep, patch(
+            "utils.ai_client.requests.post", return_value=response
+        ):
+            result = MultiModelAIClient(api_key="key").chat(
+                [{"role": "user", "content": "你好"}]
+            )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "rate_limited")
+        mock_sleep.assert_not_called()
 
     def test_timeout_has_stable_error_code(self):
         with patch(

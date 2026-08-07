@@ -52,13 +52,14 @@ class RemoteModelPolicy:
         self.provider = getattr(getattr(client, "provider", None), "id", "remote")
         self.model = getattr(client, "model", "unknown")
         self.last_error_code = ""
+        self.last_error_detail = ""
         self._local_fallback = LocalPolicy()
         self._using_local_fallback = False
 
     _ERROR_HINTS = {
         "missing_api_key": "未配置 API Key",
         "authentication_error": "API Key 无效或已过期",
-        "rate_limited": "请求频率超限，请稍后重试",
+        "rate_limited": "请求频率超限",
         "timeout": "模型响应超时",
         "network_error": "网络连接失败",
         "invalid_response": "模型返回格式异常",
@@ -66,8 +67,16 @@ class RemoteModelPolicy:
         "model_error": "模型服务异常",
     }
 
+    _RATE_LIMIT_ADVICE = (
+        "，免费档 API 通常限制每分钟 1 次请求。"
+        "请间隔 60 秒后再提问，或更换更高频次的 API Key"
+    )
+
     def _error_hint(self) -> str:
-        return self._ERROR_HINTS.get(self.last_error_code, "模型服务暂时不可用")
+        hint = self._ERROR_HINTS.get(self.last_error_code, "模型服务暂时不可用")
+        if self.last_error_code == "rate_limited":
+            hint += self._RATE_LIMIT_ADVICE
+        return hint
 
     def _wrap_fallback(self, decision: AgentDecision) -> AgentDecision:
         """Prepend a user-facing error hint to fallback messages.
@@ -137,6 +146,7 @@ class RemoteModelPolicy:
         if not result.get("success"):
             self.ai_used = False
             self.last_error_code = result.get("error_code", "model_error")
+            self.last_error_detail = result.get("message", "")
             self._using_local_fallback = True
             return self._wrap_fallback(self._local_fallback.decide(state, tool_schemas))
         message = result.get("message") or result.get("assistant_message") or {}
